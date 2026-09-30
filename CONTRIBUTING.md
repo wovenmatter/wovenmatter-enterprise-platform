@@ -1,0 +1,44 @@
+# Contributing
+
+Thank you for helping improve WovenMatter Enterprise.
+
+## Before opening a change
+
+- Search existing issues and keep each change focused.
+- If you do not have write access, fork the repository and create a short-lived
+  branch in your fork. Collaborators should also use a short-lived branch.
+- Open pull requests against `main`.
+- Do not include credentials, provider transcripts, personal paths, private
+  hosts, generated build products, or proprietary assets.
+
+## Validation
+
+Platform code has not been imported yet. Build and test instructions will be
+added with the source code. For now, check documentation links and review any
+workflow or governance changes carefully. Describe validation performed and
+any environment limitations in your pull request.
+
+Tests must be deterministic, require no provider credentials, and make no real
+LLM calls. Dependency updates are reviewed deliberately by maintainers.
+
+## Pull requests
+
+Explain the behavior that changed, list validation performed, and call out
+security, privacy, persistence, or third-party provenance impacts.
+
+Every pull request targeting `main` requires approval from the code owner,
+`@trey131`. New changes dismiss stale approvals. Approval after the latest
+push and resolved review conversations are required. Force pushes and deletion
+of `main` are blocked, with no configured bypass actors.
+
+Pull requests receive `vouch:*` contributor-trust and `size:*` change-size labels.
+External contributors begin as `vouch:unvouched`. A maintainer can add
+`github:username` to `.github/VOUCHED.td` after establishing trust; collaborators
+with write access are trusted automatically. Labels do not grant access or
+guarantee that a pull request will be merged.
+
+The configuration in `.github/rulesets/protect-main.json` records the live
+GitHub ruleset. Editing that file does not update GitHub settings automatically.
+
+By submitting a contribution, you agree that it is licensed under this
+project's MIT License.
