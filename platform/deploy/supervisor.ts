@@ -75,6 +75,7 @@ const registry = new OrganizationProxyProvisioner({
   root: resolve(required("WME_INFERENCE_ROOT")),
   image: required("WME_INFERENCE_IMAGE"),
   network: required("WME_INFERENCE_NETWORK"),
+  networkSubnet: process.env.WME_INFERENCE_SUBNET,
   credentialUid: 10002,
   firewallAttestation,
 });

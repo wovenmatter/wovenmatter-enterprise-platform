@@ -31,6 +31,85 @@ import {
   ingressAnswers,
   validateNetworkBoundary,
 } from "../deploy/network-boundary.js";
+test("inference readiness accepts a configured private subnet and never probes outside its reserved proxy range", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "wme-deploy-subnet-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const requested: string[] = [];
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async (input: Parameters<typeof fetch>[0]) => {
+      requested.push(String(input));
+      return Response.json({ data: [] });
+    },
+  );
+  function registry(address: string, networkSubnet?: string) {
+    return new OrganizationProxyProvisioner({
+      root: directory,
+      image: "wme-proxy:commit",
+      network: "separate-inference",
+      networkSubnet,
+      docker: async (args) => (args[0] === "inspect" ? address : ""),
+    });
+  }
+  // Exercise the production probe, not the injectable test-only probe callback.
+  await registry("10.61.93.3", "10.61.93.0/24").ensure(randomUUID());
+  await registry("10.61.93.254", "10.61.93.0/24").ensure(randomUUID());
+  await registry("172.31.251.3").ensure(randomUUID());
+  assert.deepEqual(requested, [
+    "http://10.61.93.3:8317/v1/models",
+    "http://10.61.93.254:8317/v1/models",
+    "http://172.31.251.3:8317/v1/models",
+  ]);
+  for (const address of [
+    "172.31.251.3",
+    "10.61.94.3",
+    "10.61.93.0",
+    "10.61.93.1",
+    "10.61.93.2",
+    "10.61.93.255",
+    "127.0.0.1",
+    "1.1.1.1",
+    "::1",
+    "10.61.93.03",
+  ])
+    await assert.rejects(
+      registry(address, "10.61.93.0/24").ensure(randomUUID()),
+      /invalid network address/,
+    );
+  assert.equal(
+    requested.length,
+    3,
+    "Rejected addresses must never receive a readiness request",
+  );
+});
+
+test("invalid inference subnet configuration fails before provisioning storage or containers", () => {
+  for (const networkSubnet of [
+    "0.0.0.0/24",
+    "127.0.0.0/24",
+    "100.64.0.0/24",
+    "203.0.113.0/24",
+    "10.61.93.1/24",
+    "10.61.0.0/16",
+    "10.61.93.0/25",
+    "::/24",
+  ])
+    assert.throws(
+      () =>
+        new OrganizationProxyProvisioner({
+          root: "/never-created-inference-root",
+          image: "wme-proxy:commit",
+          network: "separate-inference",
+          networkSubnet,
+          docker: async () => {
+            throw new Error("Must not call Docker");
+          },
+        }),
+      /RFC1918/,
+    );
+});
+
 test("organization provisioning deduplicates racing calls and keeps separate private credentials", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wme-deploy-"));
   try {

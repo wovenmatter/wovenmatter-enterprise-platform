@@ -34,7 +34,7 @@ services:
     ports: ["127.0.0.1:${WME_PORTAL_PORT:-4180}:4100"]
     networks:
       inference:
-        ipv4_address: 172.31.251.2
+        ipv4_address: ${WME_INFERENCE_API_ADDRESS:-172.31.251.2}
     depends_on:
       supervisor:
         condition: service_healthy
@@ -72,7 +72,8 @@ services:
       WME_RUNNER_APPARMOR_PROFILE: ${WME_RUNNER_APPARMOR_PROFILE:-wme-platform-agent}
       WME_INFERENCE_ROOT: ${WME_CANDIDATE_ROOT}/private/inference
       WME_INFERENCE_IMAGE: ${WME_INFERENCE_IMAGE:?}
-      WME_INFERENCE_NETWORK: wme-inference
+      WME_INFERENCE_NETWORK: ${WME_INFERENCE_NETWORK:-wme-inference}
+      WME_INFERENCE_SUBNET: ${WME_INFERENCE_SUBNET:-172.31.251.0/24}
       WME_INFERENCE_FIREWALL_ATTESTATION: ${WME_CANDIDATE_ROOT}/private/firewall-boot-id
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -94,10 +95,10 @@ services:
       retries: 5
 networks:
   inference:
-    name: wme-inference
+    name: ${WME_INFERENCE_NETWORK:-wme-inference}
     enable_ipv6: false
     driver_opts:
-      com.docker.network.bridge.name: br-wmeinference
+      com.docker.network.bridge.name: ${WME_INFERENCE_BRIDGE:-br-wmeinference}
     ipam:
       config:
-        - subnet: 172.31.251.0/24
+        - subnet: ${WME_INFERENCE_SUBNET:-172.31.251.0/24}
