@@ -1,0 +1,10 @@
+FROM node:24.21.0-bookworm-slim
+RUN mkdir /data /app && chown -R 65532:65532 /data /app
+WORKDIR /app
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=8789 DATA_DIRECTORY=/data
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/wovenmatter-enterprise/
+COPY third-party /usr/share/doc/wovenmatter-enterprise/third-party
+USER 65532:65532
+COPY platform/runtime/library-launcher.mjs /opt/wme/library-launcher.mjs
+EXPOSE 8789
+CMD ["node", "/app/server.mjs"]

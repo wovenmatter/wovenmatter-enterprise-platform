@@ -1,0 +1,106 @@
+name: wovenmatter-enterprise-candidate
+services:
+  api:
+    image: ${WME_PLATFORM_IMAGE:?Set an immutable candidate image tag}
+    container_name: ${WME_API_CONTAINER:-wme-candidate-api}
+    user: "10001:10001"
+    init: true
+    read_only: true
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 2g
+    cpus: 2
+    environment:
+      NODE_ENV: production
+      WME_HOST: 0.0.0.0
+      WME_PORT: 4100
+      WME_PUBLIC_ORIGIN: ${WME_PUBLIC_ORIGIN:?Set HTTPS portal origin}
+      WME_STATE_DIR: ${WME_CANDIDATE_ROOT:?}/state
+      WME_INTERNAL_API_ORIGIN: http://api:4100
+      # Internal per-run proxy only; disabled unless the operator explicitly opts in.
+      WME_EGRESS_ENABLED: ${WME_EGRESS_ENABLED:-false}
+      WME_EGRESS_PORT: 4101
+      WME_MAX_CONCURRENT_RUNS: ${WME_MAX_CONCURRENT_RUNS:-8}
+      WME_MAX_CONCURRENT_RUNS_PER_ORGANIZATION: ${WME_MAX_CONCURRENT_RUNS_PER_ORGANIZATION:-4}
+      WME_CONTENT_ORIGIN_TEMPLATE: ${WME_CONTENT_ORIGIN_TEMPLATE:?Set separate asset origin template}
+      WME_SUPERVISOR_SOCKET: ${WME_CANDIDATE_ROOT}/run/supervisor.sock
+      WME_SUPERVISOR_TOKEN_FILE: /run/secrets/supervisor-token
+    volumes:
+      - ${WME_CANDIDATE_ROOT}/state:${WME_CANDIDATE_ROOT}/state
+      - ${WME_CANDIDATE_ROOT}/run:${WME_CANDIDATE_ROOT}/run:ro
+      - ${WME_CANDIDATE_ROOT}/private/supervisor-token:/run/secrets/supervisor-token:ro
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=128m"]
+    ports: ["127.0.0.1:${WME_PORTAL_PORT:-4180}:4100"]
+    networks:
+      inference:
+        ipv4_address: 172.31.251.2
+    depends_on:
+      supervisor:
+        condition: service_healthy
+    logging: { driver: local, options: { max-size: 10m, max-file: "3" } }
+  supervisor:
+    image: ${WME_SUPERVISOR_IMAGE:?Set immutable supervisor image tag}
+    user: "0:0"
+    init: true
+    read_only: true
+    restart: unless-stopped
+    network_mode: host
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 1
+    environment:
+      WME_STATE_DIR: ${WME_CANDIDATE_ROOT}/state
+      WME_SESSION_ROOT: ${WME_CANDIDATE_ROOT}/state/agent-sessions
+      WME_RUNTIME_JOURNAL_ROOT: ${WME_CANDIDATE_ROOT}/private/runtime-journal
+      WME_SUPERVISOR_SOCKET: ${WME_CANDIDATE_ROOT}/run/supervisor.sock
+      WME_SUPERVISOR_TOKEN_FILE: /run/secrets/supervisor-token
+      WME_INTERNAL_API_ORIGIN: http://api:4100
+      WME_EGRESS_ENABLED: ${WME_EGRESS_ENABLED:-false}
+      WME_EGRESS_PORT: 4101
+      WME_PUBLIC_ORIGIN: ${WME_PUBLIC_ORIGIN:?Set HTTPS portal origin}
+      WME_CONTENT_ORIGIN_TEMPLATE: ${WME_CONTENT_ORIGIN_TEMPLATE:?Set separate asset origin template}
+      WME_EGRESS_DENIED_IPS: ${WME_EGRESS_DENIED_IPS:-}
+      WME_EGRESS_DENIED_HOSTS: ${WME_EGRESS_DENIED_HOSTS:-}
+      WME_EGRESS_INGRESS_HOSTS: ${WME_EGRESS_INGRESS_HOSTS:-}
+      WME_GATEWAY_CONTAINER: ${WME_API_CONTAINER:-wme-candidate-api}
+      WME_RUNNER_IMAGE: ${WME_RUNNER_IMAGE:?}
+      WME_RUNNER_NETWORK: wme-runtime
+      WME_ISOLATED_NETWORK_POOL: ${WME_ISOLATED_NETWORK_POOL:?Reserve an unused RFC1918 pool for isolated runtime and library networks}
+      WME_RUNNER_APPARMOR_PROFILE: ${WME_RUNNER_APPARMOR_PROFILE:-wme-platform-agent}
+      WME_INFERENCE_ROOT: ${WME_CANDIDATE_ROOT}/private/inference
+      WME_INFERENCE_IMAGE: ${WME_INFERENCE_IMAGE:?}
+      WME_INFERENCE_NETWORK: wme-inference
+      WME_INFERENCE_FIREWALL_ATTESTATION: ${WME_CANDIDATE_ROOT}/private/firewall-boot-id
+      WME_LIBRARY_IMAGE: ${WME_LIBRARY_IMAGE:?}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${WME_CANDIDATE_ROOT}:${WME_CANDIDATE_ROOT}
+      - ${WME_CANDIDATE_ROOT}/private/supervisor-token:/run/secrets/supervisor-token:ro
+    tmpfs: ["/tmp:rw,nosuid,nodev,size=128m"]
+    logging: { driver: local, options: { max-size: 10m, max-file: "3" } }
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const t=require('fs').readFileSync(process.env.WME_SUPERVISOR_TOKEN_FILE,'utf8').trim();const q=require('http').request({socketPath:process.env.WME_SUPERVISOR_SOCKET,path:'/healthz',headers:{authorization:'Bearer '+t}},r=>{r.resume();process.exit(r.statusCode===200?0:1)});q.on('error',()=>process.exit(1));q.end()",
+        ]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 5
+networks:
+  inference:
+    name: wme-inference
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: br-wmeinference
+    ipam:
+      config:
+        - subnet: 172.31.251.0/24

@@ -1,0 +1,40 @@
+{
+  "name": "wovenmatter-enterprise",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.21.0 <25"
+  },
+  "workspaces": [
+    "platform/apps/*",
+    "platform/packages/*"
+  ],
+  "scripts": {
+    "build:server": "node platform/tools/build.mjs",
+    "build": "npm run build:server && npm run build --workspace @wovenmatter-enterprise/web",
+    "test": "npm run build:server && node platform/tools/test.mjs",
+    "check": "npm run build && node platform/tools/test.mjs",
+    "start": "node platform/dist/apps/api/src/main.js",
+    "dev:api": "tsx watch platform/apps/api/src/main.ts",
+    "dev:web": "npm run dev --workspace @wovenmatter-enterprise/web",
+    "bootstrap": "node platform/dist/apps/api/src/cli.js",
+    "test:e2e": "playwright test --config platform/e2e/playwright.config.mjs",
+    "test:coverage": "npm run build:server && node platform/tools/test.mjs --coverage"
+  },
+  "dependencies": {
+    "@fastify/multipart": "10.1.2",
+    "@fastify/static": "10.1.5",
+    "fastify": "5.12.5",
+    "nodemailer": "10.0.12"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.0",
+    "@types/nodemailer": "8.0.2",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  },
+  "license": "MIT",
+  "packageManager": "npm@12.2.0"
+}
