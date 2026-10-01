@@ -16,7 +16,6 @@ import { randomUUID } from "node:crypto";
 import { createServer, request } from "node:http";
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import { gzipSync } from "node:zlib";
 import {
   OrganizationProxyProvisioner,
   proxyConfiguration,
@@ -32,7 +31,6 @@ import {
   ingressAnswers,
   validateNetworkBoundary,
 } from "../deploy/network-boundary.js";
-
 test("organization provisioning deduplicates racing calls and keeps separate private credentials", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wme-deploy-"));
   try {
@@ -66,10 +64,12 @@ test("organization provisioning deduplicates racing calls and keeps separate pri
     await chmod(join(directory, id, "endpoint.json"), 0o644);
     await assert.rejects(registry.resolve(id), /permissions/);
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
-
 test("existing provider configuration survives restarts and foreign containers are rejected", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wme-deploy-"));
   try {
@@ -134,40 +134,33 @@ test("existing provider configuration survives restarts and foreign containers a
     assert.equal(config.management["disable-control-panel"], true);
     assert.equal(config.oauth["auth-dir"], "/credentials");
   } finally {
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
-
-test("authenticated Unix supervisor transports execution, recovery and isolated live responses", async () => {
+test("authenticated Unix supervisor transports execution and rejects retired executable publishing", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wme-deploy-"));
   const socketPath = join(directory, "s.sock");
   const token = "b".repeat(64),
     tokenFile = join(directory, "token");
-  await writeFile(tokenFile, token, { mode: 0o600 });
-  const canceled: string[] = [];
-  const asset = randomUUID();
-  let receivedHeaders: import("node:http").IncomingHttpHeaders = {};
-  const backend = createServer((req, res) => {
-    receivedHeaders = req.headers;
-    res.setHeader("content-type", "application/json");
-    res.setHeader("set-cookie", [
-      "dashboard=a; Expires=Thu, 01 Jan 2099 00:00:00 GMT",
-      "another=b",
-    ]);
-    const payload = JSON.stringify({ path: req.url });
-    if (req.url === "/compressed") {
-      res.setHeader("content-encoding", "gzip");
-      res.end(gzipSync(payload));
-    } else res.end(payload);
+  await writeFile(tokenFile, token, {
+    mode: 0o600,
   });
-  backend.listen(0, "127.0.0.1");
-  await once(backend, "listening");
-  const address = backend.address() as { port: number };
+  const canceled: string[] = [];
   const runtime: Runtime = {
     async execute(_input, emit) {
-      await emit({ type: "started" });
-      await emit({ type: "assistant_delta", delta: "Unicode: 日本語" });
-      await emit({ type: "completed" });
+      await emit({
+        type: "started",
+      });
+      await emit({
+        type: "assistant_delta",
+        delta: "Unicode: 日本語",
+      });
+      await emit({
+        type: "completed",
+      });
     },
     async cancel(id) {
       canceled.push(id);
@@ -197,31 +190,16 @@ test("authenticated Unix supervisor transports execution, recovery and isolated 
       addresses: ["203.0.113.10", "127.0.0.1"],
       hostnames: ["host.example"],
     }),
-    allowTestLoopback: true,
-    library: {
-      async start() {
-        return {
-          id: asset,
-          status: "running",
-          origin: `http://127.0.0.1:${address.port}`,
-        };
-      },
-      async status() {
-        return {
-          id: asset,
-          status: "running",
-          origin: `http://127.0.0.1:${address.port}`,
-        };
-      },
-      async stop() {},
-    },
   });
   server.listen(socketPath);
   await once(server, "listening");
   try {
     const unauthorized = await new Promise<number>((resolve) => {
       const req = request(
-        { socketPath, path: "/v1/network-boundary" },
+        {
+          socketPath,
+          path: "/v1/network-boundary",
+        },
         (response) => {
           response.resume();
           resolve(response.statusCode!);
@@ -230,7 +208,10 @@ test("authenticated Unix supervisor transports execution, recovery and isolated 
       req.end();
     });
     assert.equal(unauthorized, 401);
-    const client = createSupervisorClient({ socketPath, tokenFile });
+    const client = createSupervisorClient({
+      socketPath,
+      tokenFile,
+    });
     await client.health();
     assert.deepEqual(await client.networkBoundary(), {
       addresses: ["127.0.0.1", "203.0.113.10"],
@@ -245,29 +226,32 @@ test("authenticated Unix supervisor transports execution, recovery and isolated 
     await client.runtime.cancel("run-id");
     assert.deepEqual(canceled, ["run-id"]);
     assert.deepEqual(await client.registry.ensure(randomUUID()), endpoint);
-    const result = await client.libraryHost.fetch!(asset, "/data?q=1", {
-      headers: {
-        authorization: "visitor-secret",
-        cookie: "wme_session=secret; dashboard_session=allowed",
-      },
+    const retired = await new Promise<number>((resolve) => {
+      const req = request(
+        {
+          socketPath,
+          path: "/v1/library/start",
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+          },
+        },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode!);
+        },
+      );
+      req.end("{}");
     });
-    assert.equal(result.headers.getSetCookie().length, 2);
-    assert.deepEqual(await result.json(), { path: "/data?q=1" });
-    assert.equal(receivedHeaders.authorization, undefined);
-    assert.equal(receivedHeaders.cookie, "dashboard_session=allowed");
-    assert.deepEqual(
-      await (await client.libraryHost.fetch!(asset, "/compressed", {})).json(),
-      { path: "/compressed" },
-    );
-    const invalid = await client.libraryHost.fetch!(asset, "//evil.test/", {});
-    assert.equal(invalid.status, 400);
+    assert.equal(retired, 404);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => backend.close(() => resolve()));
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
-
 test("host network boundary returns only bounded normalized address metadata", () => {
   const interfaces = () => ({
     eth0: [
@@ -293,12 +277,31 @@ test("host network boundary returns only bounded normalized address metadata", (
   });
   assert.ok(!JSON.stringify(boundary).includes("sensitive-interface-detail"));
   for (const invalid of [
-    { addresses: [], hostnames: [] },
-    { addresses: ["https://public.example"], hostnames: [] },
-    { addresses: ["fe80::1%eth0"], hostnames: [] },
-    { addresses: ["127.0.0.1"], hostnames: ["secret@host"] },
-    { addresses: ["127.0.0.1"], hostnames: [], token: "must-not-leak" },
-    { addresses: Array(257).fill("127.0.0.1"), hostnames: [] },
+    {
+      addresses: [],
+      hostnames: [],
+    },
+    {
+      addresses: ["https://public.example"],
+      hostnames: [],
+    },
+    {
+      addresses: ["fe80::1%eth0"],
+      hostnames: [],
+    },
+    {
+      addresses: ["127.0.0.1"],
+      hostnames: ["secret@host"],
+    },
+    {
+      addresses: ["127.0.0.1"],
+      hostnames: [],
+      token: "must-not-leak",
+    },
+    {
+      addresses: Array(257).fill("127.0.0.1"),
+      hostnames: [],
+    },
   ])
     assert.throws(() => validateNetworkBoundary(invalid));
   const configured = configuredBoundary({
@@ -311,7 +314,9 @@ test("host network boundary returns only bounded normalized address metadata", (
   assert.ok(configured.additionalHostnames.includes("assets.candidate.test"));
   assert.deepEqual(configured.additionalAddresses, ["203.0.113.9"]);
   assert.deepEqual(
-    configuredBoundary({ WME_PUBLIC_ORIGIN: "https://[2001:db8::1]" }),
+    configuredBoundary({
+      WME_PUBLIC_ORIGIN: "https://[2001:db8::1]",
+    }),
     {
       additionalAddresses: ["2001:db8::1"],
       additionalHostnames: [],
@@ -327,7 +332,6 @@ test("host network boundary returns only bounded normalized address metadata", (
     "portal.example.com",
   ]);
 });
-
 test("ingress DNS boundary caches briefly, refreshes interfaces and fails closed without stale addresses", async () => {
   let clock = 0,
     calls = 0,
@@ -378,7 +382,6 @@ test("ingress DNS boundary caches briefly, refreshes interfaces and fails closed
   assert.ok((await reader()).addresses.includes("198.51.100.20"));
   assert.equal(calls, 3);
 });
-
 test("ingress exclusion DNS requires complete address families and keeps failed batches in flight", async () => {
   const answer: PromiseSettledResult<string[]> = {
     status: "fulfilled",
@@ -386,7 +389,9 @@ test("ingress exclusion DNS requires complete address families and keeps failed 
   };
   const missing = (code: string): PromiseSettledResult<string[]> => ({
     status: "rejected",
-    reason: { code },
+    reason: {
+      code,
+    },
   });
   assert.deepEqual(ingressAnswers([answer, missing("ENODATA")]), [
     "203.0.113.5",
@@ -432,7 +437,6 @@ test("ingress exclusion DNS requires complete address families and keeps failed 
   complete(["198.51.100.5"]);
   await Promise.all([firstCheck, secondCheck]);
 });
-
 test("online SQLite backup captures committed WAL records and validates integrity", async () => {
   // Dynamic absolute import works from both source and compiled test locations.
   const { backupDatabase, checkDatabase } = await import(
@@ -451,7 +455,9 @@ test("online SQLite backup captures committed WAL records and validates integrit
   db.prepare("INSERT INTO records VALUES (?)").run("committed-in-WAL");
   try {
     await backupDatabase(source, target);
-    const restored = new DatabaseSync(target, { readOnly: true });
+    const restored = new DatabaseSync(target, {
+      readOnly: true,
+    });
     assert.equal(
       restored.prepare("SELECT value FROM records").get()!.value,
       "committed-in-WAL",
@@ -475,21 +481,27 @@ test("online SQLite backup captures committed WAL records and validates integrit
     assert.throws(() => checkDatabase(join(directory, "corrupt.sqlite")));
   } finally {
     db.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
-
 test("an uncertain runtime cleanup closes transport without fabricating completion", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wme-deploy-")),
     socketPath = join(directory, "s.sock"),
     tokenFile = join(directory, "token"),
     token = "c".repeat(64);
-  await writeFile(tokenFile, token, { mode: 0o600 });
+  await writeFile(tokenFile, token, {
+    mode: 0o600,
+  });
   const server = createSupervisorServer({
     token,
     runtime: {
       async execute(_input, emit) {
-        await emit({ type: "started" });
+        await emit({
+          type: "started",
+        });
         throw new Error("Container cleanup not acknowledged");
       },
       async cancel() {
@@ -513,12 +525,12 @@ test("an uncertain runtime cleanup closes transport without fabricating completi
   try {
     const events: unknown[] = [];
     await assert.rejects(
-      createSupervisorClient({ socketPath, tokenFile }).runtime.execute(
-        {} as any,
-        (event) => {
-          events.push(event);
-        },
-      ),
+      createSupervisorClient({
+        socketPath,
+        tokenFile,
+      }).runtime.execute({} as any, (event) => {
+        events.push(event);
+      }),
     );
     assert.ok(
       !events.some((event) =>
@@ -527,17 +539,115 @@ test("an uncertain runtime cleanup closes transport without fabricating completi
     );
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
-
+test("authenticated transport detaches without cancelling and reattaches by durable cursor with explicit acknowledgment", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "wme-attach-wire-")),
+    socketPath = join(directory, "s.sock"),
+    tokenFile = join(directory, "token");
+  await writeFile(tokenFile, "d".repeat(64), { mode: 0o600 });
+  let admitted = 0,
+    cancelled = 0,
+    detached!: () => void;
+  const lost = new Promise<void>((resolve) => {
+      detached = resolve;
+    }),
+    acknowledgments: number[] = [],
+    stops: unknown[] = [];
+  const server = createSupervisorServer({
+    token: "d".repeat(64),
+    runtime: {
+      async execute(_request, emit, signal) {
+        admitted++;
+        await emit({ type: "started", sequence: 1 });
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) resolve();
+          else
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        detached();
+      },
+      async attach(_id, after, emit) {
+        assert.equal(after, 1);
+        await emit({
+          type: "assistant_delta",
+          delta: "continued independently",
+          sequence: 2,
+        });
+        await emit({ type: "completed", sequence: 3 });
+      },
+      async acknowledge(_id, cursor) {
+        acknowledgments.push(cursor);
+      },
+      async stopSession(project, thread, generation) {
+        stops.push([project, thread, generation]);
+      },
+      async cancel() {
+        cancelled++;
+      },
+      async recover() {
+        return [];
+      },
+    },
+    registry: {
+      async resolve() {
+        return undefined;
+      },
+      async ensure() {
+        throw new Error("Unused");
+      },
+    },
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  t.after(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(directory, { recursive: true, force: true });
+  });
+  const client = createSupervisorClient({ socketPath, tokenFile }).runtime,
+    controller = new AbortController();
+  await assert.rejects(
+    client.execute(
+      {} as any,
+      () => {
+        controller.abort();
+      },
+      controller.signal,
+    ),
+  );
+  await lost;
+  assert.equal(cancelled, 0);
+  assert.equal(admitted, 1);
+  const events: any[] = [];
+  await client.attach!("accepted-run", 1, (event) => {
+    events.push(event);
+  });
+  assert.deepEqual(
+    events.map((event) => event.sequence),
+    [2, 3],
+  );
+  assert.deepEqual(
+    acknowledgments,
+    [],
+    "a successful socket write is not a transcript acknowledgment",
+  );
+  await client.acknowledge!("accepted-run", 3);
+  assert.deepEqual(acknowledgments, [3]);
+  await client.stopSession!("project", "thread", 2);
+  assert.deepEqual(stops, [["project", "thread", 2]]);
+});
 function socketStatus(socketPath: string, route = "/healthz"): Promise<number> {
   return new Promise((resolve, reject) => {
     const req = request(
       {
         socketPath,
         path: route,
-        headers: { authorization: `Bearer ${"b".repeat(64)}` },
+        headers: {
+          authorization: `Bearer ${"b".repeat(64)}`,
+        },
       },
       (res) => {
         res.resume();
@@ -548,7 +658,6 @@ function socketStatus(socketPath: string, route = "/healthz"): Promise<number> {
     req.end();
   });
 }
-
 test("a duplicate supervisor cannot recover or cancel the active supervisor's runs", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wme-owner-"));
   const socketPath = join(directory, "s.sock");
@@ -570,10 +679,12 @@ test("a duplicate supervisor cannot recover or cancel the active supervisor's ru
   } finally {
     first.closeAllConnections();
     await new Promise<void>((resolve) => first.close(() => resolve()));
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
-
 test("supervisor denies health and work until recovery completes and releases failed startup", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wme-ready-"));
   const socketPath = join(directory, "s.sock");
@@ -591,7 +702,10 @@ test("supervisor denies health and work until recovery completes and releases fa
     const promise = new Promise<void>((done) => {
       resolve = done;
     });
-    return { promise, resolve };
+    return {
+      promise,
+      resolve,
+    };
   };
   const entered = gate();
   const resume = gate();
@@ -633,13 +747,17 @@ test("supervisor denies health and work until recovery completes and releases fa
   } finally {
     retry.closeAllConnections();
     await new Promise<void>((resolve) => retry.close(() => resolve()));
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, {
+      recursive: true,
+      force: true,
+    });
   }
 });
-
 test(
   "concurrent Linux supervisor restarts recover only once from a stale socket",
-  { skip: process.platform !== "linux" },
+  {
+    skip: process.platform !== "linux",
+  },
   async () => {
     const directory = await mkdtemp(join(tmpdir(), "wme-stale-"));
     const socketPath = join(directory, "s.sock");
@@ -670,18 +788,36 @@ test(
             new Promise<void>((resolve) => server.close(() => resolve())),
         ),
       );
-      await rm(directory, { recursive: true, force: true });
+      await rm(directory, {
+        recursive: true,
+        force: true,
+      });
     }
   },
 );
-
-
 test("ingress boundary supports prefixed and organization asset hostnames", () => {
   for (const prefix of ["preview", "{orgSlug}"]) {
-    const value = configuredBoundary({WME_PUBLIC_ORIGIN:"https://www.example.com",WME_CONTENT_ORIGIN_TEMPLATE:`https://${prefix}-{assetId}.example.com`});
+    const value = configuredBoundary({
+      WME_PUBLIC_ORIGIN: "https://www.example.com",
+      WME_CONTENT_ORIGIN_TEMPLATE: `https://${prefix}-{assetId}.example.com`,
+    });
     assert.ok(value.additionalHostnames.includes("example.com"));
-    assert.ok(value.ingressHostnames.includes(`${prefix === "{orgSlug}" ? "org" : prefix}-00000000-0000-4000-8000-000000000000.example.com`));
+    assert.ok(
+      value.ingressHostnames.includes(
+        `${prefix === "{orgSlug}" ? "org" : prefix}-00000000-0000-4000-8000-000000000000.example.com`,
+      ),
+    );
   }
-  for (const template of ["https://example.com/{assetId}", "https://example.com", "https://user:password@{assetId}.example.com", "https://{assetId}.example.com/path", "https://{unknown}-{assetId}.example.com"])
-    assert.throws(() => configuredBoundary({WME_CONTENT_ORIGIN_TEMPLATE:template}));
+  for (const template of [
+    "https://example.com/{assetId}",
+    "https://example.com",
+    "https://user:password@{assetId}.example.com",
+    "https://{assetId}.example.com/path",
+    "https://{unknown}-{assetId}.example.com",
+  ])
+    assert.throws(() =>
+      configuredBoundary({
+        WME_CONTENT_ORIGIN_TEMPLATE: template,
+      }),
+    );
 });

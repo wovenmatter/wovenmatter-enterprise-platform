@@ -26,11 +26,11 @@ async function fixture() {
   const timestamp = new Date().toISOString();
   await db.batch([
     {
-      sql: "INSERT INTO organizations VALUES(?,?,?)",
+      sql: "INSERT INTO organizations(id,name,created_at) VALUES(?,?,?)",
       params: ["org-a", "A", timestamp],
     },
     {
-      sql: "INSERT INTO organizations VALUES(?,?,?)",
+      sql: "INSERT INTO organizations(id,name,created_at) VALUES(?,?,?)",
       params: ["org-b", "B", timestamp],
     },
     ...[
@@ -196,7 +196,7 @@ test("multipart route preserves relative folders and reports failed items withou
       `--${boundary}--\r\n`;
     const result = await app.inject({
       method: "POST",
-      url: "/api/files/upload",
+      url: "/enterprise/api/files/upload",
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload,
     });
@@ -204,14 +204,14 @@ test("multipart route preserves relative folders and reports failed items withou
     assert.equal(result.json().items.length, 2);
     assert.equal(result.json().errors.length, 0);
     const listing = await app.inject(
-      "/api/files?orgId=org-a&projectId=project-a&path=Folder",
+      "/enterprise/api/files?orgId=org-a&projectId=project-a&path=Folder",
     );
     assert.deepEqual(
       listing.json().items.map((r: { name: string }) => r.name),
       ["a.txt", "b.txt"],
     );
     const content = await app.inject(
-      `/api/files/${result.json().items[0].id}/content?projectId=project-a`,
+      `/enterprise/api/files/${result.json().items[0].id}/content?projectId=project-a`,
     );
     assert.equal(content.body, "alpha");
     assert.equal(content.headers["x-content-type-options"], "nosniff");
@@ -225,7 +225,7 @@ test("multipart route preserves relative folders and reports failed items withou
       `--${boundary}--\r\n`;
     const partial = await app.inject({
       method: "POST",
-      url: "/api/files/upload",
+      url: "/enterprise/api/files/upload",
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload: limited,
     });
@@ -256,7 +256,7 @@ test("organization grants inherit; shared files are consistent and revocable wit
     );
     assert.equal(
       (await files.listFiles(f.ctx, f.member, { orgId: "org-a" })).length,
-      0,
+      1,
     );
     await files.grantFile(f.ctx, f.admin, source.id, "member", "read");
     assert.equal(
@@ -341,9 +341,19 @@ test("organization grants inherit; shared files are consistent and revocable wit
       /access/u,
     );
     await files.revokeGrant(f.ctx, f.admin, source.id, "member");
+    assert.equal(
+      (await files.readFileVersion(f.ctx, f.member, doc.id)).bytes.toString(),
+      "two",
+    );
     await assert.rejects(
-      files.readFileVersion(f.ctx, f.member, doc.id),
-      /access/u,
+      files.uploadFile(
+        f.ctx,
+        f.member,
+        { orgId: "org-a" },
+        "Common/policy.txt",
+        Buffer.from("blocked"),
+      ),
+      { code: "file_access_denied" },
     );
     await assert.rejects(
       files.shareFile(f.ctx, f.admin, source.id, "project-b", "read"),
@@ -731,7 +741,7 @@ test(
 );
 
 for (const operation of ["rename", "copy", "move"] as const) {
-  test(`native moves out of a granted folder cannot retain ${operation} access`, async () => {
+  test(`native moves recompute library ${operation} access from current membership and grants`, async () => {
     const f = await fixture();
     try {
       const scope = { orgId: "org-a" };
@@ -750,6 +760,22 @@ for (const operation of ["rename", "copy", "move"] as const) {
         path.join(root, "Granted/private.txt"),
         path.join(root, "Restricted/private.txt"),
       );
+      if (operation === "copy") {
+        await files.transferFile(
+          f.ctx,
+          f.member,
+          file.id,
+          { orgId: "org-a", projectId: "project-a", path: "" },
+          "copy",
+        );
+        assert.equal(
+          (
+            await files.readFileVersion(f.ctx, f.member, file.id)
+          ).bytes.toString(),
+          "restricted",
+        );
+        return;
+      }
       await assert.rejects(
         operation === "rename"
           ? files.renameFile(f.ctx, f.member, file.id, "changed.txt")

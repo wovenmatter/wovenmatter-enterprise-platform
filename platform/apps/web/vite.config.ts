@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 const root = dirname(fileURLToPath(import.meta.url));
 export default defineConfig({
+  base: "/enterprise/",
   plugins: [react()],
   server: {
     fs: {
@@ -23,8 +24,14 @@ export default defineConfig({
     host: "127.0.0.1",
     strictPort: true,
     proxy: {
-      "/api": { target: "http://127.0.0.1:4160", changeOrigin: false },
-      "/share": { target: "http://127.0.0.1:4160", changeOrigin: false },
+      "/enterprise/api": {
+        target: "http://127.0.0.1:4160",
+        changeOrigin: false,
+      },
+      "/enterprise/reports": {
+        target: "http://127.0.0.1:4160",
+        changeOrigin: false,
+      },
     },
   },
   build: { outDir: "dist", sourcemap: true },

@@ -30,7 +30,7 @@ function access(value: unknown): Access {
     throw new AppError(
       400,
       "invalid_access",
-      "Choose read-only or read-write access.",
+      "Choose read-only or full access.",
     );
   return value;
 }
@@ -50,7 +50,20 @@ export async function registerFiles(
     limits: { fileSize: maxFileBytes(ctx), files: 500, fields: 16, parts: 520 },
     throwFileSizeLimit: true,
   });
-  app.get("/api/files", async (request) => {
+  app.get<{ Params: { orgId: string } }>(
+    "/enterprise/api/organizations/:orgId/library/share-targets",
+    async (request) => {
+      const user = await ctx.requireUser(request);
+      await ctx.requireLibraryFull(user, request.params.orgId);
+      return {
+        items: await ctx.db.all(
+          "SELECT id,name FROM projects WHERE org_id=? AND status NOT IN ('deleted','deleting','purged') ORDER BY name",
+          [request.params.orgId],
+        ),
+      };
+    },
+  );
+  app.get("/enterprise/api/files", async (request) => {
     const user = await ctx.requireUser(request);
     const q = query(request.query);
     const destination = scope(q);
@@ -65,7 +78,7 @@ export async function registerFiles(
       ),
     };
   });
-  app.post("/api/files/folders", async (request) => {
+  app.post("/enterprise/api/files/folders", async (request) => {
     const user = await ctx.requireUser(request);
     const body = objectBody(request.body);
     return service.createFolder(
@@ -75,7 +88,7 @@ export async function registerFiles(
       cleanPath(body.path, false),
     );
   });
-  app.post("/api/files/upload", async (request, reply) => {
+  app.post("/enterprise/api/files/upload", async (request, reply) => {
     const user = await ctx.requireUser(request);
     const fields: Record<string, unknown> = {};
     const files: { name: string; bytes: Buffer }[] = [];
@@ -165,7 +178,7 @@ export async function registerFiles(
     return { items, errors };
   });
   app.patch<{ Params: { fileId: string } }>(
-    "/api/files/:fileId",
+    "/enterprise/api/files/:fileId",
     async (request) => {
       const user = await ctx.requireUser(request);
       const body = objectBody(request.body);
@@ -182,7 +195,7 @@ export async function registerFiles(
     },
   );
   app.post<{ Params: { fileId: string } }>(
-    "/api/files/:fileId/transfer",
+    "/enterprise/api/files/:fileId/transfer",
     async (request) => {
       const user = await ctx.requireUser(request);
       const body = objectBody(request.body);
@@ -203,7 +216,7 @@ export async function registerFiles(
     },
   );
   app.delete<{ Params: { fileId: string } }>(
-    "/api/files/:fileId",
+    "/enterprise/api/files/:fileId",
     async (request, reply) => {
       await service.deleteFile(
         ctx,
@@ -216,7 +229,7 @@ export async function registerFiles(
     },
   );
   app.get<{ Params: { fileId: string } }>(
-    "/api/files/:fileId/content",
+    "/enterprise/api/files/:fileId/content",
     async (request, reply) => {
       const q = query(request.query);
       const file = await service.readFileVersion(
@@ -244,7 +257,7 @@ export async function registerFiles(
     },
   );
   app.get<{ Params: { fileId: string } }>(
-    "/api/files/:fileId/versions",
+    "/enterprise/api/files/:fileId/versions",
     async (request) => ({
       items: await service.fileVersions(
         ctx,
@@ -255,7 +268,7 @@ export async function registerFiles(
     }),
   );
   app.get<{ Params: { fileId: string } }>(
-    "/api/files/:fileId/shares",
+    "/enterprise/api/files/:fileId/shares",
     async (request) => ({
       items: await service.getShares(
         ctx,
@@ -265,7 +278,7 @@ export async function registerFiles(
     }),
   );
   app.post<{ Params: { fileId: string } }>(
-    "/api/files/:fileId/shares",
+    "/enterprise/api/files/:fileId/shares",
     async (request, reply) => {
       const body = objectBody(request.body);
       await service.shareFile(
@@ -281,7 +294,7 @@ export async function registerFiles(
     },
   );
   app.delete<{ Params: { fileId: string; projectId: string } }>(
-    "/api/files/:fileId/shares/:projectId",
+    "/enterprise/api/files/:fileId/shares/:projectId",
     async (request, reply) => {
       await service.revokeShare(
         ctx,
@@ -294,7 +307,7 @@ export async function registerFiles(
     },
   );
   app.get<{ Params: { fileId: string } }>(
-    "/api/files/:fileId/grants",
+    "/enterprise/api/files/:fileId/grants",
     async (request) => ({
       items: await service.getGrants(
         ctx,
@@ -304,7 +317,7 @@ export async function registerFiles(
     }),
   );
   app.post<{ Params: { fileId: string } }>(
-    "/api/files/:fileId/grants",
+    "/enterprise/api/files/:fileId/grants",
     async (request, reply) => {
       const body = objectBody(request.body);
       await service.grantFile(
@@ -319,7 +332,7 @@ export async function registerFiles(
     },
   );
   app.delete<{ Params: { fileId: string; userId: string } }>(
-    "/api/files/:fileId/grants/:userId",
+    "/enterprise/api/files/:fileId/grants/:userId",
     async (request, reply) => {
       await service.revokeGrant(
         ctx,

@@ -17,7 +17,13 @@ import {
 } from "./session.js";
 import { jobStatement } from "../jobs/index.js";
 export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
-  const limits = new Map<string, { count: number; until: number }>();
+  const limits = new Map<
+    string,
+    {
+      count: number;
+      until: number;
+    }
+  >();
   function limit(key: string, maximum = 200) {
     const now = Date.now();
     let entry = limits.get(key);
@@ -27,7 +33,10 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         if (limits.size >= 10000)
           throw new AppError(429, "rate_limited", "Please try again later");
       }
-      entry = { count: 0, until: now + 15 * 60_000 };
+      entry = {
+        count: 0,
+        until: now + 15 * 60_000,
+      };
       limits.set(key, entry);
     }
     if (++entry.count > maximum)
@@ -49,7 +58,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       routeConfig.isolatedContent === true
     )
       return;
-    if (!pathname.startsWith("/api/")) return;
+    if (!pathname.startsWith("/enterprise/api/")) return;
     reply.header("cache-control", "no-store");
     if (!["GET", "HEAD", "OPTIONS"].includes(request.method)) {
       if (
@@ -62,10 +71,10 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
           "Request origin is not allowed",
         );
       if (
-        pathname === "/api/login" ||
-        pathname === "/api/activate" ||
-        pathname === "/api/password-reset/request" ||
-        pathname === "/api/password-reset/confirm"
+        pathname === "/enterprise/api/login" ||
+        pathname === "/enterprise/api/activate" ||
+        pathname === "/enterprise/api/password-reset/request" ||
+        pathname === "/enterprise/api/password-reset/confirm"
       ) {
         limit(request.ip);
         return;
@@ -88,7 +97,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         );
     }
   });
-  app.get("/api/session", async (request) => {
+  app.get("/enterprise/api/session", async (request) => {
     const session = await readSession(
       ctx.db,
       request,
@@ -99,7 +108,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       csrfToken: session?.csrfToken ?? null,
     };
   });
-  app.post("/api/login", async (request, reply) => {
+  app.post("/enterprise/api/login", async (request, reply) => {
     const body = objectBody(request.body);
     const email = stringValue(body.email, "email", 254).toLowerCase();
     limit(`login:${request.ip}:${hashToken(email)}`, 20);
@@ -120,42 +129,55 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
     const old = requestSessionId(request, ctx.config.secureCookies);
     await ctx.db.batch([
       ...(old
-        ? [{ sql: "DELETE FROM sessions WHERE id=?", params: [old] }]
+        ? [
+            {
+              sql: "DELETE FROM sessions WHERE id=?",
+              params: [old],
+            },
+          ]
         : []),
       session.statement,
     ]);
     setSessionCookie(reply, ctx.config, session.token);
-    return { user: mapUser(row), csrfToken: session.csrfToken };
+    return {
+      user: mapUser(row),
+      csrfToken: session.csrfToken,
+    };
   });
-  app.post("/api/logout", async (request, reply) => {
+  app.post("/enterprise/api/logout", async (request, reply) => {
     const id = requestSessionId(request, ctx.config.secureCookies);
     if (id) await ctx.db.run("DELETE FROM sessions WHERE id=?", [id]);
     setSessionCookie(reply, ctx.config, "", true);
     await ctx.onAccessChanged?.();
-    return { ok: true };
+    return {
+      ok: true,
+    };
   });
-  app.get("/api/me", async (request) => {
+  app.get("/enterprise/api/me", async (request) => {
     const user = await ctx.requireUser(request);
-    const organizations = await ctx.db.all<any>(
-      user.role === "owner"
-        ? "SELECT * FROM organizations ORDER BY name"
-        : "SELECT * FROM organizations WHERE id=?",
-      user.role === "owner" ? [] : [user.orgId],
-    );
-    const projects = await ctx.db.all<any>(
-      user.role === "owner"
-        ? "SELECT p.*,o.name AS organization_name FROM projects p JOIN organizations o ON o.id=p.org_id WHERE p.status<>'deleted' ORDER BY o.name,p.created_at DESC"
-        : user.role === "admin"
-          ? "SELECT p.*,o.name AS organization_name FROM projects p JOIN organizations o ON o.id=p.org_id WHERE p.org_id=? AND p.status<>'deleted' ORDER BY p.created_at DESC"
-          : "SELECT p.*,o.name AS organization_name,CASE WHEN p.access='read' OR m.access='read' THEN 'read' ELSE 'write' END AS effective_access FROM projects p JOIN project_members m ON p.id=m.project_id JOIN organizations o ON o.id=p.org_id WHERE m.user_id=? AND p.status<>'deleted' ORDER BY p.created_at DESC",
-      user.role === "owner" ? [] : [user.role === "admin" ? user.orgId : user.id],
-    );
+    const [organizations, projects] = await Promise.all([
+      ctx.db.all<any>(
+        user.role === "owner"
+          ? "SELECT *, 'admin' AS membership_role,'write' AS library_access FROM organizations ORDER BY name"
+          : "SELECT o.*,m.role AS membership_role,CASE WHEN m.role='admin' THEN 'write' ELSE m.library_access END AS library_access FROM organizations o JOIN organization_memberships m ON m.org_id=o.id WHERE m.user_id=? ORDER BY o.name",
+        user.role === "owner" ? [] : [user.id],
+      ),
+      ctx.db.all<any>(
+        user.role === "owner"
+          ? "SELECT p.*,o.name AS organization_name FROM projects p JOIN organizations o ON o.id=p.org_id WHERE p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC"
+          : "SELECT p.*,o.name AS organization_name,CASE WHEN p.access='read' OR (m.role<>'admin' AND pm.access='read') THEN 'read' ELSE 'write' END AS effective_access FROM projects p JOIN organizations o ON o.id=p.org_id JOIN organization_memberships m ON m.org_id=p.org_id AND m.user_id=? LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=m.user_id WHERE (m.role='admin' OR pm.user_id IS NOT NULL) AND p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC",
+        user.role === "owner" ? [] : [user.id],
+      ),
+    ]);
     return {
       user,
       organizations: organizations.map((r) => ({
         id: r.id,
         name: r.name,
         createdAt: r.created_at,
+        role: r.membership_role,
+        libraryAccess: r.library_access,
+        defaultHostId: r.default_host_id,
       })),
       projects: projects.map((r) => ({
         id: r.id,
@@ -169,23 +191,31 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       })),
     };
   });
-  app.patch("/api/me", async (request) => {
+  app.patch("/enterprise/api/me", async (request) => {
     const user = await ctx.requireUser(request);
     const body = objectBody(request.body);
     const name =
       body.name === undefined ? user.name : stringValue(body.name, "name", 160);
     const theme = body.theme === undefined ? user.theme : body.theme;
     if (theme !== "green" && theme !== "cognac")
-      throw new AppError(400, "invalid_request", "Theme must be green or cognac");
+      throw new AppError(
+        400,
+        "invalid_request",
+        "Theme must be green or cognac",
+      );
     await ctx.db.run("UPDATE users SET name=?,theme=? WHERE id=?", [
       name,
       theme,
       user.id,
     ]);
-    await ctx.audit(user, "user.profile_updated", user.id, { theme });
-    return mapUser(await ctx.db.get("SELECT * FROM users WHERE id=?", [user.id]));
+    await ctx.audit(user, null, "user.profile_updated", user.id, {
+      theme,
+    });
+    return mapUser(
+      await ctx.db.get("SELECT * FROM users WHERE id=?", [user.id]),
+    );
   });
-  app.post("/api/password-reset/request", async (request, reply) => {
+  app.post("/enterprise/api/password-reset/request", async (request, reply) => {
     const body = objectBody(request.body);
     const email = stringValue(body.email, "email", 254).toLowerCase();
     limit(`reset:${request.ip}:${hashToken(email)}`, 5);
@@ -194,7 +224,9 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       [email],
     );
     if (row) {
-      const recent = await ctx.db.get<{ count: number }>(
+      const recent = await ctx.db.get<{
+        count: number;
+      }>(
         "SELECT COUNT(*) AS count FROM password_reset_tokens WHERE user_id=? AND created_at>?",
         [row.id, new Date(Date.now() - 3600_000).toISOString()],
       );
@@ -203,7 +235,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         const token = randomBytes(32).toString("hex");
         const now = new Date().toISOString();
         const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
-        const resetUrl = `${ctx.config.publicOrigin}/reset-password?token=${token}`;
+        const resetUrl = `${ctx.config.publicOrigin}/enterprise/reset-password?token=${token}`;
         const job = jobStatement({
           type: "password_reset.deliver",
           idempotencyKey: id,
@@ -236,7 +268,8 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         } catch (error) {
           // A parallel request can consume the final slot. Keep the public
           // response identical for unknown users and exhausted reset quotas.
-          if ((error as Error).message !== "Concurrent update conflict") throw error;
+          if ((error as Error).message !== "Concurrent update conflict")
+            throw error;
         }
       }
     }
@@ -247,7 +280,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         "If an account matches that email, a password reset link will be sent.",
     };
   });
-  app.post("/api/password-reset/confirm", async (request, reply) => {
+  app.post("/enterprise/api/password-reset/confirm", async (request, reply) => {
     const body = objectBody(request.body);
     const token = stringValue(body.token, "reset token", 128);
     const password = validatePassword(body.password);
@@ -280,7 +313,10 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
           params: [passwordHash, row.uid],
           expectChanges: 1,
         },
-        { sql: "DELETE FROM sessions WHERE user_id=?", params: [row.uid] },
+        {
+          sql: "DELETE FROM sessions WHERE user_id=?",
+          params: [row.uid],
+        },
         session.statement,
       ]);
     } catch (e) {
@@ -292,17 +328,22 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         );
       throw e;
     }
-    const user = mapUser(await ctx.db.get("SELECT * FROM users WHERE id=?", [row.uid]));
+    const user = mapUser(
+      await ctx.db.get("SELECT * FROM users WHERE id=?", [row.uid]),
+    );
     setSessionCookie(reply, ctx.config, session.token);
     await ctx.onAccessChanged?.();
-    return { user, csrfToken: session.csrfToken };
+    return {
+      user,
+      csrfToken: session.csrfToken,
+    };
   });
-  app.post("/api/activate", async (request, reply) => {
+  app.post("/enterprise/api/activate", async (request, reply) => {
     const body = objectBody(request.body);
     const token = stringValue(body.token, "invitation token", 128);
     const password = validatePassword(body.password);
     const invitation = await ctx.db.get<any>(
-      "SELECT i.*,u.name FROM invitations i JOIN users u ON u.id=i.user_id WHERE i.token_hash=? AND i.accepted_at IS NULL AND i.expires_at>?",
+      "SELECT i.*,u.name FROM invitations i JOIN users u ON u.id=i.user_id JOIN organization_memberships m ON m.user_id=i.user_id AND m.org_id=i.org_id WHERE i.token_hash=? AND i.accepted_at IS NULL AND i.expires_at>?",
       [hashToken(token), new Date().toISOString()],
     );
     if (!invitation)
@@ -326,7 +367,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
           expectChanges: 1,
         },
         {
-          sql: "UPDATE users SET password_hash=?,name=?,enabled=1 WHERE id=?",
+          sql: "UPDATE users SET password_hash=?,name=?,enabled=1 WHERE id=? AND password_hash IS NULL",
           params: [passwordHash, name, invitation.user_id],
           expectChanges: 1,
         },
@@ -349,6 +390,9 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       await ctx.db.get("SELECT * FROM users WHERE id=?", [invitation.user_id]),
     );
     setSessionCookie(reply, ctx.config, session.token);
-    return { user, csrfToken: session.csrfToken };
+    return {
+      user,
+      csrfToken: session.csrfToken,
+    };
   });
 }

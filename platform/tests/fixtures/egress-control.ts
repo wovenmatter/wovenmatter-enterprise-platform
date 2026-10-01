@@ -112,7 +112,7 @@ export async function createEgressControlFixture(options: {
       now = new Date().toISOString();
     await system.ctx.db.batch([
       {
-        sql: "INSERT INTO organizations VALUES(?,?,?)",
+        sql: "INSERT INTO organizations(id,name,created_at) VALUES(?,?,?)",
         params: [org, "Synthetic network acceptance", now],
       },
       {

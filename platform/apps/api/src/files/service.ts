@@ -24,7 +24,12 @@ import {
   withLeaf,
 } from "./paths.js";
 import { locked, now, underneath, sourceRow, reconcile } from "./storage.js";
-import { validateScope, orgAccess, authorizeFile, resolveLocation } from "./access.js";
+import {
+  validateScope,
+  orgAccess,
+  authorizeFile,
+  resolveLocation,
+} from "./access.js";
 
 function record(
   row: FileRow,
@@ -216,7 +221,7 @@ export async function createFolder(
       "SELECT * FROM workspace_files WHERE scope_key=? AND path=? AND deleted_at IS NULL",
       [scopeKey(location.scope), location.path],
     );
-    await ctx.audit(user, "files.folder_created", row!.id);
+    await ctx.audit(user, row!.org_id, "files.folder_created", row!.id);
     return record(row!, location.access, location.share);
   });
 }
@@ -303,8 +308,28 @@ export async function uploadFile(
       "SELECT * FROM workspace_files WHERE scope_key=? AND path=? AND deleted_at IS NULL",
       [scopeKey(location.scope), location.path],
     );
-    await ctx.audit(user, "files.uploaded", row!.id, { bytes: bytes.length });
+    await ctx.audit(user, row!.org_id, "files.uploaded", row!.id, {
+      bytes: bytes.length,
+    });
     return record(row!, location.access, location.share);
+  });
+}
+/** Bounded current bytes for reports. No whole-workspace reconciliation or
+ * version allocation is triggered by an unauthenticated public report load. */
+export async function readCurrentFile(
+  ctx: AppContext,
+  user: User,
+  id: string,
+  options: { projectId: string; maxBytes: number },
+): Promise<Buffer> {
+  return locked(ctx, async () => {
+    const auth = await authorizeFile(ctx, user, id, options.projectId);
+    if (auth.row.kind !== "file")
+      throw new AppError(400, "not_a_file", "Select a file.");
+    const root = await ensureRoot(ctx, auth.scope);
+    const bytes = await readBytes(root, auth.row.path, options.maxBytes);
+    await authorizeFile(ctx, user, id, options.projectId);
+    return bytes;
   });
 }
 export async function readFileVersion(
@@ -424,7 +449,7 @@ export async function renameFile(
     );
     await reconcile(ctx, auth.scope);
     const updated = await sourceRow(ctx, id);
-    await ctx.audit(user, "files.renamed", id);
+    await ctx.audit(user, row.org_id, "files.renamed", id);
     return record(
       updated,
       auth.access,
@@ -449,7 +474,7 @@ export async function deleteFile(
     await safeStat(root, auth.row.path);
     await removeTree(root, auth.row.path);
     await reconcile(ctx, auth.scope);
-    await ctx.audit(user, "files.deleted", id);
+    await ctx.audit(user, auth.row.org_id, "files.deleted", id);
   });
 }
 export async function transferFile(
@@ -651,7 +676,7 @@ export async function transferFile(
       "SELECT * FROM workspace_files WHERE scope_key=? AND path=? AND deleted_at IS NULL",
       [scopeKey(location.scope), location.path],
     );
-    await ctx.audit(user, `files.${operation}`, id, {
+    await ctx.audit(user, auth.row.org_id, `files.${operation}`, id, {
       destinationId: result!.id,
     });
     return record(result!, location.access, location.share);

@@ -1,41 +1,20 @@
-# Install only after replacing these example DNS names and certificate paths.
-# Put UUID assets on a different registrable domain in production where possible.
-map $http_upgrade $wme_connection_upgrade { default upgrade; '' close; }
+# Install only after replacing the example origin and certificate paths.
 server {
   listen 443 ssl;
   server_name candidate.example.com;
   ssl_certificate /etc/letsencrypt/live/candidate.example.com/fullchain.pem;
   ssl_certificate_key /etc/letsencrypt/live/candidate.example.com/privkey.pem;
   client_max_body_size 128m;
-  location / {
+  location = /enterprise { return 308 /enterprise/; }
+  location /enterprise/ {
     proxy_pass http://127.0.0.1:4180;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $wme_connection_upgrade;
     proxy_http_version 1.1;
     proxy_buffering off;
     proxy_read_timeout 3600s;
   }
+  # Configure other trusted site routes separately. Reject unknown hosts at the edge.
+  location / { return 404; }
 }
-server {
-  listen 443 ssl;
-  # Anchored UUID host allowlist: arbitrary subdomains cannot route to application APIs.
-  server_name "~^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.assets-candidate\.example\.com$";
-  ssl_certificate /etc/letsencrypt/live/assets-candidate.example.com/fullchain.pem;
-  ssl_certificate_key /etc/letsencrypt/live/assets-candidate.example.com/privkey.pem;
-  client_max_body_size 16m;
-  location / {
-    proxy_pass http://127.0.0.1:4180;
-    proxy_set_header Host $host;
-    proxy_set_header X-Forwarded-Proto https;
-    proxy_set_header X-Forwarded-For $remote_addr;
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection $wme_connection_upgrade;
-    proxy_http_version 1.1;
-    proxy_buffering off;
-    proxy_read_timeout 3600s;
-  }
-}
-# Existing edge must already reject unknown hosts. Never make either vhost the default.

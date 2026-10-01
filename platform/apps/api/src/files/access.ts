@@ -9,7 +9,6 @@ import {
 } from "./types.js";
 import { cleanPath, scopeKey } from "./paths.js";
 import { underneath, rowScope, sourceRow } from "./storage.js";
-
 export async function validateScope(
   ctx: AppContext,
   user: User,
@@ -29,38 +28,28 @@ export async function validateScope(
     return project.access;
   }
   await ctx.requireOrgMember(user, scope.orgId);
-  if (
-    user.role === "owner" ||
-    (user.role === "admin" && user.orgId === scope.orgId)
-  )
-    return "write";
-  return "read";
+  const access = (await ctx.membership(user, scope.orgId)).libraryAccess;
+  return access;
 }
 export async function orgAccess(
   ctx: AppContext,
   user: User,
   row: FileRow,
 ): Promise<Access | undefined> {
-  await ctx.requireOrgMember(user, row.org_id);
-  const current = await ctx.db.get<{ role: string; org_id: string | null }>(
-    "SELECT role,org_id FROM users WHERE id=? AND enabled=1",
-    [user.id],
-  );
-  if (
-    current?.role === "owner" ||
-    (current?.role === "admin" && current.org_id === row.org_id)
-  )
-    return "write";
-  const grants = await ctx.db.all<{ path: string; access: Access }>(
-    `SELECT f.path,g.access FROM workspace_file_grants g JOIN workspace_files f ON f.id=g.file_id WHERE g.user_id=? AND f.org_id=? AND f.project_id IS NULL AND f.deleted_at IS NULL`,
+  const membership = await ctx.membership(user, row.org_id);
+  if (membership.libraryAccess === "write") return "write";
+  const grants = await ctx.db.all<{
+    path: string;
+    access: Access;
+  }>(
+    "SELECT f.path,g.access FROM workspace_file_grants g JOIN workspace_files f ON f.id=g.file_id WHERE g.user_id=? AND f.org_id=? AND f.project_id IS NULL AND f.deleted_at IS NULL",
     [user.id, row.org_id],
   );
-  let access: Access | undefined;
-  for (const grant of grants)
-    if (underneath(row.path, grant.path))
-      access =
-        access === "write" || grant.access === "write" ? "write" : "read";
-  return access;
+  return grants.some(
+    (g) => g.access === "write" && underneath(row.path, g.path),
+  )
+    ? "write"
+    : "read";
 }
 export async function authorizeFile(
   ctx: AppContext,
@@ -90,7 +79,11 @@ export async function authorizeFile(
     );
     if (project.orgId !== row.org_id)
       throw new AppError(404, "file_not_found", "File or folder not found.");
-    const shares = await ctx.db.all<ShareRow & { path: string }>(
+    const shares = await ctx.db.all<
+      ShareRow & {
+        path: string;
+      }
+    >(
       `SELECT s.*,f.path FROM workspace_file_shares s JOIN workspace_files f ON f.id=s.file_id WHERE s.project_id=? AND f.deleted_at IS NULL`,
       [projectId],
     );
@@ -111,9 +104,14 @@ export async function authorizeFile(
         ? "You do not have permission to change this file."
         : "You do not have access to this file.",
     );
-  return { row, access, share, scope: rowScope(row), user };
+  return {
+    row,
+    access,
+    share,
+    scope: rowScope(row),
+    user,
+  };
 }
-
 export async function resolveLocation(
   ctx: AppContext,
   user: User,
@@ -123,12 +121,18 @@ export async function resolveLocation(
 ): Promise<{
   scope: Scope;
   path: string;
-  share?: ShareRow & { sourcePath: string };
+  share?: ShareRow & {
+    sourcePath: string;
+  };
   access: Access;
 }> {
   const access = await validateScope(ctx, user, scope, write);
   if (scope.projectId) {
-    const shares = await ctx.db.all<ShareRow & { sourcePath: string }>(
+    const shares = await ctx.db.all<
+      ShareRow & {
+        sourcePath: string;
+      }
+    >(
       `SELECT s.*,f.path AS sourcePath FROM workspace_file_shares s JOIN workspace_files f ON f.id=s.file_id WHERE s.project_id=? AND f.deleted_at IS NULL`,
       [scope.projectId],
     );
@@ -143,20 +147,26 @@ export async function resolveLocation(
           "This shared folder is read-only.",
         );
       return {
-        scope: { orgId: scope.orgId },
+        scope: {
+          orgId: scope.orgId,
+        },
         path: share.sourcePath + relative.slice(share.name.length),
         share,
         access: effective,
       };
     }
-    return { scope, path: relative, access };
+    return {
+      scope,
+      path: relative,
+      access,
+    };
   }
-  const currentUser = await ctx.db.get<{ role: string }>(
-    "SELECT role FROM users WHERE id=? AND enabled=1",
-    [user.id],
-  );
-  if (currentUser?.role === "owner" || currentUser?.role === "admin")
-    return { scope, path: relative, access: "write" };
+  if ((await ctx.membership(user, scope.orgId)).libraryAccess === "write")
+    return {
+      scope,
+      path: relative,
+      access: "write",
+    };
   let current = relative;
   while (current) {
     const row = await ctx.db.get<FileRow>(
@@ -166,7 +176,11 @@ export async function resolveLocation(
     if (row) {
       const allowed = await orgAccess(ctx, user, row);
       if (allowed && (!write || allowed === "write"))
-        return { scope, path: relative, access: allowed };
+        return {
+          scope,
+          path: relative,
+          access: allowed,
+        };
     }
     current = path.posix.dirname(current);
     if (current === ".") break;
@@ -177,9 +191,12 @@ export async function resolveLocation(
       "file_access_denied",
       "You do not have permission to write in this folder.",
     );
-  return { scope, path: relative, access: "read" };
+  return {
+    scope,
+    path: relative,
+    access: "read",
+  };
 }
-
 export async function getDirectoryAccess(
   ctx: AppContext,
   user: User,

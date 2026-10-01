@@ -39,7 +39,7 @@ const warning =
   "Using a Claude subscription through this third-party proxy may result in Anthropic restricting, suspending, or terminating your account. Continued access is not guaranteed.";
 export function ConnectionsPage() {
   const { org } = useWorkspace();
-  const base = `/api/organizations/${org.id}/inference`;
+  const base = `/enterprise/api/organizations/${org.id}/inference`;
   const accounts = useResource<{
     configured: boolean;
     items: Account[];
@@ -112,64 +112,64 @@ export function ConnectionsPage() {
               </thead>
               <tbody>
                 {accounts.data.items.map((a) => (
-                <tr key={a.id}>
-                  <td>
-                    <div className="item-link">
-                      <Cable size={18} />
-                      <div>
-                        <strong>{a.label}</strong>
-                        <small>
-                          {a.type === "subscription"
-                            ? "Subscription"
-                            : "API key"}
-                        </small>
+                  <tr key={a.id}>
+                    <td>
+                      <div className="item-link">
+                        <Cable size={18} />
+                        <div>
+                          <strong>{a.label}</strong>
+                          <small>
+                            {a.type === "subscription"
+                              ? "Subscription"
+                              : "API key"}
+                          </small>
+                        </div>
                       </div>
-                    </div>
-                  </td>
-                  <td>{names[a.provider] ?? a.provider}</td>
-                  <td>
-                    <Status value={a.enabled ? a.status : "disabled"} />
-                    {a.nextRetryAt ? (
-                      <small>Available after {date(a.nextRetryAt)}</small>
-                    ) : null}
-                  </td>
-                  <td>{a.priority ?? 0}</td>
-                  <td>
-                    <div className="row-actions">
-                      <button
-                        className="text-button"
-                        onClick={() => setEditing(a)}
-                      >
-                        Manage
-                      </button>
-                      {a.type === "subscription" ? (
-                        <button
-                          className="icon-button"
-                          aria-label={`Refresh ${a.label}`}
-                          onClick={async () => {
-                            try {
-                              await send(
-                                `${base}/accounts/${encodeURIComponent(a.id)}/refresh`,
-                                {},
-                              );
-                              reload();
-                            } catch (e) {
-                              setError(errorMessage(e));
-                            }
-                          }}
-                        >
-                          <RefreshCw size={16} />
-                        </button>
+                    </td>
+                    <td>{names[a.provider] ?? a.provider}</td>
+                    <td>
+                      <Status value={a.enabled ? a.status : "disabled"} />
+                      {a.nextRetryAt ? (
+                        <small>Available after {date(a.nextRetryAt)}</small>
                       ) : null}
-                      <button
-                        className="text-button danger"
-                        onClick={() => setRemoving(a)}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                    </td>
+                    <td>{a.priority ?? 0}</td>
+                    <td>
+                      <div className="row-actions">
+                        <button
+                          className="text-button"
+                          onClick={() => setEditing(a)}
+                        >
+                          Manage
+                        </button>
+                        {a.type === "subscription" ? (
+                          <button
+                            className="icon-button"
+                            aria-label={`Refresh ${a.label}`}
+                            onClick={async () => {
+                              try {
+                                await send(
+                                  `${base}/accounts/${encodeURIComponent(a.id)}/refresh`,
+                                  {},
+                                );
+                                reload();
+                              } catch (e) {
+                                setError(errorMessage(e));
+                              }
+                            }}
+                          >
+                            <RefreshCw size={16} />
+                          </button>
+                        ) : null}
+                        <button
+                          className="text-button danger"
+                          onClick={() => setRemoving(a)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>

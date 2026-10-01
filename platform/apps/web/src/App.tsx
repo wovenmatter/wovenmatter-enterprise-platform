@@ -12,7 +12,7 @@ export function App() {
   const location = useLocation();
   useEffect(() => {
     let active = true;
-    api<Session>("/api/session")
+    api<Session>("/enterprise/api/session")
       .then((s) => {
         if (active) {
           setCsrf(s.csrfToken);
@@ -40,7 +40,7 @@ export function App() {
     document.documentElement.dataset.theme = s.user?.theme ?? "green";
     setSession(s);
     const target = new URLSearchParams(window.location.search).get("returnTo");
-    if (target?.startsWith("/") && safeContentUrl(target))
+    if (target?.startsWith("/enterprise/") && safeContentUrl(target))
       window.location.assign(target);
   }
   if (error)
@@ -66,7 +66,7 @@ export function App() {
         setSession((s) => (s ? { ...s, user } : s));
       }}
       logout={async () => {
-        await send("/api/logout", {});
+        await send("/enterprise/api/logout", {});
         setCsrf(null);
         setSession({ user: null, csrfToken: null });
       }}

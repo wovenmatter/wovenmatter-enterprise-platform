@@ -53,7 +53,7 @@ export async function registerInferenceRoutes(
     closing = true;
     for (const controller of activeRequests) controller.abort();
   });
-  const base = "/api/organizations/:orgId/inference";
+  const base = "/enterprise/api/organizations/:orgId/inference";
   async function admin(request: FastifyRequest) {
     const user = await ctx.requireUser(request);
     const { orgId } = request.params as OrgParams;
@@ -222,7 +222,7 @@ export async function registerInferenceRoutes(
     return service.usage((request.params as OrgParams).orgId);
   });
 
-  const gateway = "/api/runtime/inference/:projectId";
+  const gateway = "/enterprise/api/runtime/inference/:projectId";
   // The foundation excludes ONLY this bearer-authenticated prefix from browser CSRF.
   // Nothing under this prefix forwards management requests or browser cookies.
   for (const path of [

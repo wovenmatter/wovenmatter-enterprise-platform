@@ -59,7 +59,7 @@ test("preview reads reject oversized streamed content even without Content-Lengt
 test("historical citation routing preserves exact version, project authorization context, and page", () => {
   assert.equal(
     sourcePathFromContentUrl(
-      "/api/files/file-a/content?projectId=project-b&versionId=revision-c",
+      "/enterprise/api/files/file-a/content?projectId=project-b&versionId=revision-c",
       7,
     ),
     "/source/file-a?projectId=project-b&versionId=revision-c&page=7",
@@ -73,5 +73,5 @@ test("historical citation routing preserves exact version, project authorization
     sourcePathFromContentUrl("//other.example/api/files/a/content"),
     undefined,
   );
-  assert.equal(sourcePathFromContentUrl("/api/login"), undefined);
+  assert.equal(sourcePathFromContentUrl("/enterprise/api/login"), undefined);
 });

@@ -67,7 +67,7 @@ export function FilesPage({
   embedded?: boolean;
   leadingActions?: ReactNode;
 }) {
-  const { org, isAdmin, orgBase } = useWorkspace();
+  const { org, libraryFull, orgBase } = useWorkspace();
   const [path, setPath] = useState("");
   const query = new URLSearchParams({
     orgId: org.id,
@@ -75,10 +75,15 @@ export function FilesPage({
     ...(project ? { projectId: project.id } : {}),
   });
   const files = useResource<List<FileEntry> & { access: "read" | "write" }>(
-    `/api/files?${query}`,
+    `/enterprise/api/files?${query}`,
   );
   const projects = useResource<List<Project>>(
-    `/api/organizations/${org.id}/projects`,
+    `/enterprise/api/organizations/${org.id}/projects`,
+  );
+  const shareTargets = useResource<List<Project>>(
+    libraryFull
+      ? `/enterprise/api/organizations/${org.id}/library/share-targets`
+      : null,
   );
   const [dialog, setDialog] = useState<
     "folder" | "rename" | "transfer" | "sharing" | "versions" | "grants" | null
@@ -140,7 +145,7 @@ export function FilesPage({
         const result = await api<{
           items: FileEntry[];
           errors: { path: string; message: string }[];
-        }>("/api/files/upload", { method: "POST", body: data });
+        }>("/enterprise/api/files/upload", { method: "POST", body: data });
         uploaded += result.items.length;
         errors.push(...result.errors.map((e) => `${e.path}: ${e.message}`));
       }
@@ -191,7 +196,10 @@ export function FilesPage({
               Store shared resources and make them available to projects.
             </p>
           </div>
-          <div className="actions">{leadingActions}{actions}</div>
+          <div className="actions">
+            {leadingActions}
+            {actions}
+          </div>
         </div>
       ) : (
         <PageHeader
@@ -221,35 +229,37 @@ export function FilesPage({
         aria-label="Upload folder"
         onChange={(e) => void uploadFiles(e.target.files)}
       />
-      {!embedded || path ? <div className="file-path">
-        <button className="text-button" onClick={() => setPath("")}>
-          {project ? project.name : embedded ? "Files" : org.name}
-        </button>
-        {path
-          .split("/")
-          .filter(Boolean)
-          .map((part, i, parts) => (
-            <span key={i}>
-              {" "}
-              /{" "}
-              <button
-                className="text-button"
-                onClick={() => setPath(parts.slice(0, i + 1).join("/"))}
-              >
-                {part}
-              </button>
-            </span>
-          ))}
-        {path ? (
-          <button
-            className="icon-button"
-            aria-label="Parent folder"
-            onClick={() => setPath(path.split("/").slice(0, -1).join("/"))}
-          >
-            <ArrowLeft size={17} />
+      {!embedded || path ? (
+        <div className="file-path">
+          <button className="text-button" onClick={() => setPath("")}>
+            {project ? project.name : embedded ? "Files" : org.name}
           </button>
-        ) : null}
-      </div> : null}
+          {path
+            .split("/")
+            .filter(Boolean)
+            .map((part, i, parts) => (
+              <span key={i}>
+                {" "}
+                /{" "}
+                <button
+                  className="text-button"
+                  onClick={() => setPath(parts.slice(0, i + 1).join("/"))}
+                >
+                  {part}
+                </button>
+              </span>
+            ))}
+          {path ? (
+            <button
+              className="icon-button"
+              aria-label="Parent folder"
+              onClick={() => setPath(path.split("/").slice(0, -1).join("/"))}
+            >
+              <ArrowLeft size={17} />
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {uploadProgress ? (
         <p className="muted" role="status">
           {uploadProgress}
@@ -276,92 +286,98 @@ export function FilesPage({
               </thead>
               <tbody>
                 {files.data.items.map((f) => (
-                <tr key={`${f.id}:${f.path}`}>
-                  <td>
-                    {f.kind === "file" ? (
-                      <Link
-                        className="item-link"
-                        to={`${orgBase}${sourcePath(f.id, { projectId: project?.id })}`}
-                      >
-                        <FileIcon size={19} />
-                        <span>
-                          {f.name}
-                          {f.sharedFrom ? (
-                            <small>Shared with this project</small>
-                          ) : null}
-                          {f.needsAttention ? (
-                            <small className="danger">{f.needsAttention}</small>
-                          ) : null}
-                        </span>
-                      </Link>
-                    ) : (
-                      <button
-                        className="item-link text-button"
-                        onClick={() => {
-                          setPath(f.path);
-                          setSuccess("");
-                        }}
-                      >
-                        <Folder size={20} />
-                        <span>
-                          {f.name}
-                          {f.sharedFrom ? (
-                            <small>Shared with this project</small>
-                          ) : null}
-                          {f.needsAttention ? (
-                            <small className="danger">{f.needsAttention}</small>
-                          ) : null}
-                        </span>
-                      </button>
-                    )}
-                  </td>
-                  <td>{f.kind === "file" ? bytes(f.size) : "—"}</td>
-                  <td>{date(f.updatedAt)}</td>
-                  <td>{f.access === "write" ? "Read & write" : "Read only"}</td>
-                  <td>
-                    <div className="row-actions">
+                  <tr key={`${f.id}:${f.path}`}>
+                    <td>
                       {f.kind === "file" ? (
-                        <a
-                          className="icon-button"
-                          href={`/api/files/${f.id}/content${suffix}`}
-                          aria-label={`Download ${f.name}`}
-                          download
+                        <Link
+                          className="item-link"
+                          to={`${orgBase}${sourcePath(f.id, { projectId: project?.id })}`}
                         >
-                          <Download size={17} />
-                        </a>
-                      ) : null}
-                      <select
-                        className="action-select"
-                        aria-label={`Actions for ${f.name}`}
-                        value=""
-                        onChange={(e) => {
-                          setSelected(f);
-                          const action = e.target.value;
-                          if (action === "delete") setDeleting(f);
-                          else setDialog(action as typeof dialog);
-                        }}
-                      >
-                        <option value="">Actions</option>
-                        {f.access === "write" ? (
-                          <option value="rename">Rename</option>
-                        ) : null}
-                        <option value="transfer">Move or copy</option>
-                        {!project && isAdmin ? (
-                          <option value="sharing">Share with projects</option>
-                        ) : null}
-                        {!project && isAdmin ? (
-                          <option value="grants">People with access</option>
-                        ) : null}
+                          <FileIcon size={19} />
+                          <span>
+                            {f.name}
+                            {f.sharedFrom ? (
+                              <small>Shared with this project</small>
+                            ) : null}
+                            {f.needsAttention ? (
+                              <small className="danger">
+                                {f.needsAttention}
+                              </small>
+                            ) : null}
+                          </span>
+                        </Link>
+                      ) : (
+                        <button
+                          className="item-link text-button"
+                          onClick={() => {
+                            setPath(f.path);
+                            setSuccess("");
+                          }}
+                        >
+                          <Folder size={20} />
+                          <span>
+                            {f.name}
+                            {f.sharedFrom ? (
+                              <small>Shared with this project</small>
+                            ) : null}
+                            {f.needsAttention ? (
+                              <small className="danger">
+                                {f.needsAttention}
+                              </small>
+                            ) : null}
+                          </span>
+                        </button>
+                      )}
+                    </td>
+                    <td>{f.kind === "file" ? bytes(f.size) : "—"}</td>
+                    <td>{date(f.updatedAt)}</td>
+                    <td>
+                      {f.access === "write" ? "Full access" : "Read-only"}
+                    </td>
+                    <td>
+                      <div className="row-actions">
                         {f.kind === "file" ? (
-                          <option value="versions">Version history</option>
+                          <a
+                            className="icon-button"
+                            href={`/enterprise/api/files/${f.id}/content${suffix}`}
+                            aria-label={`Download ${f.name}`}
+                            download
+                          >
+                            <Download size={17} />
+                          </a>
                         ) : null}
-                        {f.access === "write" ? (
-                          <option value="delete">Delete</option>
-                        ) : null}
-                      </select>
-                    </div>
-                  </td>
-                </tr>
+                        <select
+                          className="action-select"
+                          aria-label={`Actions for ${f.name}`}
+                          value=""
+                          onChange={(e) => {
+                            setSelected(f);
+                            const action = e.target.value;
+                            if (action === "delete") setDeleting(f);
+                            else setDialog(action as typeof dialog);
+                          }}
+                        >
+                          <option value="">Actions</option>
+                          {f.access === "write" ? (
+                            <option value="rename">Rename</option>
+                          ) : null}
+                          <option value="transfer">Move or copy</option>
+                          {!project && libraryFull ? (
+                            <option value="sharing">Share with projects</option>
+                          ) : null}
+                          {!project && libraryFull ? (
+                            <option value="grants">People with access</option>
+                          ) : null}
+                          {f.kind === "file" ? (
+                            <option value="versions">Version history</option>
+                          ) : null}
+                          {f.access === "write" ? (
+                            <option value="delete">Delete</option>
+                          ) : null}
+                        </select>
+                      </div>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -380,7 +396,7 @@ export function FilesPage({
             submitLabel="Create folder"
             onCancel={close}
             onSubmit={async (d) => {
-              await send("/api/files/folders", {
+              await send("/enterprise/api/files/folders", {
                 orgId: org.id,
                 projectId: project?.id,
                 path: childPath(path, String(d.get("name"))),
@@ -394,7 +410,7 @@ export function FilesPage({
                 name="name"
                 required
                 maxLength={255}
-                pattern="[^/\\]+"
+                pattern={String.raw`[^\/\\]+`}
                 autoFocus
               />
             </Field>
@@ -408,7 +424,7 @@ export function FilesPage({
             onCancel={close}
             onSubmit={async (d) => {
               await send(
-                `/api/files/${selected.id}${suffix}`,
+                `/enterprise/api/files/${selected.id}${suffix}`,
                 { name: d.get("name") },
                 "PATCH",
               );
@@ -434,14 +450,17 @@ export function FilesPage({
             submitLabel="Transfer"
             onCancel={close}
             onSubmit={async (d) => {
-              await send(`/api/files/${selected.id}/transfer${suffix}`, {
-                destination: {
-                  orgId: org.id,
-                  projectId: d.get("destination") || undefined,
-                  path: d.get("path") || "",
+              await send(
+                `/enterprise/api/files/${selected.id}/transfer${suffix}`,
+                {
+                  destination: {
+                    orgId: org.id,
+                    projectId: d.get("destination") || undefined,
+                    path: d.get("path") || "",
+                  },
+                  operation: d.get("operation"),
                 },
-                operation: d.get("operation"),
-              });
+              );
               files.reload();
               close();
             }}
@@ -483,7 +502,7 @@ export function FilesPage({
       {dialog === "sharing" && selected ? (
         <FileSharing
           file={selected}
-          projects={projects.data?.items ?? []}
+          projects={shareTargets.data?.items ?? []}
           onClose={close}
         />
       ) : null}
@@ -498,7 +517,7 @@ export function FilesPage({
           title="Delete this item?"
           onClose={() => setDeleting(undefined)}
           onConfirm={async () => {
-            await api(`/api/files/${deleting.id}${suffix}`, {
+            await api(`/enterprise/api/files/${deleting.id}${suffix}`, {
               method: "DELETE",
             });
             files.reload();
@@ -522,7 +541,9 @@ function FileSharing({
   projects: Project[];
   onClose: () => void;
 }) {
-  const resource = useResource<List<Share>>(`/api/files/${file.id}/shares`);
+  const resource = useResource<List<Share>>(
+    `/enterprise/api/files/${file.id}/shares`,
+  );
   const [error, setError] = useState("");
   return (
     <Modal title="Shared with projects" onClose={onClose}>
@@ -538,15 +559,18 @@ function FileSharing({
                 projects.find((p) => p.id === s.projectId)?.name ||
                 s.projectId}
             </strong>
-            <small>{s.access === "write" ? "Read & write" : "Read only"}</small>
+            <small>{s.access === "write" ? "Full access" : "Read-only"}</small>
           </div>
           <button
             className="text-button danger"
             onClick={async () => {
               try {
-                await api(`/api/files/${file.id}/shares/${s.projectId}`, {
-                  method: "DELETE",
-                });
+                await api(
+                  `/enterprise/api/files/${file.id}/shares/${s.projectId}`,
+                  {
+                    method: "DELETE",
+                  },
+                );
                 resource.reload();
               } catch (e) {
                 setError(errorMessage(e));
@@ -560,7 +584,7 @@ function FileSharing({
       <AsyncForm
         submitLabel="Share with project"
         onSubmit={async (d) => {
-          await send(`/api/files/${file.id}/shares`, {
+          await send(`/enterprise/api/files/${file.id}/shares`, {
             projectId: d.get("projectId"),
             access: d.get("access"),
           });
@@ -585,8 +609,8 @@ function FileSharing({
         </Field>
         <Field label="Access">
           <select name="access">
-            <option value="read">Read only</option>
-            <option value="write">Read & write</option>
+            <option value="read">Read-only</option>
+            <option value="write">Full access</option>
           </select>
         </Field>
       </AsyncForm>
@@ -602,11 +626,11 @@ function FileGrants({
 }) {
   const { org } = useWorkspace();
   const members = useResource<List<User>>(
-    `/api/organizations/${org.id}/members`,
+    `/enterprise/api/organizations/${org.id}/members`,
   );
   const grants = useResource<
     List<{ userId: string; name?: string; access: string }>
-  >(`/api/files/${file.id}/grants`);
+  >(`/enterprise/api/files/${file.id}/grants`);
   const [error, setError] = useState("");
   return (
     <Modal title="People with access" onClose={onClose}>
@@ -619,15 +643,18 @@ function FileGrants({
           <div>
             {members.data?.items.find((u) => u.id === g.userId)?.name ||
               g.userId}
-            <small>{g.access === "write" ? "Read & write" : "Read only"}</small>
+            <small>{g.access === "write" ? "Full access" : "Read-only"}</small>
           </div>
           <button
             className="text-button danger"
             onClick={async () => {
               try {
-                await api(`/api/files/${file.id}/grants/${g.userId}`, {
-                  method: "DELETE",
-                });
+                await api(
+                  `/enterprise/api/files/${file.id}/grants/${g.userId}`,
+                  {
+                    method: "DELETE",
+                  },
+                );
                 grants.reload();
               } catch (e) {
                 setError(errorMessage(e));
@@ -641,7 +668,7 @@ function FileGrants({
       <AsyncForm
         submitLabel="Grant access"
         onSubmit={async (d) => {
-          await send(`/api/files/${file.id}/grants`, {
+          await send(`/enterprise/api/files/${file.id}/grants`, {
             userId: d.get("userId"),
             access: d.get("access"),
           });
@@ -664,8 +691,8 @@ function FileGrants({
         </Field>
         <Field label="Access">
           <select name="access">
-            <option value="read">Read only</option>
-            <option value="write">Read & write</option>
+            <option value="read">Read-only</option>
+            <option value="write">Full access</option>
           </select>
         </Field>
       </AsyncForm>
@@ -690,7 +717,7 @@ function Versions({
       size: number;
       createdAt: string;
     }>
-  >(`/api/files/${file.id}/versions${suffix}`);
+  >(`/enterprise/api/files/${file.id}/versions${suffix}`);
   return (
     <Modal title="Version history" onClose={onClose}>
       <p>{file.name}</p>
@@ -719,7 +746,7 @@ function Versions({
               </Link>
               <a
                 className="secondary button-link"
-                href={`/api/files/${file.id}/content${suffix ? `${suffix}&` : "?"}versionId=${encodeURIComponent(v.id)}`}
+                href={`/enterprise/api/files/${file.id}/content${suffix ? `${suffix}&` : "?"}versionId=${encodeURIComponent(v.id)}`}
                 download
               >
                 <Download size={15} />

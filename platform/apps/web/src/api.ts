@@ -115,9 +115,18 @@ export type User = {
   enabled: boolean;
   theme: "green" | "cognac";
   invitationPending?: boolean;
+  libraryAccess?: "read" | "write";
 };
-export type Organization = { id: string; name: string; createdAt: string };
+export type Organization = {
+  id: string;
+  name: string;
+  createdAt: string;
+  role: "admin" | "member";
+  libraryAccess: "read" | "write";
+  defaultHostId: string;
+};
 export type Project = {
+  hostId: string;
   id: string;
   orgId: string;
   name: string;

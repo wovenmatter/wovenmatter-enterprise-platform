@@ -355,12 +355,17 @@ export async function retryProvisioning(
       expectChanges: 1,
     },
   ]);
-  await ctx.audit(user, "project.provisioning_retried", projectId);
+  await ctx.audit(
+    user,
+    project.orgId,
+    "project.provisioning_retried",
+    projectId,
+  );
   return { jobId: job.id, status: "provisioning" };
 }
 export async function registerJobs(app: FastifyInstance, ctx: AppContext) {
   app.post<{ Params: { projectId: string } }>(
-    "/api/projects/:projectId/retry",
+    "/enterprise/api/projects/:projectId/retry",
     async (request, reply) => {
       const result = await retryProvisioning(
         ctx,
@@ -372,7 +377,7 @@ export async function registerJobs(app: FastifyInstance, ctx: AppContext) {
     },
   );
   app.post<{ Params: { jobId: string } }>(
-    "/api/jobs/:jobId/retry",
+    "/enterprise/api/jobs/:jobId/retry",
     async (request, reply) => {
       const user = await ctx.requireUser(request);
       const job = await new JobQueue(ctx).get(request.params.jobId);
@@ -390,7 +395,7 @@ export async function registerJobs(app: FastifyInstance, ctx: AppContext) {
     },
   );
   app.get<{ Params: { jobId: string } }>(
-    "/api/jobs/:jobId",
+    "/enterprise/api/jobs/:jobId",
     async (request) => {
       const user = await ctx.requireUser(request);
       const job = await new JobQueue(ctx).get(request.params.jobId);

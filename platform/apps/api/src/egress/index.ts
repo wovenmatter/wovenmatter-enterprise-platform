@@ -139,7 +139,7 @@ function credentials(request: IncomingMessage): {
   if (
     colon < 0 ||
     !/^[a-zA-Z0-9_-]{1,128}$/.test(projectId) ||
-    !/^wme_run_[a-zA-Z0-9_-]{43}$/.test(token)
+    !/^wme_(?:run|schedule)_[a-zA-Z0-9_-]{43}$/.test(token)
   )
     throw new EgressError(407, "proxy_authentication_required");
   return { projectId, token };
@@ -456,7 +456,10 @@ export function createEgressProxy(options: EgressOptions) {
       "cache-control": "no-store",
       connection: "close",
       ...(status === 407
-        ? { "proxy-authenticate": 'Basic realm="WovenMatter Enterprise Platform run"' }
+        ? {
+            "proxy-authenticate":
+              'Basic realm="WovenMatter Enterprise Platform run"',
+          }
         : {}),
     });
     response.end("Public network request denied or unavailable.");

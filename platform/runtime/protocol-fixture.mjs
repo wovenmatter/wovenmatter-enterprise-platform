@@ -15,10 +15,26 @@ function proxyResponse(target, authorization) {
     /^http:\/\/native-proxy-fixture\.invalid\/(codex|grok|claude|pi)$/.exec(
       target,
     );
-  if (!match || authorization !== proxyAuthorization)
-    return { status: 407, body: "synthetic proxy denied" };
+  const fixtureCredentials = Buffer.from(
+    (authorization ?? "").replace(/^Basic /, ""),
+    "base64",
+  ).toString();
+  if (
+    !match ||
+    (authorization !== proxyAuthorization &&
+      !/^acceptance-[a-f0-9-]+:(?:synthetic-scoped-fixture-key|wme_schedule_s{43})$/.test(
+        fixtureCredentials,
+      ))
+  )
+    return {
+      status: 407,
+      body: "synthetic proxy denied",
+    };
   proxyProofs.add(match[1]);
-  return { status: 200, body: "synthetic-proxy-ok" };
+  return {
+    status: 200,
+    body: "synthetic-proxy-ok",
+  };
 }
 const proxy = http.createServer((request, response) => {
   const result = proxyResponse(
@@ -33,7 +49,13 @@ const proxy = http.createServer((request, response) => {
 proxy.on("connect", (request, socket) => {
   if (
     request.url !== "native-proxy-fixture.invalid:80" ||
-    request.headers["proxy-authorization"] !== proxyAuthorization
+    (!/^acceptance-[a-f0-9-]+:(?:synthetic-scoped-fixture-key|wme_schedule_s{43})$/.test(
+      Buffer.from(
+        (request.headers["proxy-authorization"] ?? "").replace(/^Basic /, ""),
+        "base64",
+      ).toString(),
+    ) &&
+      request.headers["proxy-authorization"] !== proxyAuthorization)
   ) {
     socket.end(
       "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n",
@@ -53,12 +75,19 @@ proxy.on("connect", (request, socket) => {
   });
 });
 proxy.listen(4101, "0.0.0.0");
-function nativeTool(input, raw) {
+function nativeTool(input, raw, gatewayPath, token) {
+  const hold = /^synthetic-hold-(a|b)$/.exec(input.model)?.[1];
+  const background = /^synthetic-background-(codex|grok|claude|pi)$/.exec(
+    input.model,
+  )?.[1];
   const harness = /^synthetic-proxy-(codex|grok|claude|pi)$/.exec(
     input.model,
   )?.[1];
-  if (!harness) return {};
-  if (toolRequests.has(harness))
+  if (!harness && !hold && !background) return {};
+  const keyId = background ? "background-" + background : harness;
+  if (background && toolRequests.has(keyId))
+    return { answer: "BACKGROUND_WORK_STARTED" };
+  if (!hold && toolRequests.has(harness))
     return {
       answer:
         proxyProofs.has(harness) &&
@@ -95,33 +124,48 @@ function nativeTool(input, raw) {
     throw new Error(
       "Synthetic shell tool command parameter unavailable: " + selected.name,
     );
-  const program = `const assert=require("node:assert/strict");for(const key of ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","NODE_USE_ENV_PROXY"])assert.ok(process.env[key],"Scoped proxy environment missing");Promise.all([fetch("http://native-proxy-fixture.invalid/${harness}").then(r=>r.text()),fetch("http://api:4100/native-gateway-proof/${harness}").then(r=>r.text())]).then(([proxy,gateway])=>{assert.equal(proxy,"synthetic-proxy-ok");assert.equal(gateway,"synthetic-gateway-ok");console.log("PROXY_TOOL_OK")}).catch(()=>{console.error("PROXY_TOOL_FAILED");process.exit(1)})`;
-  const command = "node -e '" + program + "'";
+  const program = hold
+    ? `const fs=require("node:fs"),{spawn}=require("node:child_process");const child=spawn(process.execPath,["-e",${JSON.stringify(`setInterval(()=>require("node:fs").writeFileSync("/workspace/descendant-${hold}",String(Date.now())),100)`)}],{detached:true,stdio:"ignore"});child.unref();setInterval(()=>fs.writeFileSync("/workspace/parent-${hold}",String(Date.now())),100)`
+    : `const assert=require("node:assert/strict");for(const key of ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","NODE_USE_ENV_PROXY"])assert.ok(process.env[key],"Scoped proxy environment missing");Promise.all([fetch("http://native-proxy-fixture.invalid/${harness}").then(r=>r.text()),fetch(${JSON.stringify("http://127.0.0.1:4101/inference/native-gateway-proof/" + harness)},{headers:{authorization:"Bearer "+decodeURIComponent(new URL(process.env.HTTP_PROXY).password)}}).then(r=>r.text()),fetch("http://127.0.0.1:4101/another-project",{headers:{authorization:"Bearer "+decodeURIComponent(new URL(process.env.HTTP_PROXY).password)}}).then(r=>r.status)]).then(([proxy,gateway,denied])=>{assert.equal(proxy,"synthetic-proxy-ok");assert.equal(gateway,"synthetic-gateway-ok");assert.equal(denied,403);console.log("PROXY_TOOL_OK")}).catch(()=>{console.error("PROXY_TOOL_FAILED");process.exit(1)})`;
+  const command = background
+    ? `wme-background start -- node -e 'setInterval(()=>require("node:fs").writeFileSync("/workspace/background-${background}",String(Date.now())),100)'`
+    : "node -e '" + program + "'";
   const args = {
     [key]: properties[key].type === "array" ? ["sh", "-c", command] : command,
   };
   if (properties.is_background) args.is_background = false;
   if (properties.description)
     args.description = "Synthetic scoped proxy tool check";
-  toolRequests.add(harness);
-  toolNames.set(harness, selected.name);
+  toolRequests.add(keyId);
+  toolNames.set(keyId, selected.name);
   return {
     tool: {
       name: selected.name,
       arguments: JSON.stringify(args),
-      id: "call_fixture_" + harness,
+      id: "call_fixture_" + (keyId ?? hold),
     },
   };
 }
 const usage = {
   input_tokens: 8,
-  input_tokens_details: { cached_tokens: 0 },
+  input_tokens_details: {
+    cached_tokens: 0,
+  },
   output_tokens: 4,
-  output_tokens_details: { reasoning_tokens: 0 },
+  output_tokens_details: {
+    reasoning_tokens: 0,
+  },
   total_tokens: 12,
 };
 http
   .createServer(async (request, response) => {
+    const gatewayPath =
+      /^\/enterprise\/api\/runtime\/inference\/[^/]+/.exec(request.url)?.[0] ??
+      "";
+    request.url = request.url.replace(
+      /^\/enterprise\/api\/runtime\/inference\/[^/]+/,
+      "",
+    );
     if (request.url === "/") {
       response.end("gateway-fixture");
       return;
@@ -177,7 +221,14 @@ http
     let sequence = 0;
     const event = (type, data) =>
       response.write(
-        `event: ${type}\ndata: ${JSON.stringify(type.startsWith("response.") ? { ...data, sequence_number: sequence++ } : data)}\n\n`,
+        `event: ${type}\ndata: ${JSON.stringify(
+          type.startsWith("response.")
+            ? {
+                ...data,
+                sequence_number: sequence++,
+              }
+            : data,
+        )}\n\n`,
       );
     let planned;
     try {
@@ -185,7 +236,7 @@ http
         request.url === "/v1/responses" ||
         request.url === "/v1/chat/completions" ||
         /^\/v1\/messages(?:\?|$)/.test(request.url)
-          ? nativeTool(input, raw)
+          ? nativeTool(input, raw, gatewayPath, request.headers.authorization)
           : {};
     } catch (error) {
       console.error(error.message);
@@ -195,7 +246,9 @@ http
     }
     const text = planned.answer ?? answer;
     if (request.url === "/v1/messages/count_tokens") {
-      json({ input_tokens: 8 });
+      json({
+        input_tokens: 8,
+      });
       return;
     }
     if (request.url === "/v1/models") {
@@ -226,7 +279,13 @@ http
             type: "message",
             status: "completed",
             role: "assistant",
-            content: [{ type: "output_text", text, annotations: [] }],
+            content: [
+              {
+                type: "output_text",
+                text,
+                annotations: [],
+              },
+            ],
           };
       const result = {
         id: "resp_fixture",
@@ -248,14 +307,26 @@ http
       });
       event("response.created", {
         type: "response.created",
-        response: { ...result, status: "in_progress", output: [] },
+        response: {
+          ...result,
+          status: "in_progress",
+          output: [],
+        },
       });
       event("response.output_item.added", {
         type: "response.output_item.added",
         output_index: 0,
         item: planned.tool
-          ? { ...message, status: "in_progress", arguments: "" }
-          : { ...message, status: "in_progress", content: [] },
+          ? {
+              ...message,
+              status: "in_progress",
+              arguments: "",
+            }
+          : {
+              ...message,
+              status: "in_progress",
+              content: [],
+            },
       });
       if (planned.tool) {
         event("response.function_call_arguments.delta", {
@@ -277,7 +348,11 @@ http
           item_id: message.id,
           output_index: 0,
           content_index: 0,
-          part: { type: "output_text", text: "", annotations: [] },
+          part: {
+            type: "output_text",
+            text: "",
+            annotations: [],
+          },
         });
         event("response.output_text.delta", {
           type: "response.output_text.delta",
@@ -325,7 +400,10 @@ http
         content: [],
         stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 8, output_tokens: 0 },
+        usage: {
+          input_tokens: 8,
+          output_tokens: 0,
+        },
       };
       if (!input.stream) {
         json({
@@ -339,7 +417,12 @@ http
                   input: JSON.parse(planned.tool.arguments),
                 },
               ]
-            : [{ type: "text", text }],
+            : [
+                {
+                  type: "text",
+                  text,
+                },
+              ],
           stop_reason: planned.tool ? "tool_use" : "end_turn",
           usage,
         });
@@ -349,7 +432,10 @@ http
         "content-type": "text/event-stream",
         "cache-control": "no-cache",
       });
-      event("message_start", { type: "message_start", message });
+      event("message_start", {
+        type: "message_start",
+        message,
+      });
       event("content_block_start", {
         type: "content_block_start",
         index: 0,
@@ -360,25 +446,41 @@ http
               name: planned.tool.name,
               input: {},
             }
-          : { type: "text", text: "" },
+          : {
+              type: "text",
+              text: "",
+            },
       });
       event("content_block_delta", {
         type: "content_block_delta",
         index: 0,
         delta: planned.tool
-          ? { type: "input_json_delta", partial_json: planned.tool.arguments }
-          : { type: "text_delta", text },
+          ? {
+              type: "input_json_delta",
+              partial_json: planned.tool.arguments,
+            }
+          : {
+              type: "text_delta",
+              text,
+            },
       });
-      event("content_block_stop", { type: "content_block_stop", index: 0 });
+      event("content_block_stop", {
+        type: "content_block_stop",
+        index: 0,
+      });
       event("message_delta", {
         type: "message_delta",
         delta: {
           stop_reason: planned.tool ? "tool_use" : "end_turn",
           stop_sequence: null,
         },
-        usage: { output_tokens: 4 },
+        usage: {
+          output_tokens: 4,
+        },
       });
-      event("message_stop", { type: "message_stop" });
+      event("message_stop", {
+        type: "message_stop",
+      });
       response.end();
       return;
     }
@@ -415,7 +517,10 @@ http
                         },
                       ],
                     }
-                  : { role: "assistant", content: text },
+                  : {
+                      role: "assistant",
+                      content: text,
+                    },
                 finish_reason: null,
               },
             ],
@@ -433,7 +538,11 @@ http
                 finish_reason: planned.tool ? "tool_calls" : "stop",
               },
             ],
-            usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+            usage: {
+              prompt_tokens: 8,
+              completion_tokens: 4,
+              total_tokens: 12,
+            },
           }) +
           "\n\n",
       );

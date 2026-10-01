@@ -67,19 +67,9 @@ export class JsonRpcProcess {
     );
     this.child.stderr.resume(); // Native logs may contain credentials or document text: do not forward.
     let buffer = Buffer.alloc(0),
-      receivedBytes = 0,
+      queuedBytes = 0,
       queuedEvents = 0;
     this.child.stdout.on("data", (chunk: Buffer) => {
-      receivedBytes += chunk.length;
-      if (receivedBytes > MAX_OUTPUT * 4) {
-        this.fail(
-          new RuntimeError(
-            "protocol_limit",
-            "Agent protocol output exceeds limit",
-          ),
-        );
-        return;
-      }
       buffer = Buffer.concat([buffer, chunk]);
       let end: number;
       while ((end = buffer.indexOf(10)) >= 0) {
@@ -133,7 +123,9 @@ export class JsonRpcProcess {
             );
           else request.resolve(message.result);
         } else {
-          if (++queuedEvents > 4096) {
+          const bytes = Buffer.byteLength(line);
+          queuedBytes += bytes;
+          if (++queuedEvents > 4096 || queuedBytes > MAX_OUTPUT * 4) {
             this.fail(
               new RuntimeError(
                 "protocol_limit",
@@ -146,6 +138,7 @@ export class JsonRpcProcess {
             .then(() => this.onMessage(message))
             .finally(() => {
               queuedEvents--;
+              queuedBytes -= bytes;
             });
           void this.eventQueue.catch(() =>
             this.fail(

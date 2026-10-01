@@ -23,14 +23,24 @@ export async function readSession(
   db: Database,
   request: FastifyRequest,
   secureCookies = false,
-): Promise<{ id: string; user: User; csrfToken: string } | null> {
+): Promise<{
+  id: string;
+  user: User;
+  csrfToken: string;
+} | null> {
   const id = requestSessionId(request, secureCookies);
   if (!id) return null;
   const row = await db.get<any>(
     "SELECT u.*,s.csrf_token FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires_at>? AND u.enabled=1",
     [id, new Date().toISOString()],
   );
-  return row ? { id, user: mapUser(row), csrfToken: row.csrf_token } : null;
+  return row
+    ? {
+        id,
+        user: mapUser(row),
+        csrfToken: row.csrf_token,
+      }
+    : null;
 }
 export function newSession(userId: string) {
   const token = randomBytes(32).toString("hex");
@@ -41,7 +51,12 @@ export function newSession(userId: string) {
     sql: "INSERT INTO sessions (id,user_id,csrf_token,expires_at,created_at) VALUES (?,?,?,?,?)",
     params: [hashToken(token), userId, csrfToken, expiresAt, now.toISOString()],
   };
-  return { token, csrfToken, expiresAt, statement };
+  return {
+    token,
+    csrfToken,
+    expiresAt,
+    statement,
+  };
 }
 export function setSessionCookie(
   reply: FastifyReply,
@@ -51,7 +66,7 @@ export function setSessionCookie(
 ) {
   reply.header(
     "set-cookie",
-    `${config.secureCookies ? "__Host-wme_session" : SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${clear ? 0 : 43200}${config.secureCookies ? "; Secure" : ""}`,
+    `${config.secureCookies ? "__Host-wme_session" : SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=${config.secureCookies ? "/" : "/enterprise"}; Max-Age=${clear ? 0 : 43200}${config.secureCookies ? "; Secure" : ""}`,
   );
   reply.header("cache-control", "no-store");
 }

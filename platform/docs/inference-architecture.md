@@ -8,7 +8,7 @@ The Go source pin is `acdace936fa7df2905500c7f5e0a97d683138dea`, MIT. References
 
 `ProxyRegistry.resolve(orgId)` returns `{baseUrl,managementKey,clientKey}` for an existing organization service; `ensure(orgId)` provisions or starts that service and returns it. Only the privileged host supervisor performs container operations. Ordinary API handlers cannot supply paths, images or commands. Organization IDs must map to distinct private origins, secret sets and credential directories. The API does not receive a Docker socket.
 
-The API must reach private proxy management and inference; project and generated-app networks must not. The registry is operator-owned, with restrictive directories/files. Credential directories/configs are writable by the proxy and absent from project mounts. Config preserves existing accounts on restart. Upstream credential refresh is exclusively proxy-owned. The bundled proxy control panel and discovery broadcast are disabled. HTTP request logging/debug are disabled; diagnostics must not expose bodies/keys.
+The API must reach private proxy management and inference; project networks must not. The registry is operator-owned, with restrictive directories/files. Credential directories/configs are writable by the proxy and absent from project mounts. Config preserves existing accounts on restart. Upstream credential refresh is exclusively proxy-owned. The bundled proxy control panel and discovery broadcast are disabled. HTTP request logging/debug are disabled; diagnostics must not expose bodies/keys.
 
 Bootstrap configuration uses v8 `server`, `management`, `access.api-keys`, `oauth.auth-dir`, `routing`, and `observability` fields. Management and client keys are different high-entropy random credentials. Round-robin routing with session affinity keeps requests consistent within a conversation; account priority determines preference on fresh or failed bindings. Extra retry rounds are disabled. Restart is not a credential reset.
 
@@ -22,7 +22,7 @@ The application database stores account metadata, OAuth session state, and hashe
 
 ## Runtime gateway
 
-`issueGateway({orgId,projectId,userId,runId,model,harness,conversationId?})` issues a random capability token with at most 24h lifetime, storing only its hash. The gateway URL is `/api/runtime/inference/:projectId`. Runtime receives this internal token, never proxy management/client credentials or upstream subscriptions.
+`issueGateway({orgId,projectId,userId,runId,model,harness,conversationId?})` issues a random capability token with at most 24h lifetime, storing only its hash. The gateway URL is `/enterprise/api/runtime/inference/:projectId`. Runtime receives this internal token, never proxy management/client credentials or upstream subscriptions.
 
 Supported endpoints: GET `/v1/models`; POST `/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`, `/v1/messages/count_tokens`. Everything else is absent. Models sent on inference calls must equal the model bound to the run token. Current active-run, user, project and conversation access is checked before each request and every second during streaming. Cancellation or access removal aborts the upstream stream. The runtime service must also stop local processes and revoke mounts; aborting inference alone does not revoke filesystem authority.
 

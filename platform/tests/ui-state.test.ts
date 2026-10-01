@@ -108,8 +108,8 @@ test("untrusted Markdown blocks executable and scheme-relative destinations whil
   ])
     assert.equal(safeContentUrl(url), undefined, url);
   assert.equal(
-    safeContentUrl("/api/files/source/content?versionId=version"),
-    "/api/files/source/content?versionId=version",
+    safeContentUrl("/enterprise/api/files/source/content?versionId=version"),
+    "/enterprise/api/files/source/content?versionId=version",
   );
   assert.equal(
     safeContentUrl("https://example.com/report"),

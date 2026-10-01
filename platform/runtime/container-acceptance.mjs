@@ -1,376 +1,817 @@
-// Real Linux isolation/protocol acceptance, with synthetic data and no upstream authentication.
+// Real persistent-project acceptance. No firewall, host sysctl or policy mutation.
+import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
+import { randomUUID } from "node:crypto";
 import {
-  mkdtemp,
   mkdir,
-  writeFile,
+  mkdtemp,
   readFile,
-  rm,
+  writeFile,
   chmod,
-  lstat,
-  rename,
-  symlink,
+  chown,
 } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
-import { createFixtureCleanup } from "./fixture-cleanup.mjs";
-import {
-  storageVolumeName,
-  volumeMount,
-} from "../packages/runtime/src/volumes.ts";
-const exec = promisify(execFile);
+import { ProjectDockerRuntime } from "../dist/packages/runtime/src/project-runtime.js";
+import { storageVolumeName } from "../dist/packages/runtime/src/volumes.js";
+import { createIsolatedNetwork } from "../dist/packages/runtime/src/networks.js";
 if (
   process.platform !== "linux" ||
   process.env.WME_RUN_CONTAINER_ACCEPTANCE !== "1"
 )
-  throw new Error("Linux explicit container acceptance only");
+  throw new Error("Explicit Linux container acceptance is required");
 const image = process.env.WME_AGENT_IMAGE;
-if (!image) throw new Error("WME_AGENT_IMAGE is required");
-const id = `wme-accept-${process.pid}-${Date.now()}`;
-const root = await mkdtemp(join(tmpdir(), id));
-const cleanupFixture = await createFixtureCleanup(root, id);
-const containers = [],
-  networks = [],
-  volumes = [],
-  firewallRules = [];
-const docker = async (args) =>
+if (!image) throw new Error("Set the exact current runtime image");
+const execute = promisify(execFile);
+const docker = async (...args) =>
   (
-    await exec("docker", args, { timeout: 60000, maxBuffer: 4 * 1024 * 1024 })
+    await execute("docker", args, {
+      timeout: 90000,
+      maxBuffer: 4 * 1024 * 1024,
+    })
   ).stdout.trim();
-const iptables = async (args) =>
-  exec(
-    process.getuid() === 0 ? "iptables" : "sudo",
-    process.getuid() === 0 ? args : ["iptables", ...args],
-    { timeout: 15000 },
-  );
-const common = [
-  "--read-only",
-  "--user",
-  "10001:10001",
-  "--cap-drop",
-  "ALL",
-  "--security-opt",
-  "no-new-privileges:true",
-  "--security-opt",
-  "apparmor=wme-platform-agent",
-  "--pids-limit",
-  "128",
-  "--memory",
-  "1g",
-  "--cpus",
-  "1",
-  "--tmpfs",
-  "/tmp:rw,nosuid,nodev,size=128m,mode=1777",
-  "--tmpfs",
-  "/home/agent:rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
-];
-async function runProbe(network, mounts, script) {
-  const name = `${id}-probe-${containers.length}`;
-  containers.push(name);
-  return docker([
-    "run",
-    "--rm",
-    "--name",
-    name,
-    ...common,
-    "--network",
-    network,
-    ...mounts.flatMap((m) => ["--mount", m]),
-    "--entrypoint",
-    "node",
-    image,
-    "-e",
-    script,
-  ]);
+const evidence = resolve(
+  process.env.WME_ACCEPTANCE_ROOT ?? join(tmpdir(), "wme-container-evidence"),
+);
+await mkdir(evidence, {
+  recursive: true,
+  mode: 0o700,
+});
+const root = await mkdtemp(join(evidence, "fixture-")),
+  allocation = randomUUID();
+const projectId = "acceptance-" + allocation,
+  organizationId = "acceptance-org";
+const gateway = "wme-pr2-acceptance-gateway-" + allocation,
+  bootstrap = "wme-pr2-acceptance-bootstrap-" + allocation;
+const files = join(root, "workspaces"),
+  sessions = join(root, "sessions"),
+  journal = join(root, "journal");
+const workspace = join(files, "projects", projectId, "files"),
+  library = join(files, "organizations", organizationId, "files");
+const ledger = {
+  allocation,
+  root,
+  projectId,
+  gateway,
+  bootstrap,
+  image,
+  gatewayId: null,
+  bootstrapId: null,
+};
+const save = () =>
+  writeFile(join(root, "allocation.json"), JSON.stringify(ledger, null, 2), {
+    mode: 0o600,
+  });
+for (const path of [workspace, library, sessions, journal])
+  await mkdir(path, {
+    recursive: true,
+    mode: 0o750,
+  });
+// These are new synthetic directories, never a recursive ownership change.
+for (const path of [workspace, library]) {
+  await chown(path, 10001, 10001);
+  await chmod(path, 0o750);
 }
-try {
-  for (const dir of ["project", "shared", "secret", "sessions"]) {
-    await mkdir(join(root, dir));
-    await chmod(join(root, dir), 0o777);
+await writeFile(join(workspace, "original.txt"), "workspace fixture", {
+  mode: 0o644,
+});
+await writeFile(join(library, "reference.txt"), "library fixture", {
+  mode: 0o644,
+});
+for (const path of [
+  join(workspace, "original.txt"),
+  join(library, "reference.txt"),
+]) {
+  await chown(path, 10001, 10001);
+  await chmod(path, 0o644);
+}
+await mkdir(join(workspace, "Shared"), {
+  mode: 0o755,
+});
+const fixture = await readFile(
+  new URL("./protocol-fixture.mjs", import.meta.url),
+  "utf8",
+);
+await writeFile(join(root, "gateway.cjs"), fixture, {
+  mode: 0o644,
+});
+await chmod(join(root, "gateway.cjs"), 0o644);
+const options = {
+  image,
+  network: "wme-pr2-acceptance",
+  networkPool: process.env.WME_ACCEPTANCE_NETWORK_POOL ?? "10.253.240.0/24",
+  gatewayContainer: gateway,
+  storageRoots: [files],
+  sessionRoot: sessions,
+  journalRoot: journal,
+  gatewayOrigins: ["http://api:4100"],
+  egressProxyOrigins: ["http://api:4101"],
+  appArmorProfile: "wme-platform-agent",
+};
+const runtime = new ProjectDockerRuntime(options);
+const spec = {
+  projectId,
+  organizationId,
+  hostId: "local",
+  egressProxyUrl: "http://api:4101",
+  egressToken: "wme_schedule_" + "s".repeat(43),
+  scheduleEnabled: true,
+  scheduleMounts: [
+    {
+      source: library,
+      target: "/workspace/Shared",
+      access: "read",
+    },
+  ],
+};
+await save();
+let complete = false;
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitForFile(
+  name,
+  test = (value) => Boolean(value),
+  seconds = 45,
+) {
+  for (let i = 0; i < seconds * 5; i++) {
+    try {
+      const value = await readFile(join(workspace, name), "utf8");
+      if (test(value)) return value;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    await pause(200);
   }
-  await mkdir(join(root, "project", "Shared"));
-  await writeFile(join(root, "project", "original.txt"), "fixture");
-  await writeFile(join(root, "shared", "reference.txt"), "shared-fixture");
-  await writeFile(
-    join(root, "secret", "control-plane-key"),
-    "never-mounted-fixture",
+  throw new Error("Timed out waiting for synthetic workspace result: " + name);
+}
+async function trustedProbe(program) {
+  return new Promise((resolveProbe, reject) => {
+    const child = spawn(
+      "docker",
+      [
+        "exec",
+        "-i",
+        "--user",
+        "0:0",
+        "wme-project-" + projectId,
+        "node",
+        "--input-type=module",
+      ],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    let output = "",
+      error = "";
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 30000);
+    child.stdout.on("data", (data) => {
+      output += data;
+    });
+    child.stderr.on("data", (data) => {
+      error = (error + data).slice(-8192);
+    });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      code === 0
+        ? resolveProbe(output)
+        : reject(new Error("Trusted fixture probe failed: " + error));
+    });
+    child.stdin.end(program);
+  });
+}
+const documentProbe = `
+from pathlib import Path
+from docx import Document
+from openpyxl import Workbook, load_workbook
+from pypdf import PdfReader, PdfWriter
+root=Path('/workspace/documents');root.mkdir(exist_ok=True)
+d=Document();d.add_paragraph('Durable document');d.save(root/'sample.docx')
+assert Document(root/'sample.docx').paragraphs[0].text=='Durable document'
+w=Workbook();w.active['A1']='Durable spreadsheet';w.save(root/'sample.xlsx')
+assert load_workbook(root/'sample.xlsx').active['A1'].value=='Durable spreadsheet'
+p=PdfWriter();p.add_blank_page(width=612,height=792);p.add_metadata({'/Title':'Durable PDF'});p.write(root/'sample.pdf')
+assert PdfReader(root/'sample.pdf').metadata.title=='Durable PDF'
+`;
+async function request(
+  harness,
+  mode = "read",
+  thread = harness,
+  model = "synthetic-acceptance-model",
+) {
+  const sessionDirectory = join(
+    sessions,
+    organizationId,
+    projectId,
+    "sessions",
+    thread,
+    harness,
+    mode,
   );
-  const storage = storageVolumeName(root);
-  await docker([
-    "volume",
-    "create",
-    "--driver",
-    "local",
-    "--opt",
-    "type=none",
-    "--opt",
-    "o=bind",
-    "--opt",
-    `device=${root}`,
-    storage,
-  ]);
-  volumes.push(storage);
-  const a = `${id}-a`,
-    b = `${id}-b`,
-    gateway = `${id}-gateway`,
-    peer = `${id}-peer`;
-  for (const net of [a, b]) {
-    const bridge =
-      "br-wmerun" + createHash("sha256").update(net).digest("hex").slice(0, 6);
-    await docker([
-      "network",
-      "create",
-      "--internal",
-      "--subnet",
-      net === a ? "10.252.0.0/28" : "10.252.0.16/28",
-      "--opt",
-      "com.docker.network.bridge.name=" + bridge,
-      net,
-    ]);
-    networks.push(net);
-    const rule = [
-      "INPUT",
-      "-i",
-      bridge,
-      "-m",
-      "conntrack",
-      "--ctstate",
-      "NEW",
-      "-j",
-      "REJECT",
-    ];
-    await iptables(["-I", ...rule]);
-    firewallRules.push(rule);
+  await mkdir(sessionDirectory, {
+    recursive: true,
+    mode: 0o700,
+  });
+  return {
+    runId: randomUUID(),
+    organizationId,
+    projectId,
+    conversationId: thread,
+    generation: 0,
+    userId: "synthetic-user",
+    harness,
+    model,
+    prompt: "Reply SYNTHETIC_RUNTIME_ACCEPTANCE",
+    access: mode,
+    mounts: [
+      {
+        source: workspace,
+        target: "/workspace",
+        access: mode,
+      },
+      {
+        source: library,
+        target: "/workspace/Shared",
+        access: "read",
+      },
+    ],
+    sessionDirectory,
+    gateway: {
+      baseUrl: `http://api:4100/enterprise/api/runtime/inference/${projectId}`,
+      token: "synthetic-scoped-fixture-key",
+    },
+  };
+}
+async function native(input, answer = "SYNTHETIC_RUNTIME_ACCEPTANCE") {
+  const events = [];
+  await runtime.execute(
+    input,
+    (event) => events.push(event),
+    AbortSignal.timeout(45000),
+  );
+  assert.equal(events.at(-1)?.type, "completed", JSON.stringify(events));
+  assert.ok(
+    events.some((e) => e.type === "input_accepted"),
+    "Missing actual input receipt",
+  );
+  assert.equal(
+    events
+      .filter((e) => e.type === "assistant_delta")
+      .map((e) => e.delta)
+      .join(""),
+    answer,
+  );
+  return events.find((e) => e.type === "native_session")?.sessionId;
+}
+async function workspaceStatus() {
+  return JSON.parse(
+    await trustedProbe(
+      `import {connect} from 'node:net';const s=connect('/control/runtime.sock');s.on('connect',()=>s.write(JSON.stringify({operation:'status'})+'\\n'));s.on('data',b=>process.stdout.write(b));s.on('end',()=>s.destroy());`,
+    ),
+  );
+}
+// This test launcher imports exactly the production descriptor preparation and
+// argument builder. Its probe replaces only the final trusted Node program,
+// after the unchanged AppArmor transition and mandatory restriction helper.
+function verifyOutsideUid(fs, assert, childPid, innerPid) {
+  const rows = fs
+    .readdirSync("/proc")
+    .filter((p) => /^\d+$/.test(p))
+    .flatMap((p) => {
+      try {
+        return [
+          {
+            id: Number(p),
+            status: fs.readFileSync("/proc/" + p + "/status", "utf8"),
+          },
+        ];
+      } catch {
+        return [];
+      }
+    });
+  const descendants = new Set([childPid]);
+  let added = true;
+  while (added) {
+    added = false;
+    for (const row of rows) {
+      const parent = Number(/^PPid:\s+(\d+)/m.exec(row.status)?.[1]);
+      if (descendants.has(parent) && !descendants.has(row.id)) {
+        descendants.add(row.id);
+        added = true;
+      }
+    }
   }
-  await docker([
+  const owned = rows.filter((row) => descendants.has(row.id));
+  assert.ok(
+    owned.some((row) => {
+      const ids =
+        /^NSpid:\s+(.+)$/m
+          .exec(row.status)?.[1]
+          .trim()
+          .split(/\s+/)
+          .map(Number) ?? [];
+      return ids.length > 1 && ids.at(-1) === innerPid;
+    }),
+    "Agent PID must be a descendant in a nested PID namespace",
+  );
+  for (const row of owned)
+    assert.match(row.status, /^Uid:\s+10001\s+10001\s+10001\s+10001$/m);
+}
+async function verifyOwnChildSignal(fs, assert, spawn) {
+  // Native tools need ordinary same-namespace child cleanup and signal-based deadlines.
+  // A denied signal is harmless: this synthetic child expires naturally after one second.
+  const child = spawn("/bin/sleep", ["1"]);
+  let error = null;
+  child.on("error", (cause) => {
+    error = cause.code;
+  });
+  const closed = new Promise((resolve) => child.once("close", resolve));
+  await new Promise((resolve, reject) => {
+    child.once("spawn", resolve);
+    child.once("error", reject);
+  });
+  const sent = child.kill("SIGTERM");
+  await closed;
+  const result = {
+    uid: process.getuid(),
+    label: fs.readFileSync("/proc/self/attr/current", "utf8").trim(),
+    sent,
+    error,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+  };
+  console.log("OWN_CHILD_SIGNAL " + JSON.stringify(result));
+  assert.equal(error, null, "Native child cleanup: " + JSON.stringify(result));
+  assert.equal(sent, true);
+  assert.equal(child.signalCode, "SIGTERM");
+}
+function probe(mode, thread, program) {
+  return new Promise((resolveProbe, reject) => {
+    const child = spawn(
+      "docker",
+      [
+        "exec",
+        "-i",
+        "--user",
+        "0:0",
+        "wme-project-" + projectId,
+        "node",
+        "--input-type=module",
+      ],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    let output = "",
+      error = "";
+    child.stdout.on("data", (data) => {
+      output += data;
+      if (output.length > 1024 * 1024) child.kill();
+    });
+    child.stderr.on("data", (data) => {
+      error = (error + data).slice(-8192);
+    });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30000);
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      code === 0
+        ? resolveProbe(output)
+        : reject(new Error(`Boundary probe failed (${code}): ${error}`));
+    });
+    const outer = `import fs from 'node:fs';import assert from 'node:assert/strict';import {prepareSandbox} from '/opt/runtime/src/execution-sandbox.js';import {mkdir,chmod,chown} from 'node:fs/promises';import {spawn} from 'node:child_process';import {once} from 'node:events';
+const broker='/control/probe-${randomUUID()}';await mkdir(broker,{mode:0o750});await chmod(broker,0o750);await chown(broker,0,10001);
+const boundary=await prepareSandbox(${JSON.stringify("sessions/" + thread + "/codex/" + mode)},${JSON.stringify(mode)},[{source:'/library/',target:'/workspace/Shared',access:'read'}],broker);
+const args=boundary.args;args.splice(-1,1,'--input-type=module','-e',${JSON.stringify(program)});
+const verify=${verifyOutsideUid.toString()};const child=spawn('bwrap',args,{uid:10001,gid:10001,stdio:['ignore','pipe','inherit',...boundary.fds]});let observed='',checked=false;child.stdout.on('data',data=>{process.stdout.write(data);observed+=data;const marker=observed.split(String.fromCharCode(10)).find(line=>line.startsWith('WME_AGENT_PID:'));if(marker&&!checked){verify(fs,assert,child.pid,Number(marker.slice(14)));checked=true;}});const [code]=await once(child,'close');await boundary.close();assert.ok(checked,'Outer namespace must verify actual kernel UID10001');process.exitCode=code;
+`;
+    child.stdin.end(outer);
+  });
+}
+const commonProbe = `import assert from 'node:assert/strict';import fs from 'node:fs';import {execFileSync} from 'node:child_process';import {Worker} from 'node:worker_threads';import * as requireNet from 'node:net';import {assertIsolation} from '/opt/runtime/src/process-boundary.js';await assertIsolation();
+console.log('WME_AGENT_PID:'+process.pid);await new Promise(r=>setTimeout(r,200));\n// Bubblewrap may use an intermediate user namespace mapping UID10001 through UID0; the trusted parent independently checks every final namespace PID has outside UID10001.\nassert.match(fs.readFileSync('/proc/self/uid_map','utf8'),/10001\\s+(?:0|10001)\\s+1/);
+assert.equal(fs.readFileSync('/workspace/original.txt','utf8'),'workspace fixture');assert.equal(fs.readFileSync('/workspace/Shared/reference.txt','utf8'),'library fixture');
+for(const p of ['/control','/state','/project','/library','/var/run/docker.sock'])assert.throws(()=>fs.lstatSync(p));
+for(const p of ['/proc/kcore','/proc/keys','/proc/timer_list'])assert.throws(()=>fs.readFileSync(p));
+for(const label of ['wme-project-supervisor','wme-platform-agent','unconfined'])assert.throws(()=>execFileSync('aa-exec',['-p',label,'--','true']));
+assert.throws(()=>fs.writeFileSync('/workspace/Shared/reference.txt','changed'));assert.throws(()=>fs.writeFileSync('/etc/escape','x'));assert.throws(()=>execFileSync('mount',['-o','remount,rw','/workspace/Shared']));
+const python='import ctypes,errno\\nlibc=ctypes.CDLL(None,use_errno=True)\\nfor flags in [0x20000,0x4000000,0x8000000,0x10000000,0x20000000,0x40000000,0x2000000,0x80]:\\n ctypes.set_errno(0);assert libc.syscall(56,flags|17,0,0,0,0)==-1 and ctypes.get_errno()==errno.EPERM\\nctypes.set_errno(0);assert libc.syscall(435,0,0)==-1 and ctypes.get_errno()==errno.ENOSYS\\nctypes.set_errno(0);assert libc.syscall(272,0x10000000)==-1 and ctypes.get_errno()==errno.EPERM';execFileSync('python3',['-c',python]);
+await new Promise((resolve,reject)=>{const w=new Worker('require("worker_threads").parentPort.postMessage("thread okay")',{eval:true,execArgv:[]});w.once('message',resolve);w.once('error',reject);});
+await (${verifyOwnChildSignal.toString()})(fs,assert,(await import('node:child_process')).spawn);
+assert.equal(fs.readdirSync('/proc').filter(p=>/^\\d+$/.test(p)).length<12,true);assert.throws(()=>fs.readFileSync('/session/../../state/sessions/sibling/codex/write/private'));
+for(const host of directTargets)await new Promise((resolve,reject)=>{const s=requireNet.connect({host,port:4100});s.setTimeout(500,()=>s.destroy(new Error('blocked')));s.on('error',()=>resolve());s.on('connect',()=>{s.destroy();reject(Error('Direct network escaped namespace'));});});
+`;
+try {
+  await createIsolatedNetwork(
+    {
+      name: bootstrap,
+      pool: options.networkPool,
+      bridgeName: "wme-a" + allocation.slice(0, 8),
+      labels: { "com.wovenmatter.enterprise.acceptance": allocation },
+    },
+    (args) => docker(...args),
+  );
+  ledger.bootstrapId = JSON.parse(
+    await docker("network", "inspect", bootstrap),
+  )[0].Id;
+  await save();
+  ledger.gatewayId = await docker(
     "run",
     "-d",
     "--name",
     gateway,
-    ...common,
+    "--label",
+    "com.wovenmatter.enterprise.acceptance=" + allocation,
     "--network",
-    a,
-    "--network-alias",
-    "api",
+    bootstrap,
+    "--read-only",
+    "--user",
+    "10001:10001",
+    "--cap-drop",
+    "ALL",
+    "--security-opt",
+    "no-new-privileges:true",
+    "--mount",
+    `type=bind,src=${join(root, "gateway.cjs")},dst=/fixture.cjs,readonly`,
     "--entrypoint",
     "node",
     image,
-    "-e",
-    await readFile(new URL("./protocol-fixture.mjs", import.meta.url), "utf8"),
-  ]);
-  containers.push(gateway);
-  await docker(["network", "connect", "--alias", "api", b, gateway]);
-  const readMounts = [
-    `type=volume,src=${storage},dst=/workspace,volume-subpath=project,volume-nocopy,readonly`,
-    `type=volume,src=${storage},dst=/workspace/Shared,volume-subpath=shared,volume-nocopy,readonly`,
-  ];
-  const probe = `const fs=require('fs'),assert=require('assert/strict');assert.equal(process.getuid(),10001);const status=fs.readFileSync('/proc/self/status','utf8');assert.match(status,/NoNewPrivs:\\s+1/);assert.match(status,/Seccomp:\\s+2/);assert.match(status,/CapEff:\\s+0+\\n/);assert.match(fs.readFileSync('/proc/self/attr/current','utf8'),/^wme-platform-agent \\(enforce\\)/);assert.equal(fs.readFileSync('/workspace/original.txt','utf8'),'fixture');assert.throws(()=>fs.writeFileSync('/workspace/no.txt','x'));assert.throws(()=>fs.writeFileSync('/workspace/Shared/no.txt','x'));assert.throws(()=>fs.readFileSync('/var/run/docker.sock'));assert.throws(()=>fs.readFileSync(${JSON.stringify(join(root, "secret", "control-plane-key"))}));assert.throws(()=>fs.writeFileSync('/etc/escape','x'));fs.writeFileSync('/tmp/allowed','x');console.log('read-only and kernel boundaries passed')`;
-  console.log(await runProbe(a, readMounts, probe));
-  const fullMounts = [
-    `type=volume,src=${storage},dst=/workspace,volume-subpath=project,volume-nocopy`,
-    readMounts[1],
-  ];
-  console.log(
-    await runProbe(
-      a,
-      fullMounts,
-      `const fs=require('fs'),assert=require('assert/strict');fs.writeFileSync('/workspace/writable.txt','okay');assert.throws(()=>fs.writeFileSync('/workspace/Shared/no.txt','x'));console.log('write access and shared ceiling passed')`,
-    ),
+    "/fixture.cjs",
   );
-  const ordinaryName = 'Résumé, "Q4" (2026)';
-  await mkdir(join(root, ordinaryName));
-  await chmod(join(root, ordinaryName), 0o755);
-  await mkdir(join(root, "project", ordinaryName));
+  await save();
+  await runtime.ensureProject(spec);
+  const container = JSON.parse(
+    await docker("inspect", "wme-project-" + projectId),
+  )[0];
   await writeFile(
-    join(root, ordinaryName, "reference.txt"),
-    "punctuation fixture",
+    join(root, "hostconfig.json"),
+    JSON.stringify(container.HostConfig, null, 2),
   );
-  console.log(
-    await runProbe(
-      a,
-      [
-        readMounts[0],
-        volumeMount(
-          join(root, ordinaryName),
-          `/workspace/${ordinaryName}`,
-          [root],
-          true,
-        ),
-      ],
-      `const fs=require('fs'),assert=require('assert/strict');
-    assert.equal(fs.readFileSync(${JSON.stringify(`/workspace/${ordinaryName}/reference.txt`)},'utf8'),'punctuation fixture');
-    assert.throws(()=>fs.writeFileSync(${JSON.stringify(`/workspace/${ordinaryName}/reference.txt`)},'changed'));
-    console.log('Unicode and CSV punctuation share mounts passed')`,
+  assert.equal(container.State.Running, true);
+  const gatewayDetail = JSON.parse(
+    await docker("inspect", ledger.gatewayId),
+  )[0];
+  assert.equal(
+    gatewayDetail.State.Running,
+    true,
+    "Synthetic gateway must be running",
+  );
+  const network = JSON.parse(
+    await docker("network", "inspect", container.HostConfig.NetworkMode),
+  )[0];
+  const gatewayAddress =
+    gatewayDetail.NetworkSettings.Networks[network.Name].IPAddress;
+  assert.ok(
+    gatewayAddress && network.IPAM.Config[0].Gateway,
+    "Actual peer and host gateway addresses are required",
+  );
+  const boundary =
+    `const directTargets=${JSON.stringify([gatewayAddress, network.IPAM.Config[0].Gateway, "1.1.1.1", "169.254.169.254"])};` +
+    commonProbe;
+  const sibling = join(
+    sessions,
+    organizationId,
+    projectId,
+    "sessions/sibling/codex/write",
+  );
+  await mkdir(sibling, {
+    recursive: true,
+    mode: 0o700,
+  });
+  await writeFile(join(sibling, "private"), "known sibling session sentinel");
+  await trustedProbe(`import assert from 'node:assert/strict';import {mkdir,writeFile,rename,symlink,readFile,stat} from 'node:fs/promises';import {openDirectory} from '/opt/runtime/src/sandbox.js';import {pinSandbox} from '/opt/runtime/src/pinned-sandbox.js';
+const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/sentinel','validated inode');const handle=await openDirectory('/project/files','pin-source');const before=await handle.stat();await rename(path,path+'-held');await mkdir(path+'-attacker');await writeFile(path+'-attacker/sentinel','replaced source');await symlink(path+'-attacker',path);const pinned=await pinSandbox([handle]);try{assert.equal(await readFile(pinned.sources[0]+'/sentinel','utf8'),'validated inode');assert.equal((await stat(pinned.sources[0])).ino,before.ino);}finally{await pinned.close();await handle.close();}console.log('ACTUAL_DESCRIPTOR_PIN_RACE_OK');`);
+  await Promise.all([
+    probe(
+      "read",
+      "reader",
+      boundary +
+        `assert.throws(()=>fs.writeFileSync('/workspace/read-write-test','x'));assert.throws(()=>fs.symlinkSync('/workspace/Shared/reference.txt','/workspace/link'));fs.writeFileSync('/session/private','reader state');console.log('READ_BOUNDARY_OK');`,
+    ),
+    probe(
+      "write",
+      "writer",
+      boundary +
+        `assert.throws(()=>fs.linkSync('/workspace/Shared/reference.txt','/workspace/hard-link'));fs.writeFileSync('/workspace/full-write-test','shared edit');fs.writeFileSync('/session/private','writer state');execFileSync('python3',['-c',${JSON.stringify(documentProbe)}]);await new Promise(r=>setTimeout(r,100));console.log('FULL_BOUNDARY_OK');`,
+    ),
+  ]);
+  assert.equal(
+    await readFile(join(workspace, "full-write-test"), "utf8"),
+    "shared edit",
+  );
+  const nativeIds = new Map();
+  for (const harness of ["codex", "grok", "claude", "pi"]) {
+    const input = await request(harness),
+      nativeId = await native(input);
+    assert.ok(nativeId);
+    nativeIds.set(harness, nativeId);
+    const environment = (await workspaceStatus()).sessions.find(
+      (s) => s.conversationId === input.conversationId,
+    );
+    assert.ok(environment.processId);
+    await native({
+      ...input,
+      runId: randomUUID(),
+      resumeId: nativeId,
+    });
+    assert.equal(
+      (await workspaceStatus()).sessions.find(
+        (s) => s.conversationId === input.conversationId,
+      ).processId,
+      environment.processId,
+      "Ordinary turn completion recreated the thread environment",
+    );
+    const toolInput = await request(
+      harness,
+      "write",
+      harness + "-tools",
+      "synthetic-proxy-" + harness,
+    );
+    toolInput.egressProxyUrl = "http://api:4101";
+    await native(toolInput, "PROXY_TOOL_VERIFIED");
+    console.log(
+      harness +
+        " actual installed native turn and durable resume passed against synthetic gateway",
+    );
+  }
+  const backgrounds = await Promise.all(
+    ["codex", "grok", "claude", "pi"].map((harness) =>
+      request(
+        harness,
+        "write",
+        "background-" + harness,
+        "synthetic-background-" + harness,
+      ),
     ),
   );
-  // A source swapped after authorization to an in-volume sibling must fail the
-  // trusted launcher's inode gate; volume-subpath alone permits in-volume symlinks.
-  const before = await lstat(join(root, "shared"), { bigint: true });
-  const evidence = [
-    {
-      target: "/workspace/Shared",
-      device: String(before.dev),
-      inode: String(before.ino),
-      kind: "directory",
-    },
-  ];
-  await rename(join(root, "shared"), join(root, "shared-original"));
-  await symlink("secret", join(root, "shared"));
-  console.log(
-    await runProbe(
-      a,
-      readMounts,
-      `(async()=>{const {verifyMountEvidence}=await import('/opt/runtime/src/mount-evidence.js');await require('assert/strict').rejects(verifyMountEvidence(${JSON.stringify(evidence)}),/changed during admission/);console.log('swapped source inode admission rejected')})().catch(e=>{console.error(e);process.exit(1)})`,
-    ),
+  // Pair admission establishes shared-workspace cross-adapter concurrency without saturating the host.
+  for (let i = 0; i < backgrounds.length; i += 2)
+    await Promise.all(
+      backgrounds
+        .slice(i, i + 2)
+        .map((input) => native(input, "BACKGROUND_WORK_STARTED")),
+    );
+  const before = await Promise.all(
+    backgrounds.map((input) => waitForFile("background-" + input.harness)),
   );
-  await rm(join(root, "shared"));
-  await symlink("/etc", join(root, "shared"));
-  await assert.rejects(
-    runProbe(a, readMounts, `throw new Error('Host escape must never launch')`),
-  );
-  await rm(join(root, "shared"));
-  await rename(join(root, "shared-original"), join(root, "shared"));
-  await docker([
-    "run",
-    "-d",
-    "--name",
-    peer,
-    ...common,
-    "--network",
-    a,
-    "--entrypoint",
-    "node",
-    image,
-    "-e",
-    `require('http').createServer((q,s)=>s.end('private')).listen(8009,'0.0.0.0')`,
-  ]);
-  containers.push(peer);
-  const peerIp = await docker([
-    "inspect",
-    "--format",
-    `{{(index .NetworkSettings.Networks "${a}").IPAddress}}`,
-    peer,
-  ]);
-  const bridgeGateway = await docker([
-    "network",
-    "inspect",
-    "--format",
-    "{{(index .IPAM.Config 0).Gateway}}",
-    b,
-  ]);
-  console.log(
-    await runProbe(
-      b,
-      [],
-      `(async()=>{const assert=require('assert/strict');assert.equal(await(await fetch('http://api:4100',{signal:AbortSignal.timeout(5000)})).text(),'gateway-fixture');await assert.rejects(fetch('http://${peerIp}:8009',{signal:AbortSignal.timeout(1500)}));await assert.rejects(fetch('http://${bridgeGateway}:22',{signal:AbortSignal.timeout(1500)}));await assert.rejects(fetch('https://example.com',{signal:AbortSignal.timeout(1500)}));console.log('gateway-only, host denial and cross-project exclusion passed')})().catch(e=>{console.error(e);process.exit(1)})`,
+  await pause(700);
+  for (const [index, input] of backgrounds.entries())
+    assert.notEqual(
+      await readFile(join(workspace, "background-" + input.harness), "utf8"),
+      before[index],
+      "Background work died after ordinary turn completion",
+    );
+  await runtime.stopSession(projectId, backgrounds[0].conversationId, 1);
+  const firstStopped = await readFile(
+      join(workspace, "background-codex"),
+      "utf8",
     ),
+    peerBefore = await readFile(join(workspace, "background-pi"), "utf8");
+  await pause(700);
+  assert.equal(
+    await readFile(join(workspace, "background-codex"), "utf8"),
+    firstStopped,
+  );
+  assert.notEqual(
+    await readFile(join(workspace, "background-pi"), "utf8"),
+    peerBefore,
+  );
+  const resume = await request("codex", "read", "codex");
+  await runtime.stopSession(projectId, "codex", 1);
+  await native({ ...resume, generation: 1, resumeId: nativeIds.get("codex") });
+  const held = await Promise.all([
+    request("codex", "write", "cancel-a", "synthetic-hold-a"),
+    request("codex", "write", "cancel-b", "synthetic-hold-b"),
+  ]);
+  const observers = held.map(() => new AbortController());
+  const observed = [[], []];
+  const running = held.map((input, index) =>
+    runtime
+      .execute(
+        input,
+        (event) => observed[index].push(event),
+        observers[index].signal,
+      )
+      .then(
+        () => null,
+        (error) => error,
+      ),
+  );
+  await Promise.all([waitForFile("descendant-a"), waitForFile("descendant-b")]);
+  observers[1].abort();
+  await running[1];
+  const detachedBefore = await readFile(
+    join(workspace, "descendant-b"),
+    "utf8",
+  );
+  await pause(700);
+  assert.notEqual(
+    await readFile(join(workspace, "descendant-b"), "utf8"),
+    detachedBefore,
+    "Observer disconnect cancelled work",
+  );
+  const reattachedRuntime = new ProjectDockerRuntime(options);
+  let connected;
+  const connection = new Promise((resolve) => {
+    connected = resolve;
+  });
+  const after =
+    observed[1].filter((event) => event.sequence).at(-1)?.sequence ?? 0;
+  const reattached = reattachedRuntime.attach(held[1].runId, after, (event) => {
+    if (event.type === "attached") connected();
+  });
+  await connection;
+  await reattachedRuntime.steer(held[1].runId, {
+    id: randomUUID(),
+    sequence: 2,
+    authorId: "synthetic-colleague",
+    authorName: "Synthetic colleague",
+    content: "Keep the current workspace task active until cancellation.",
+  });
+  await runtime.cancel(held[0].runId);
+  await running[0];
+  const stopped = await readFile(join(workspace, "descendant-a"), "utf8"),
+    siblingBefore = await readFile(join(workspace, "descendant-b"), "utf8");
+  await pause(700);
+  assert.equal(
+    await readFile(join(workspace, "descendant-a"), "utf8"),
+    stopped,
+    "Cancelled descendant kept running",
+  );
+  assert.notEqual(
+    await readFile(join(workspace, "descendant-b"), "utf8"),
+    siblingBefore,
+    "Cancelling one thread stopped its sibling",
+  );
+  await runtime.cancel(held[1].runId);
+  await reattached;
+  assert.equal(
+    JSON.parse(await docker("inspect", container.Id))[0].State.Running,
+    true,
+  );
+  const interruptedInput = await request(
+    "codex",
+    "write",
+    "restart-interruption",
+    "synthetic-hold-a",
+  );
+  const oldResult = await readFile(join(workspace, "descendant-a"), "utf8");
+  const interrupted = runtime
+    .execute(interruptedInput, () => {})
+    .catch((error) => error);
+  await waitForFile("descendant-a", (value) => value !== oldResult);
+  await docker("restart", container.Id);
+  await interrupted;
+  await runtime.ensureProject(spec);
+  const recovered = [];
+  await new ProjectDockerRuntime(options).attach(
+    interruptedInput.runId,
+    0,
+    (event) => recovered.push(event),
+  );
+  assert.equal(recovered.at(-1)?.code, "workspace_restarted");
+  const stoppedByRestart = await readFile(
+    join(workspace, "background-pi"),
+    "utf8",
+  );
+  await pause(700);
+  assert.equal(
+    await readFile(join(workspace, "background-pi"), "utf8"),
+    stoppedByRestart,
+    "Restart unexpectedly replayed background work",
+  );
+  assert.equal(
+    await readFile(join(workspace, "full-write-test"), "utf8"),
+    "shared edit",
+  );
+  assert.equal(
+    await readFile(
+      join(
+        sessions,
+        organizationId,
+        projectId,
+        "sessions/writer/codex/write/private",
+      ),
+      "utf8",
+    ),
+    "writer state",
+  );
+  await mkdir(join(workspace, ".wme/schedules"), {
+    recursive: true,
+  });
+  await writeFile(
+    join(workspace, "scheduled.sh"),
+    "#!/bin/sh\ncat /workspace/Shared/reference.txt > /workspace/scheduled-result\nif printf nope > /workspace/Shared/reference.txt; then exit 1; fi\nprintf done >> /workspace/scheduled-result\nwhile true; do date +%s%N > /workspace/schedule-heartbeat; sleep 0.2; done\n",
   );
   await writeFile(
-    join(root, "project", "index.html"),
-    '<div id="root"></div><script type="module" src="/main.tsx"></script>',
+    join(workspace, ".wme/schedules/read-share.json"),
+    JSON.stringify({
+      everyMinutes: 60,
+      script: "scheduled.sh",
+      args: [],
+    }),
+  );
+  await chmod(join(workspace, "scheduled.sh"), 0o644);
+  await chmod(join(workspace, ".wme/schedules/read-share.json"), 0o644);
+  assert.equal(
+    await waitForFile("scheduled-result", (value) => value.endsWith("done")),
+    "library fixturedone",
+  );
+  await waitForFile("schedule-heartbeat");
+  await runtime.updateProject({
+    ...spec,
+    scheduleMounts: [],
+  });
+  const lastHeartbeat = await readFile(
+    join(workspace, "schedule-heartbeat"),
+    "utf8",
+  );
+  await pause(700);
+  assert.equal(
+    await readFile(join(workspace, "schedule-heartbeat"), "utf8"),
+    lastHeartbeat,
+    "Revoked schedule kept running",
   );
   await writeFile(
-    join(root, "project", "main.tsx"),
-    `import React from 'react';import {createRoot} from 'react-dom/client';createRoot(document.getElementById('root')!).render(<h1>Offline dashboard</h1>);`,
+    join(workspace, "revoked.sh"),
+    "#!/bin/sh\nif cat /workspace/Shared/reference.txt >/dev/null 2>&1; then printf leaked > /workspace/revoked-result; else printf denied > /workspace/revoked-result; fi\n",
   );
-  const documentSmoke = `from pathlib import Path
-from tempfile import TemporaryDirectory
-from pypdf import PdfWriter, PdfReader
-from docx import Document
-from openpyxl import Workbook, load_workbook
-with TemporaryDirectory(prefix="wme-readers-", dir="/tmp") as directory:
-    root = Path(directory)
-    pdf = root / "fixture.pdf"
-    writer = PdfWriter()
-    writer.add_blank_page(width=72, height=72)
-    writer.write(str(pdf))
-    assert len(PdfReader(str(pdf)).pages) == 1
-    word = root / "fixture.docx"
-    document = Document()
-    document.add_paragraph("Document reader fixture")
-    document.save(str(word))
-    assert Document(str(word)).paragraphs[0].text == "Document reader fixture"
-    sheet = root / "fixture.xlsx"
-    workbook = Workbook()
-    workbook.active["A1"] = "Spreadsheet reader fixture"
-    workbook.save(str(sheet))
-    workbook.close()
-    reopened = load_workbook(str(sheet), read_only=True)
-    assert reopened.active["A1"].value == "Spreadsheet reader fixture"
-    reopened.close()
-print("PDF, Word, and spreadsheet write/read smoke passed")`;
-  console.log(
-    await runProbe(
-      b,
-      fullMounts,
-      `const {execFileSync}=require('child_process');const fs=require('fs');execFileSync('wme-build',['/workspace'],{stdio:'inherit'});if(!fs.existsSync('/workspace/dist/index.html'))throw new Error('Offline build missing');execFileSync('python',['-c',${JSON.stringify(documentSmoke)}],{stdio:'inherit'});console.log('offline React build passed')`,
-    ),
+  await writeFile(
+    join(workspace, ".wme/schedules/revoked.json"),
+    JSON.stringify({
+      everyMinutes: 60,
+      script: "revoked.sh",
+      args: [],
+    }),
   );
-  // Initialize native JSONL protocols against deliberately synthetic credentials only.
-  const nativeProbe = `
-    const {spawn,execFileSync}=require('child_process'),assert=require('assert/strict');
-    for(const path of ['/tmp/codex','/tmp/grok'])require('fs').mkdirSync(path,{recursive:true});
-    assert.match(execFileSync('codex',['--version'],{encoding:'utf8'}),/0\\.158\\.0/);
-    assert.match(execFileSync('grok',['--version'],{encoding:'utf8'}),/1\\.0\\.41/);
-    async function init(command,args,env,method,params){return new Promise((resolve,reject)=>{let b='',stderr='',settled=false;const child=spawn(command,args,{cwd:'/tmp',env:{PATH:process.env.PATH,HOME:'/home/agent',...env},stdio:['pipe','pipe','pipe']});const finish=(error)=>{if(settled)return;settled=true;clearTimeout(timer);child.kill('SIGKILL');error?reject(error):resolve()};const timer=setTimeout(()=>finish(new Error(command+' initialization timeout: '+stderr.slice(-2048))),15000);child.on('error',finish);child.on('close',code=>finish(new Error(command+' exited '+code+': '+stderr.slice(-2048))));child.stdin.on('error',finish);child.stderr.on('data',c=>{stderr=(stderr+c).slice(-2048)});child.stdout.on('data',c=>{b+=c;let n;while((n=b.indexOf('\\n'))>=0){let m;try{m=JSON.parse(b.slice(0,n))}catch(error){finish(error);return}b=b.slice(n+1);if(m.id===1)finish(m.error?new Error(command+' rejected initialization'):undefined)}});child.stdin.write(JSON.stringify({id:1,method,params})+'\\n');})}
-    (async()=>{await init('codex',['app-server'],{CODEX_HOME:'/tmp/codex'},'initialize',{clientInfo:{name:'wme_acceptance',version:'1.0.0'}});await init('grok',['agent','--no-leader','stdio'],{GROK_HOME:'/tmp/grok',XAI_API_KEY:'synthetic-fixture-not-a-provider-key',GROK_XAI_API_BASE_URL:'http://api:4100/v1',GROK_DISABLE_AUTOUPDATER:'1'},'initialize',{protocolVersion:1,clientCapabilities:{},clientInfo:{name:'wme-acceptance',version:'1.0.0'}});await import('/opt/runtime/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs');await import('/opt/runtime/node_modules/@earendil-works/pi-coding-agent/dist/index.js');console.log('native binaries, RPC initialization, and SDK imports passed')})().catch(e=>{console.error(e);process.exit(1)});
-  `;
-  console.log(await runProbe(b, [], nativeProbe));
-  const sessionMount = `type=volume,src=${storage},dst=/session,volume-subpath=sessions,volume-nocopy`;
-  console.log(
-    await runProbe(
-      b,
-      [...readMounts, sessionMount],
-      `(async()=>{
-    const assert=require('node:assert/strict');
-    const {runCodex,runGrok,prepareNativeConfiguration,applyEgressEnvironment}=await import('/opt/runtime/src/native.js');
-    const {runClaude,runPi}=await import('/opt/runtime/src/sdk.js');
-    const {validateEvent}=await import('/opt/runtime/src/validation.js');
-    const {JsonRpcProcess}=await import('/opt/runtime/src/rpc.js');
-    const fixtureRpc=(command,args,env)=>{
-      const rpc=new JsonRpcProcess(command,args,env);let lines='',diagnostics=0;
-      const send=rpc.send.bind(rpc);rpc.send=message=>{if(command==='grok'&&message.id!==undefined&&!message.method&&diagnostics++<24)console.error('Grok fixture client response',JSON.stringify({id:message.id,outcome:message.result?.outcome?.outcome,error:!!message.error}));send(message)};
-      rpc.child.stdout.on('data',chunk=>{lines+=chunk;let end;while((end=lines.indexOf('\\n'))>=0){const line=lines.slice(0,end);lines=lines.slice(end+1);try{
-        const message=JSON.parse(line);if(message.error)console.error('Synthetic fixture protocol rejection:',command,JSON.stringify({code:message.error.code,message:message.error.message}));
-        const update=message.params?.update;
-        if(command==='grok'&&diagnostics<24&&(message.id!==undefined&&message.method||['tool_call','tool_call_update'].includes(update?.sessionUpdate))){diagnostics++;console.error('Grok fixture metadata',JSON.stringify({method:message.method,id:message.id,options:message.params?.options?.map(o=>o.kind),update:update?.sessionUpdate,status:update?.status,kind:update?.kind,successMarker:JSON.stringify(update?.content??'').includes('PROXY_TOOL_OK'),failureMarker:JSON.stringify(update?.content??'').includes('PROXY_TOOL_FAILED')}))}
-      }catch{}}});return rpc;
-    };
-    for(const [harness,run] of [['codex',runCodex],['grok',runGrok],['claude',runClaude],['pi',runPi]]){
-      const request={runId:'acceptance_'+harness,projectId:'synthetic_project',harness,model:'synthetic-acceptance-model',prompt:'This is a synthetic protocol test. Reply with SYNTHETIC_RUNTIME_ACCEPTANCE.',access:'read',gateway:{baseUrl:'http://api:4100',token:'synthetic-scoped-fixture-key'}};
-      const events=[]; await prepareNativeConfiguration(request); await run(request,event=>events.push(validateEvent(event)),AbortSignal.timeout(20000),fixtureRpc);
-      assert.equal(events.filter(e=>e.type==='assistant_delta').map(e=>e.delta).join(''),'SYNTHETIC_RUNTIME_ACCEPTANCE');
-      const sessionId=events.find(e=>e.type==='native_session')?.sessionId; assert.ok(sessionId);
-      const continued=[]; await run({...request,runId:request.runId+'_resume',resumeId:sessionId},event=>continued.push(validateEvent(event)),AbortSignal.timeout(20000),fixtureRpc);
-      assert.equal(continued.find(e=>e.type==='native_session')?.sessionId,sessionId);
-      assert.equal(continued.filter(e=>e.type==='assistant_delta').map(e=>e.delta).join(''),'SYNTHETIC_RUNTIME_ACCEPTANCE');
-      console.log(harness+' real native turn and persisted resume against synthetic gateway passed');
-      const proxyRequest={...request,runId:request.runId+'_proxy',model:'synthetic-proxy-'+harness,prompt:'Run the synthetic proxy tool check. Never print environment variables or credentials.',egressProxyUrl:'http://api:4101'};
-      const proof=[]; await prepareNativeConfiguration(proxyRequest); const restore=applyEgressEnvironment(proxyRequest);
-      try { await run(proxyRequest,event=>proof.push(validateEvent(event)),AbortSignal.timeout(20000),fixtureRpc); }
-      catch(error){console.error(harness+' synthetic tool status',await(await fetch('http://api:4100/fixture-status/'+harness)).text());console.error(harness+' normalized event metadata',JSON.stringify(proof.map(e=>({type:e.type,status:e.status,bytes:e.type==='assistant_delta'?e.delta.length:undefined}))));throw error}
-      finally { restore(); }
-      assert.ok(proof.some(e=>e.type==='tool_start'),harness+' did not execute a native tool');
-      assert.equal(proof.filter(e=>e.type==='assistant_delta').map(e=>e.delta).join(''),'PROXY_TOOL_VERIFIED',harness+' scoped proxy tool failed');
-      console.log(harness+' installed native tool used scoped proxy and direct gateway bypass');
-    }
-  })().catch(e=>{console.error(e);process.exit(1)})`,
-    ),
+  await chmod(join(workspace, "revoked.sh"), 0o644);
+  await chmod(join(workspace, ".wme/schedules/revoked.json"), 0o644);
+  assert.equal(await waitForFile("revoked-result"), "denied");
+  await docker("restart", container.Id);
+  await runtime.ensureProject({
+    ...spec,
+    scheduleMounts: [],
+  });
+  await pause(32000);
+  assert.equal(
+    await readFile(join(workspace, "schedule-heartbeat"), "utf8"),
+    lastHeartbeat,
+    "Persisted admission receipt replayed after restart",
   );
+  assert.equal(
+    JSON.parse(await docker("inspect", container.Id))[0].State.Running,
+    true,
+  );
+  await runtime.stopProject(spec);
+  assert.equal(
+    JSON.parse(await docker("inspect", container.Id))[0].State.Running,
+    false,
+  );
+  await runtime.restoreProject(spec);
+  assert.equal(
+    await readFile(join(workspace, "full-write-test"), "utf8"),
+    "shared edit",
+  );
+  complete = true;
   console.log(
-    "Linux container acceptance passed; no live provider inference was attempted.",
+    "Persistent runtime boundary, native protocols, shared workspace, restart and scheduled read-only share acceptance passed.",
   );
 } finally {
-  for (const name of containers.reverse())
-    await docker(["rm", "--force", name]).catch(() => {});
-  for (const name of networks.reverse())
-    await docker(["network", "rm", name]).catch(() => {});
-  for (const rule of firewallRules.reverse())
-    await iptables(["-D", ...rule]).catch(() => {});
-  for (const name of volumes.reverse())
-    await docker(["volume", "rm", name]).catch(() => {});
-  await cleanupFixture();
+  await writeFile(
+    join(root, "result.json"),
+    JSON.stringify(
+      {
+        passed: complete,
+        allocation,
+        liveProviderAcceptance: false,
+      },
+      null,
+      2,
+    ),
+  );
+  if (complete) {
+    await runtime.stopProject(spec);
+    await runtime.purgeProject(spec);
+    const c = JSON.parse(await docker("inspect", ledger.gatewayId))[0];
+    assert.equal(
+      c.Config.Labels["com.wovenmatter.enterprise.acceptance"],
+      allocation,
+    );
+    await docker("rm", "--force", c.Id);
+    const n = JSON.parse(
+      await docker("network", "inspect", ledger.bootstrapId),
+    )[0];
+    assert.equal(n.Labels["com.wovenmatter.enterprise.acceptance"], allocation);
+    await docker("network", "rm", n.Id);
+    for (const dir of [files, sessions, journal]) {
+      const name = storageVolumeName(dir),
+        volume = JSON.parse(await docker("volume", "inspect", name))[0];
+      assert.equal(volume.Options.device, dir);
+      assert.equal(volume.Labels["com.wovenmatter.enterprise.storage"], "true");
+      await docker("volume", "rm", name);
+    }
+  } else
+    console.error(
+      "Failed fixture retained for exact-allocation inspection; see the private acceptance evidence directory.",
+    );
 }

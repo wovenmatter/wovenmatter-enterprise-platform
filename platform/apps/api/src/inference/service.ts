@@ -10,7 +10,6 @@ import {
   text,
   type ProxyEndpoint,
 } from "./proxy-client.js";
-
 export interface ProxyRegistry {
   resolve(organizationId: string): Promise<ProxyEndpoint | undefined>;
   ensure?(organizationId: string): Promise<ProxyEndpoint>;
@@ -33,7 +32,11 @@ export interface InferenceOptions {
   /** Operator-approved additional origins, including self-hosted model endpoints. */
   customProviderOrigins?: string[];
 }
-export type InferenceModel = { id: string; name: string; provider: string };
+export type InferenceModel = {
+  id: string;
+  name: string;
+  provider: string;
+};
 type ApiProvider = "openai" | "anthropic" | "openrouter" | "xai" | "custom";
 type SubscriptionProvider = "openai" | "anthropic" | "xai";
 interface ApiAccount {
@@ -70,15 +73,33 @@ const providerNames: Record<SubscriptionProvider, string> = {
   anthropic: "claude",
   xai: "xai",
 };
-const apiDefaults: Record<ApiProvider, { family: string; url: string }> = {
-  openai: { family: "codex", url: "https://api.openai.com/v1" },
-  anthropic: { family: "claude", url: "https://api.anthropic.com" },
+const apiDefaults: Record<
+  ApiProvider,
+  {
+    family: string;
+    url: string;
+  }
+> = {
+  openai: {
+    family: "codex",
+    url: "https://api.openai.com/v1",
+  },
+  anthropic: {
+    family: "claude",
+    url: "https://api.anthropic.com",
+  },
   openrouter: {
     family: "openai-compatibility",
     url: "https://openrouter.ai/api/v1",
   },
-  xai: { family: "xai", url: "https://api.x.ai/v1" },
-  custom: { family: "openai-compatibility", url: "" },
+  xai: {
+    family: "xai",
+    url: "https://api.x.ai/v1",
+  },
+  custom: {
+    family: "openai-compatibility",
+    url: "",
+  },
 };
 function hash(input: string) {
   return createHash("sha256").update(input).digest("hex");
@@ -129,6 +150,60 @@ export class InferenceService {
       CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
     `,
     );
+    await this.ctx.db.migrate(
+      "project-egress-v1",
+      "CREATE TABLE project_egress_capabilities(project_id TEXT PRIMARY KEY REFERENCES projects(id),org_id TEXT NOT NULL REFERENCES organizations(id),host_id TEXT NOT NULL,token_hash TEXT NOT NULL);",
+    );
+  }
+  /** Project-owned scheduled scripts receive public-network authority only. */
+  async issueProjectEgress(
+    spec: import("../../../../packages/runtime/src/types.js").ProjectRuntimeSpec,
+  ): Promise<string> {
+    const row = await this.ctx.db.get(
+      "SELECT id FROM projects WHERE id=? AND org_id=? AND host_id=? AND status<>'purged'",
+      [spec.projectId, spec.organizationId, spec.hostId],
+    );
+    if (!row)
+      throw new InferenceError(
+        403,
+        "project_unavailable",
+        "Project placement is unavailable.",
+      );
+    const token = `wme_schedule_${randomBytes(32).toString("base64url")}`;
+    await this.ctx.db.run(
+      "INSERT INTO project_egress_capabilities(project_id,org_id,host_id,token_hash) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET token_hash=excluded.token_hash,host_id=excluded.host_id",
+      [spec.projectId, spec.organizationId, spec.hostId, hash(token)],
+    );
+    return token;
+  }
+  async authorizeEgress(
+    projectId: string,
+    token: string,
+  ): Promise<import("../egress/index.js").EgressScope> {
+    if (!token.startsWith("wme_schedule_"))
+      return this.authorizeGateway(projectId, token);
+    if (!/^wme_schedule_[a-zA-Z0-9_-]{43}$/.test(token))
+      throw new InferenceError(
+        403,
+        "project_unavailable",
+        "Project network access is unavailable.",
+      );
+    const row = await this.ctx.db.get<any>(
+      "SELECT c.* FROM project_egress_capabilities c JOIN projects p ON p.id=c.project_id AND p.org_id=c.org_id AND p.host_id=c.host_id WHERE c.project_id=? AND c.token_hash=? AND p.status='ready' AND p.deleted_at IS NULL",
+      [projectId, hash(token)],
+    );
+    if (!row)
+      throw new InferenceError(
+        403,
+        "project_unavailable",
+        "Project network access is unavailable.",
+      );
+    return {
+      orgId: row.org_id,
+      projectId,
+      userId: "project-scheduler",
+      runId: row.token_hash,
+    };
   }
   private async locked<T>(orgId: string, fn: () => Promise<T>): Promise<T> {
     const previous = this.mutations.get(orgId) ?? Promise.resolve();
@@ -248,7 +323,11 @@ export class InferenceService {
   async discover(
     user: User,
     orgId: string,
-    input: { provider: ApiProvider; apiKey: string; baseUrl?: string },
+    input: {
+      provider: ApiProvider;
+      apiKey: string;
+      baseUrl?: string;
+    },
   ) {
     await this.ctx.requireOrgAdmin(user, orgId);
     if (!apiDefaults[input.provider])
@@ -286,7 +365,11 @@ export class InferenceService {
           this.options.customProviderOrigins,
           input.provider,
         )
-      ).map((id) => ({ id, name: id, provider: input.provider })),
+      ).map((id) => ({
+        id,
+        name: id,
+        provider: input.provider,
+      })),
     };
   }
   async addApiKey(
@@ -406,9 +489,18 @@ export class InferenceService {
         name: `wme-${id}`,
         "base-url": baseUrl,
         "request-retry": 0,
-        keys: [{ "api-key": input.apiKey }],
+        keys: [
+          {
+            "api-key": input.apiKey,
+          },
+        ],
         ...(modelNames.length
-          ? { models: modelNames.map((name) => ({ name, alias: name })) }
+          ? {
+              models: modelNames.map((name) => ({
+                name,
+                alias: name,
+              })),
+            }
           : {}),
       };
       try {
@@ -427,7 +519,7 @@ export class InferenceService {
         );
         throw error;
       }
-      await this.ctx.audit(user, "inference.api_key.added", id, {
+      await this.ctx.audit(user, orgId, "inference.api_key.added", id, {
         provider: input.provider,
       });
       return {
@@ -454,7 +546,11 @@ export class InferenceService {
     user: User,
     orgId: string,
     accountId: string,
-    input: { enabled?: boolean; priority?: number; label?: string },
+    input: {
+      enabled?: boolean;
+      priority?: number;
+      label?: string;
+    },
   ) {
     await this.ctx.requireOrgAdmin(user, orgId);
     if (
@@ -489,7 +585,10 @@ export class InferenceService {
         await this.proxy.request(
           orgId,
           `/v8/management/config/api-keys/${api.group_family}`,
-          { method: "PUT", body: groups },
+          {
+            method: "PUT",
+            body: groups,
+          },
         );
         await this.ctx.db.run(
           "UPDATE inference_api_accounts SET label=?,state=? WHERE id=? AND org_id=?",
@@ -514,20 +613,31 @@ export class InferenceService {
             "account_not_found",
             "Account not found.",
           );
-        const lookup = { name: entry.name, auth_index: entry.auth_index };
+        const lookup = {
+          name: entry.name,
+          auth_index: entry.auth_index,
+        };
         if (input.enabled !== undefined)
           await this.proxy.request(orgId, "/v8/management/credentials/status", {
             method: "PATCH",
-            body: { ...lookup, disabled: !input.enabled },
+            body: {
+              ...lookup,
+              disabled: !input.enabled,
+            },
           });
         if (input.priority !== undefined)
           await this.proxy.request(orgId, "/v8/management/credentials/fields", {
             method: "PATCH",
-            body: { ...lookup, priority: input.priority },
+            body: {
+              ...lookup,
+              priority: input.priority,
+            },
           });
       }
-      await this.ctx.audit(user, "inference.account.updated", accountId);
-      return { ok: true };
+      await this.ctx.audit(user, orgId, "inference.account.updated", accountId);
+      return {
+        ok: true,
+      };
     });
   }
   async removeAccount(user: User, orgId: string, accountId: string) {
@@ -564,11 +674,15 @@ export class InferenceService {
         await this.proxy.request(
           orgId,
           `/v8/management/credentials?name=${encodeURIComponent(String(entry.name))}`,
-          { method: "DELETE" },
+          {
+            method: "DELETE",
+          },
         );
       }
-      await this.ctx.audit(user, "inference.account.removed", accountId);
-      return { ok: true };
+      await this.ctx.audit(user, orgId, "inference.account.removed", accountId);
+      return {
+        ok: true,
+      };
     });
   }
   async refreshAccount(user: User, orgId: string, accountId: string) {
@@ -584,10 +698,15 @@ export class InferenceService {
       );
     await this.proxy.request(orgId, "/v8/management/credentials/refresh", {
       method: "POST",
-      body: { name: entry.name, auth_index: entry.auth_index },
+      body: {
+        name: entry.name,
+        auth_index: entry.auth_index,
+      },
     });
-    await this.ctx.audit(user, "inference.account.refreshed", accountId);
-    return { ok: true };
+    await this.ctx.audit(user, orgId, "inference.account.refreshed", accountId);
+    return {
+      ok: true,
+    };
   }
   async startOAuth(
     user: User,
@@ -658,11 +777,20 @@ export class InferenceService {
       "INSERT INTO inference_oauth_sessions (id,org_id,user_id,provider,state,expires_at,status) VALUES (?,?,?,?,?,?,?)",
       [id, orgId, user.id, provider, state, expiresAt, "pending"],
     );
-    await this.ctx.audit(user, "inference.subscription.started", id, {
+    await this.ctx.audit(user, orgId, "inference.subscription.started", id, {
       provider,
-      ...(provider === "anthropic" ? { riskAcknowledged: true } : {}),
+      ...(provider === "anthropic"
+        ? {
+            riskAcknowledged: true,
+          }
+        : {}),
     });
-    return { id, url: authUrl, userCode: text(data.user_code, 32), expiresAt };
+    return {
+      id,
+      url: authUrl,
+      userCode: text(data.user_code, 32),
+      expiresAt,
+    };
   }
   private async oauthSession(
     user: User,
@@ -684,7 +812,10 @@ export class InferenceService {
   }
   async oauthStatus(user: User, orgId: string, id: string) {
     const row = await this.oauthSession(user, orgId, id);
-    if (row.status !== "pending") return { status: row.status };
+    if (row.status !== "pending")
+      return {
+        status: row.status,
+      };
     const data = object(
       await this.proxy.request(
         orgId,
@@ -705,7 +836,9 @@ export class InferenceService {
     return {
       status,
       ...(status === "error"
-        ? { message: "Sign-in did not complete. Start a new sign-in session." }
+        ? {
+            message: "Sign-in did not complete. Start a new sign-in session.",
+          }
         : {}),
     };
   }
@@ -756,26 +889,35 @@ export class InferenceService {
         code: parsed.searchParams.get("code"),
       },
     });
-    return { status: "pending" }; // Exchange and persistence still need status confirmation.
+    return {
+      status: "pending",
+    }; // Exchange and persistence still need status confirmation.
   }
+
   async cancelOAuth(user: User, orgId: string, id: string) {
     const row = await this.oauthSession(user, orgId, id);
     if (row.status === "pending")
       await this.proxy.request(
         orgId,
         `/v8/management/oauth/session?state=${encodeURIComponent(row.state)}`,
-        { method: "DELETE" },
+        {
+          method: "DELETE",
+        },
       );
     await this.ctx.db.run(
       "UPDATE inference_oauth_sessions SET status=? WHERE id=?",
       ["cancelled", row.id],
     );
-    return { status: "cancelled" };
+    return {
+      status: "cancelled",
+    };
   }
   async models(orgId: string): Promise<InferenceModel[]> {
     if (!(await this.options.registry.resolve(orgId))) return [];
     const data = object(
-      await this.proxy.request(orgId, "/v1/models", { client: true }),
+      await this.proxy.request(orgId, "/v1/models", {
+        client: true,
+      }),
     );
     if (!Array.isArray(data.data)) return [];
     const accounts = await this.ctx.db.all<Pick<ApiAccount, "id" | "provider">>(
@@ -857,14 +999,21 @@ export class InferenceService {
       );
   }
   async usage(orgId: string) {
-    if (!(await this.options.registry.resolve(orgId))) return { items: [] };
+    if (!(await this.options.registry.resolve(orgId)))
+      return {
+        items: [],
+      };
     const [apiUsage, subscriptions] = await Promise.all([
       this.proxy.request(orgId, "/v8/management/observability/usage/api-keys"),
       this.rawAccounts(orgId),
     ]);
     const totals = new Map<
       string,
-      { provider: string; successes: number; failures: number }
+      {
+        provider: string;
+        successes: number;
+        failures: number;
+      }
     >();
     function add(provider: string, success: unknown, failed: unknown) {
       const total = totals.get(provider) ?? {
@@ -891,9 +1040,10 @@ export class InferenceService {
       observedAt: new Date().toISOString(),
     };
   }
-  async issueGateway(
-    scope: RunScope,
-  ): Promise<{ baseUrl: string; token: string }> {
+  async issueGateway(scope: RunScope): Promise<{
+    baseUrl: string;
+    token: string;
+  }> {
     if (!(await this.options.canUseRun(scope)))
       throw new InferenceError(
         403,
@@ -920,7 +1070,7 @@ export class InferenceService {
       this.options.runtimeApiOrigin ?? this.ctx.config.publicOrigin
     ).replace(/\/$/, "");
     return {
-      baseUrl: `${origin}/api/runtime/inference/${encodeURIComponent(scope.projectId)}`,
+      baseUrl: `${origin}/enterprise/api/runtime/inference/${encodeURIComponent(scope.projectId)}`,
       token,
     };
   }

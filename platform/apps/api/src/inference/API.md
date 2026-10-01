@@ -1,6 +1,6 @@
 # Central inference API
 
-All browser endpoints below begin `/api/organizations/:orgId/inference` and require an organization admin/owner, except GET models also permits organization members. All mutations require normal session Origin/CSRF checks. List fields camelCase; never return upstream secrets/configs/raw proxy errors. No employee-owned connections.
+All browser endpoints below begin `/enterprise/api/organizations/:orgId/inference` and require an organization admin/owner, except GET models also permits organization members. All mutations require normal session Origin/CSRF checks. List fields camelCase; never return upstream secrets/configs/raw proxy errors. No employee-owned connections.
 
 - `GET /accounts` → `{configured:boolean,items:[{id,type:'subscription'|'api_key',provider:'openai'|'anthropic'|'xai'|'openrouter'|'custom',label,status,enabled,available?,priority?,successes?,failures?,nextRetryAt?,lastRefreshAt?,createdAt?}],notice:string}`. No proxy returns configured:false, empty items.
 - `POST /accounts` `{provider,label,apiKey,baseUrl?,models?:string[]}` → account. Providers openai/anthropic/xai/openrouter/custom. `baseUrl` only used for custom; public HTTPS custom origins are allowed; private origins require deployment approval. `models` optional; saving verifies the key with the provider and discovers models automatically. Optional supplied selections must exist in the discovered catalog. Server URL/key fields write-only; never retained in frontend state after save.

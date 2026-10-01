@@ -24,7 +24,7 @@ const request: RuntimeRequest = {
   mounts: [],
   sessionDirectory: "/synthetic/session",
   gateway: {
-    baseUrl: "http://api:4100/api/runtime/inference/test-project",
+    baseUrl: "http://api:4100/enterprise/api/runtime/inference/test-project",
     token: `wme_run_${randomBytes(32).toString("base64url")}`,
   },
 };

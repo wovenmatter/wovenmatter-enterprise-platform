@@ -32,7 +32,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
   "routes": [
     {
       "method": "GET",
-      "path": "/api/files",
+      "path": "/enterprise/api/files",
       "query": {
         "orgId": "required",
         "projectId": "optional",
@@ -45,7 +45,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "POST",
-      "path": "/api/files/upload",
+      "path": "/enterprise/api/files/upload",
       "encoding": "multipart/form-data",
       "fields": {
         "orgId": "required",
@@ -68,7 +68,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "POST",
-      "path": "/api/files/folders",
+      "path": "/enterprise/api/files/folders",
       "body": {
         "orgId": "required",
         "projectId": "optional",
@@ -78,7 +78,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "PATCH",
-      "path": "/api/files/:fileId",
+      "path": "/enterprise/api/files/:fileId",
       "query": {
         "projectId": "required when accessing through a project share"
       },
@@ -87,7 +87,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "POST",
-      "path": "/api/files/:fileId/transfer",
+      "path": "/enterprise/api/files/:fileId/transfer",
       "query": { "projectId": "source project context when shared" },
       "body": {
         "destination": {
@@ -101,13 +101,13 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "DELETE",
-      "path": "/api/files/:fileId",
+      "path": "/enterprise/api/files/:fileId",
       "query": { "projectId": "source project context when shared" },
       "responseStatus": 204
     },
     {
       "method": "GET",
-      "path": "/api/files/:fileId/content",
+      "path": "/enterprise/api/files/:fileId/content",
       "query": {
         "projectId": "source project context when shared",
         "versionId": "optional exact prior version"
@@ -121,7 +121,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "GET",
-      "path": "/api/files/:fileId/versions",
+      "path": "/enterprise/api/files/:fileId/versions",
       "query": { "projectId": "source project context when shared" },
       "response": {
         "items": [
@@ -136,7 +136,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "GET",
-      "path": "/api/files/:fileId/shares",
+      "path": "/enterprise/api/files/:fileId/shares",
       "access": "organization admin",
       "response": {
         "items": [
@@ -151,7 +151,7 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "POST",
-      "path": "/api/files/:fileId/shares",
+      "path": "/enterprise/api/files/:fileId/shares",
       "access": "organization admin",
       "body": {
         "projectId": "required",
@@ -162,13 +162,13 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "DELETE",
-      "path": "/api/files/:fileId/shares/:projectId",
+      "path": "/enterprise/api/files/:fileId/shares/:projectId",
       "access": "organization admin",
       "responseStatus": 204
     },
     {
       "method": "GET",
-      "path": "/api/files/:fileId/grants",
+      "path": "/enterprise/api/files/:fileId/grants",
       "access": "organization admin",
       "response": {
         "items": [
@@ -183,14 +183,14 @@ IDs below are opaque. A file keeps its identity after ordinary rename/move and r
     },
     {
       "method": "POST",
-      "path": "/api/files/:fileId/grants",
+      "path": "/enterprise/api/files/:fileId/grants",
       "access": "organization admin",
       "body": { "userId": "organization member", "access": "read|write" },
       "responseStatus": 204
     },
     {
       "method": "DELETE",
-      "path": "/api/files/:fileId/grants/:userId",
+      "path": "/enterprise/api/files/:fileId/grants/:userId",
       "access": "organization admin",
       "responseStatus": 204
     }
@@ -226,4 +226,4 @@ readFileVersion(ctx, user, fileId, {projectId?,versionId?})
 // -> {bytes:Buffer,name,versionId,size}
 ```
 
-Shared-mount revocation invokes `ctx.onAccessChanged`; the conversation manager must cancel affected running tasks and the live library must stop revoked data mounts. Supervisors should revalidate paths/mount plans at dispatch. Linux mount sources must be checked immediately before container creation.
+Shared-mount revocation invokes `ctx.onAccessChanged`; the conversation manager must cancel affected running tasks and the project supervisor must stop scheduled work using revoked data mounts. Supervisors should revalidate paths/mount plans at dispatch. Linux mount sources must be checked immediately before each isolated execution.

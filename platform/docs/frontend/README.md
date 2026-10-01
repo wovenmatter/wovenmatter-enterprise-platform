@@ -14,7 +14,7 @@ Owners start in Administration, whose sidebar lists all organizations. Organizat
 
 Preferred integrated development/acceptance: build from repository root with `npm run build` and serve the platform API at its configured public origin. The API serves the built web assets and API from the same origin, preserving cookie and CSRF checks.
 
-For local development, run `bash platform/dev-launch.sh` for the API and `npm run dev:web` in a second terminal. Both run in the foreground on loopback (API 4160, Vite 5173). Open `http://localhost:5173`; Vite proxies `/api` and `/share` to the API while preserving Host/Origin. `platform/dev.env.example` documents generic settings. No mail provider or supervisor is configured by default. Provider inference and generated-app runtime acceptance require the full deployment stack. Stop each process with Ctrl-C; never reuse a running installation's state directory.
+For local development, run `bash platform/dev-launch.sh` for the API and `npm run dev:web` in a second terminal. Both run in the foreground on loopback (API 4160, Vite 5173). Open `http://localhost:5173/enterprise`; Vite proxies `/enterprise/api` and `/enterprise/reports` to the API while preserving Host/Origin. `platform/dev.env.example` documents generic settings. No mail provider or supervisor is configured by default. Provider inference and persistent workspace runtime acceptance require the full deployment stack. Stop each process with Ctrl-C; never reuse a running installation's state directory.
 
 ## State and security boundaries
 

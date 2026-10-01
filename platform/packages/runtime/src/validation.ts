@@ -164,11 +164,30 @@ export async function validateHostRequest(
     );
 }
 export function validateEvent(value: unknown): RuntimeEvent {
+  const event = validateEventBody(value);
+  const sequence = (value as { sequence?: unknown }).sequence;
+  if (sequence !== undefined) {
+    if (!Number.isSafeInteger(sequence) || Number(sequence) < 1)
+      throw new RuntimeError(
+        "invalid_cursor",
+        "Invalid runtime event sequence",
+      );
+    return { ...event, sequence: sequence as number };
+  }
+  return event;
+}
+function validateEventBody(value: unknown): RuntimeEvent {
   if (!value || typeof value !== "object")
     throw new RuntimeError("invalid_event", "Invalid runtime event");
   const v = value as Record<string, unknown>;
   switch (v.type) {
+    case "attached":
+      return {
+        type: "attached",
+        ...(v.terminal === true ? { terminal: true } : {}),
+      };
     case "started":
+    case "input_accepted":
     case "completed":
     case "cancelled":
       return { type: v.type };
@@ -222,7 +241,10 @@ export function validateEvent(value: unknown): RuntimeEvent {
     case "failed":
       return {
         type: "failed",
-        code: "harness_failed",
+        code:
+          typeof v.code === "string" && /^[a-z][a-z_]{0,63}$/.test(v.code)
+            ? v.code
+            : "harness_failed",
         message:
           "The agent runtime failed. The request was not automatically replayed.",
       };

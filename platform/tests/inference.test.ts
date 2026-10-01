@@ -30,11 +30,11 @@ async function fixture() {
   const now = new Date().toISOString();
   await db.batch([
     {
-      sql: "INSERT INTO organizations VALUES (?,?,?)",
+      sql: "INSERT INTO organizations(id,name,created_at) VALUES (?,?,?)",
       params: [orgId, "One", now],
     },
     {
-      sql: "INSERT INTO organizations VALUES (?,?,?)",
+      sql: "INSERT INTO organizations(id,name,created_at) VALUES (?,?,?)",
       params: [otherOrg, "Two", now],
     },
     ...[
@@ -225,14 +225,14 @@ test("admin account/usage DTOs omit credentials, paths, opaque claims and compos
   const f = await fixture();
   try {
     const account = await f.app.inject(
-      `/api/organizations/${f.orgId}/inference/accounts`,
+      `/enterprise/api/organizations/${f.orgId}/inference/accounts`,
     );
     assert.equal(account.statusCode, 200);
     const data = account.json();
     assert.equal(data.items[0].label, "admin@example.com");
     assert.equal(data.items[0].priority, 5);
     const usage = await f.app.inject(
-      `/api/organizations/${f.orgId}/inference/usage`,
+      `/enterprise/api/organizations/${f.orgId}/inference/usage`,
     );
     assert.deepEqual(usage.json().items, [
       { provider: "openai", successes: 4, failures: 2 },
@@ -252,7 +252,7 @@ test("admin account/usage DTOs omit credentials, paths, opaque claims and compos
     }
     const refresh = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgId}/inference/accounts/${data.items[0].id}/refresh`,
+      url: `/enterprise/api/organizations/${f.orgId}/inference/accounts/${data.items[0].id}/refresh`,
     });
     assert.equal(refresh.body, '{"ok":true}');
   } finally {
@@ -265,14 +265,14 @@ test("other organizations and ordinary employees cannot administer accounts or s
     for (const role of ["other", "member"])
       for (const path of ["accounts", "usage"]) {
         const response = await f.app.inject({
-          url: `/api/organizations/${f.orgId}/inference/${path}`,
+          url: `/enterprise/api/organizations/${f.orgId}/inference/${path}`,
           headers: { "x-test-user": role },
         });
         assert.ok([403, 404].includes(response.statusCode));
       }
     const denied = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgId}/inference/oauth`,
+      url: `/enterprise/api/organizations/${f.orgId}/inference/oauth`,
       headers: { "x-test-user": "member" },
       payload: { provider: "openai" },
     });
@@ -287,7 +287,7 @@ test("API keys use v8 family groups and never persist in the application databas
   try {
     const response = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgId}/inference/accounts`,
+      url: `/enterprise/api/organizations/${f.orgId}/inference/accounts`,
       payload: {
         provider: "openai",
         label: "Main API",
@@ -302,7 +302,7 @@ test("API keys use v8 family groups and never persist in the application databas
     assert.equal(upstream[0]?.keys[0]?.["api-key"], "secret-key-12345");
     const patch = await f.app.inject({
       method: "PATCH",
-      url: `/api/organizations/${f.orgId}/inference/accounts/${response.json().id}`,
+      url: `/enterprise/api/organizations/${f.orgId}/inference/accounts/${response.json().id}`,
       payload: { enabled: false, priority: 8 },
     });
     assert.equal(patch.statusCode, 200);
@@ -312,7 +312,7 @@ test("API keys use v8 family groups and never persist in the application databas
     );
     const remove = await f.app.inject({
       method: "DELETE",
-      url: `/api/organizations/${f.orgId}/inference/accounts/${response.json().id}`,
+      url: `/enterprise/api/organizations/${f.orgId}/inference/accounts/${response.json().id}`,
     });
     assert.equal(remove.statusCode, 200);
     assert.deepEqual(f.groups.codex, []);
@@ -326,7 +326,7 @@ test("failed upstream save remains needs_attention and exposes no upstream error
     f.setFailure(true, "/config/api-keys/");
     const response = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgId}/inference/accounts`,
+      url: `/enterprise/api/organizations/${f.orgId}/inference/accounts`,
       payload: {
         provider: "openai",
         label: "Main",
@@ -351,7 +351,7 @@ test("failed upstream save remains needs_attention and exposes no upstream error
 test("Claude sign-in requires acknowledgement and only the initiating org admin can submit its bound callback", async () => {
   const f = await fixture();
   try {
-    const base = `/api/organizations/${f.orgId}/inference/oauth`;
+    const base = `/enterprise/api/organizations/${f.orgId}/inference/oauth`;
     const missing = await f.app.inject({
       method: "POST",
       url: base,
@@ -377,7 +377,7 @@ test("Claude sign-in requires acknowledgement and only the initiating org admin 
     });
     assert.equal(wrong.statusCode, 400);
     const cross = await f.app.inject({
-      url: `/api/organizations/${f.otherOrg}/inference/oauth/${id}`,
+      url: `/enterprise/api/organizations/${f.otherOrg}/inference/oauth/${id}`,
       headers: { "x-test-user": "other" },
     });
     assert.equal(cross.statusCode, 404);
@@ -402,7 +402,7 @@ test("run tokens are hashed, bound to project and selected model, revoke immedia
     const gateway = await f.service.issueGateway(f.scope);
     assert.equal(
       gateway.baseUrl,
-      `http://api.internal:4100/api/runtime/inference/${f.projectId}`,
+      `http://api.internal:4100/enterprise/api/runtime/inference/${f.projectId}`,
     );
     const row = await f.db.get("SELECT * FROM inference_gateway_tokens");
     assert.ok(!JSON.stringify(row).includes(gateway.token));
@@ -412,7 +412,7 @@ test("run tokens are hashed, bound to project and selected model, revoke immedia
     );
     const response = await f.app.inject({
       method: "POST",
-      url: `/api/runtime/inference/${f.projectId}/v1/responses`,
+      url: `/enterprise/api/runtime/inference/${f.projectId}/v1/responses`,
       headers: { authorization: `Bearer ${gateway.token}` },
       payload: { model: "gpt-example", input: "Hello" },
     });
@@ -423,7 +423,7 @@ test("run tokens are hashed, bound to project and selected model, revoke immedia
     );
     const wrongModel = await f.app.inject({
       method: "POST",
-      url: `/api/runtime/inference/${f.projectId}/v1/responses`,
+      url: `/enterprise/api/runtime/inference/${f.projectId}/v1/responses`,
       headers: { authorization: `Bearer ${gateway.token}` },
       payload: { model: "claude-example", input: "Hello" },
     });
@@ -445,7 +445,7 @@ test("membership/run revocation denies inference before another provider request
     const before = f.requests.length;
     const response = await f.app.inject({
       method: "POST",
-      url: `/api/runtime/inference/${f.projectId}/v1/messages`,
+      url: `/enterprise/api/runtime/inference/${f.projectId}/v1/messages`,
       headers: { "x-api-key": gateway.token },
       payload: { model: "gpt-example", messages: [] },
     });
@@ -460,12 +460,12 @@ test("gateway exposes no management endpoint and rejects anonymous requests", as
   try {
     const gateway = await f.service.issueGateway(f.scope);
     const management = await f.app.inject({
-      url: `/api/runtime/inference/${f.projectId}/v8/management/config`,
+      url: `/enterprise/api/runtime/inference/${f.projectId}/v8/management/config`,
       headers: { authorization: `Bearer ${gateway.token}` },
     });
     assert.equal(management.statusCode, 404);
     const models = await f.app.inject(
-      `/api/runtime/inference/${f.projectId}/v1/models`,
+      `/enterprise/api/runtime/inference/${f.projectId}/v1/models`,
     );
     assert.equal(models.statusCode, 401);
   } finally {
@@ -590,58 +590,66 @@ test("token expiry and revoked user status stop inference even when a token hash
     await f.close();
   }
 });
-test("active provider stream aborts after access is revoked", { timeout: 10000 }, async () => {
-  const f = await fixture();
-  let aborted = false;
-  let started!: () => void;
-  const streamStarted = new Promise<void>((resolve) => { started = resolve; });
-  try {
-    const streamingFetch: typeof fetch = async (_input, init) => {
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode('data: {"type":"response.created"}\n\n'),
-            );
-            started();
-            init?.signal?.addEventListener(
-              "abort",
-              () => {
-                aborted = true;
-                controller.close();
-              },
-              { once: true },
-            );
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    };
-    const service = new InferenceService(f.ctx, {
-      registry: f.service.options.registry,
-      canUseRun: async () => !aborted && active,
-      fetcher: streamingFetch,
+test(
+  "active provider stream aborts after access is revoked",
+  { timeout: 10000 },
+  async () => {
+    const f = await fixture();
+    let aborted = false;
+    let started!: () => void;
+    const streamStarted = new Promise<void>((resolve) => {
+      started = resolve;
     });
-    let active = true;
-    const gateway = await service.issueGateway(f.scope);
-    const app = Fastify();
-    await registerInferenceRoutes(app, f.ctx, service);
-    const pending = app.inject({
-      method: "POST",
-      url: `/api/runtime/inference/${f.projectId}/v1/responses`,
-      headers: { authorization: `Bearer ${gateway.token}` },
-      payload: { model: "gpt-example", input: "Hello" },
-    });
-    await streamStarted;
-    active = false;
-    const result = await pending;
-    assert.equal(result.statusCode, 200);
-    assert.equal(aborted, true);
-    await app.close();
-  } finally {
-    await f.close();
-  }
-});
+    try {
+      const streamingFetch: typeof fetch = async (_input, init) => {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'data: {"type":"response.created"}\n\n',
+                ),
+              );
+              started();
+              init?.signal?.addEventListener(
+                "abort",
+                () => {
+                  aborted = true;
+                  controller.close();
+                },
+                { once: true },
+              );
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      };
+      const service = new InferenceService(f.ctx, {
+        registry: f.service.options.registry,
+        canUseRun: async () => !aborted && active,
+        fetcher: streamingFetch,
+      });
+      let active = true;
+      const gateway = await service.issueGateway(f.scope);
+      const app = Fastify();
+      await registerInferenceRoutes(app, f.ctx, service);
+      const pending = app.inject({
+        method: "POST",
+        url: `/enterprise/api/runtime/inference/${f.projectId}/v1/responses`,
+        headers: { authorization: `Bearer ${gateway.token}` },
+        payload: { model: "gpt-example", input: "Hello" },
+      });
+      await streamStarted;
+      active = false;
+      const result = await pending;
+      assert.equal(result.statusCode, 200);
+      assert.equal(aborted, true);
+      await app.close();
+    } finally {
+      await f.close();
+    }
+  },
+);
 test("API-key preflight rejects a model the provider did not advertise", async () => {
   const f = await fixture();
   try {
@@ -691,7 +699,7 @@ test("API shutdown aborts an active inference stream before waiting for HTTP dra
     const gateway = await f.service.issueGateway(f.scope);
     const origin = await f.app.listen({ host: "127.0.0.1", port: 0 });
     const response = await fetch(
-      `${origin}/api/runtime/inference/${f.projectId}/v1/responses`,
+      `${origin}/enterprise/api/runtime/inference/${f.projectId}/v1/responses`,
       {
         method: "POST",
         headers: {

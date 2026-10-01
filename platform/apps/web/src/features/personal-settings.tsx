@@ -1,7 +1,13 @@
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Folder, PanelLeftClose } from "lucide-react";
-import { errorMessage, send, useResource, type Organization, type User } from "../api";
+import {
+  errorMessage,
+  send,
+  useResource,
+  type Organization,
+  type User,
+} from "../api";
 import { safeContentUrl } from "../conversation-state";
 import {
   AsyncForm,
@@ -31,7 +37,7 @@ export function PersonalSettings({
       access: "read" | "write";
       status: string;
     }>;
-  }>("/api/me");
+  }>("/enterprise/api/me");
   const [saved, setSaved] = useState("");
   const [reset, setReset] = useState("");
   const [resetError, setResetError] = useState("");
@@ -52,7 +58,10 @@ export function PersonalSettings({
           Back to organization
         </Link>
       ) : null}
-      <PageHeader title="Personal settings" description="Manage your profile and preferences." />
+      <PageHeader
+        title="Personal settings"
+        description="Manage your profile and preferences."
+      />
       {profile.loading ? <Loading /> : null}
       <ErrorNotice message={profile.error} />
       <div className="settings-form">
@@ -61,7 +70,7 @@ export function PersonalSettings({
           submitLabel="Save profile"
           onSubmit={async (data) => {
             const updated = await send<User>(
-              "/api/me",
+              "/enterprise/api/me",
               { name: data.get("name"), theme: data.get("theme") },
               "PATCH",
             );
@@ -71,7 +80,12 @@ export function PersonalSettings({
           }}
         >
           <Field label="Display name">
-            <input name="name" required maxLength={160} defaultValue={current.name} />
+            <input
+              name="name"
+              required
+              maxLength={160}
+              defaultValue={current.name}
+            />
           </Field>
           <Field label="Theme">
             <select name="theme" defaultValue={current.theme}>
@@ -94,7 +108,9 @@ export function PersonalSettings({
           <div className="setting-row">
             <div>
               <strong>Role</strong>
-              <small>{current.role === "owner" ? "Platform owner" : current.role}</small>
+              <small>
+                {current.role === "owner" ? "Platform owner" : current.role}
+              </small>
             </div>
           </div>
         </div>
@@ -110,7 +126,7 @@ export function PersonalSettings({
             setResetPending(true);
             try {
               const result = await send<{ message: string }>(
-                "/api/password-reset/request",
+                "/enterprise/api/password-reset/request",
                 { email: current.email },
               );
               setReset(result.message);
@@ -134,7 +150,10 @@ export function PersonalSettings({
               {organizations.map((org) => (
                 <tr key={org.id}>
                   <td>
-                    <Link className="item-link" to={`/organizations/${org.id}/projects`}>
+                    <Link
+                      className="item-link"
+                      to={`/organizations/${org.id}/projects`}
+                    >
                       <Folder size={18} />
                       <strong>{org.name}</strong>
                     </Link>
@@ -144,7 +163,9 @@ export function PersonalSettings({
             </tbody>
           </table>
           {!profile.loading && !profile.error && !organizations.length ? (
-            <Empty title="No organization access">Your account has no organization access.</Empty>
+            <Empty title="No organization access">
+              Your account has no organization access.
+            </Empty>
           ) : null}
         </div>
       </section>
@@ -167,13 +188,17 @@ export function PersonalSettings({
                       </div>
                     </Link>
                   </td>
-                  <td>{project.access === "write" ? "Read & write" : "Read only"}</td>
+                  <td>
+                    {project.access === "write" ? "Full access" : "Read-only"}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
           {!profile.loading && !profile.error && !projects.length ? (
-            <Empty title="No project access">Projects you can open will appear here.</Empty>
+            <Empty title="No project access">
+              Projects you can open will appear here.
+            </Empty>
           ) : null}
         </div>
       </section>

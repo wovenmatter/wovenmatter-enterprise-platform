@@ -39,7 +39,11 @@ import {
   Modal,
   Status,
 } from "../components/ui";
-type Model = { id: string; name: string; provider: string };
+type Model = {
+  id: string;
+  name: string;
+  provider: string;
+};
 type Conversation = {
   id: string;
   title: string;
@@ -60,6 +64,9 @@ type Message = {
   content: string;
   runId: string;
   createdAt: string;
+  kind?: "message" | "comment";
+  delivery?: string;
+  error?: string;
   citations?: {
     fileId?: string;
     page?: number;
@@ -71,10 +78,16 @@ type Message = {
 type Run = {
   id: string;
   status: string;
-  error?: { code: string; message: string } | null;
+  error?: {
+    code: string;
+    message: string;
+  } | null;
   createdAt: string;
 };
-type Messages = List<Message> & { hasMore: boolean; nextBefore: string | null };
+type Messages = List<Message> & {
+  hasMore: boolean;
+  nextBefore: string | null;
+};
 const activeStatuses = new Set([
   "queued",
   "dispatching",
@@ -84,10 +97,10 @@ const activeStatuses = new Set([
 export function ConversationsPage({ project }: { project: Project }) {
   const { org } = useWorkspace();
   const list = useResource<List<Conversation>>(
-    `/api/projects/${project.id}/conversations`,
+    `/enterprise/api/projects/${project.id}/conversations`,
   );
   const models = useResource<List<Model>>(
-    `/api/organizations/${org.id}/inference/models`,
+    `/enterprise/api/organizations/${org.id}/inference/models`,
   );
   const [selected, setSelected] = useState<string>();
   const [creating, setCreating] = useState(false);
@@ -135,10 +148,10 @@ export function ConversationsPage({ project }: { project: Project }) {
                     {c.title}
                     <small>
                       {c.mode === "write" && c.effectiveMode === "read"
-                        ? "Read only for you"
+                        ? "Read-only for you"
                         : c.mode === "write"
                           ? "Full access"
-                          : "Read only"}
+                          : "Read-only"}
                       {c.activeRun ? " · Working" : ""}
                     </small>
                   </span>
@@ -182,7 +195,7 @@ export function ConversationsPage({ project }: { project: Project }) {
             onCancel={() => setCreating(false)}
             onSave={async (body) => {
               const c = await send<Conversation>(
-                `/api/projects/${project.id}/conversations`,
+                `/enterprise/api/projects/${project.id}/conversations`,
                 body,
               );
               setSelected(c.id);
@@ -217,7 +230,11 @@ function ConversationForm({
       onSubmit={async (d) =>
         onSave({
           title: d.get("title"),
-          mode: d.get("mode"),
+          ...(conversation
+            ? {}
+            : {
+                mode: d.get("mode"),
+              }),
           harness: d.get("harness") || null,
           model: d.get("model"),
         })
@@ -234,11 +251,15 @@ function ConversationForm({
       </Field>
       <Field
         label="Session permissions"
-        hint="Full access lets the agent change files within your project permissions."
+        hint="Access is fixed for this thread. Invited participants share its authority to direct the agent."
       >
-        <select name="mode" defaultValue={conversation?.mode ?? "read"}>
-          <option value="read">Read only</option>
-          {project.access === "write" ? (
+        <select
+          name="mode"
+          disabled={!!conversation}
+          defaultValue={conversation?.mode ?? "read"}
+        >
+          <option value="read">Read-only</option>
+          {project.access === "write" || conversation?.mode === "write" ? (
             <option value="write">Full access</option>
           ) : null}
         </select>
@@ -288,19 +309,35 @@ function Thread({
   onDeleted: () => void;
 }) {
   const { user, orgBase } = useWorkspace();
-  const detail = useResource<Conversation>(`/api/conversations/${id}`);
-  const messages = useResource<Messages>(`/api/conversations/${id}/messages`);
-  const runs = useResource<List<Run>>(`/api/conversations/${id}/runs`);
+  const detail = useResource<Conversation>(
+    `/enterprise/api/conversations/${id}`,
+  );
+  const messages = useResource<Messages>(
+    `/enterprise/api/conversations/${id}/messages`,
+  );
+  const runs = useResource<List<Run>>(
+    `/enterprise/api/conversations/${id}/runs`,
+  );
   const [older, setOlder] = useState<Message[]>([]);
-  const [history, setHistory] = useState<Message[]>([]);
+  const history = messages.data?.items ?? [];
   const pendingKey = `wme:pending:${user.id}:${id}`;
   const [restored] = useState(() => loadPendingMessage(pendingKey));
   const [before, setBefore] = useState<string | null>(null);
   const [olderLoaded, setOlderLoaded] = useState(false);
   const [draft, setDraft] = useState(restored?.content ?? "");
+  const [kind, setKind] = useState<"message" | "comment">(
+    restored?.kind ?? "message",
+  );
   const [sending, setSending] = useState(false);
   const [uncertain, setUncertain] = useState(Boolean(restored));
-  const request = useRef<{ id: string; content: string } | undefined>(restored);
+  const request = useRef<
+    | {
+        id: string;
+        content: string;
+        kind?: "message" | "comment";
+      }
+    | undefined
+  >(restored);
   const [error, setError] = useState("");
   const [streamState, setStreamState] = useState("Connecting…");
   const [initialCursor, setInitialCursor] = useState<number>();
@@ -322,7 +359,7 @@ function Thread({
     let timer: number | undefined;
     let disposed = false;
     const source = new EventSource(
-      `/api/conversations/${id}/events?after=${initialCursor}`,
+      `/enterprise/api/conversations/${id}/events?after=${initialCursor}`,
       {
         withCredentials: true,
       },
@@ -333,7 +370,10 @@ function Thread({
     };
     const update = (raw: Event) => {
       if (disposed) return;
-      let event: { type: string; data?: Record<string, unknown> };
+      let event: {
+        type: string;
+        data?: Record<string, unknown>;
+      };
       try {
         event = JSON.parse((raw as MessageEvent).data);
       } catch {
@@ -387,6 +427,9 @@ function Thread({
       "run.failed",
       "run.cancelled",
       "run.interrupted",
+      "message.comment",
+      "message.steering",
+      "message.delivery",
       "members.changed",
       "access.revoked",
     ])
@@ -406,10 +449,6 @@ function Thread({
     if (follow.current && scroll.current)
       scroll.current.scrollTop = scroll.current.scrollHeight;
   }, [messages.data, tool]);
-  useEffect(() => {
-    if (messages.data)
-      setHistory((previous) => mergeMessages(previous, messages.data!.items));
-  }, [messages.data]);
   async function submit() {
     if (sending || (!draft.trim() && !request.current)) return;
     setSending(true);
@@ -417,13 +456,15 @@ function Thread({
     const pending = request.current ?? {
       id: crypto.randomUUID(),
       content: draft,
+      kind,
     };
     request.current = pending;
     savePendingMessage(pendingKey, pending);
     try {
-      await send(`/api/conversations/${id}/messages`, {
+      await send(`/enterprise/api/conversations/${id}/messages`, {
         content: pending.content,
         requestId: pending.id,
+        kind: pending.kind ?? "message",
       });
       request.current = undefined;
       clearPendingMessage(pendingKey);
@@ -453,7 +494,7 @@ function Thread({
   async function loadOlder() {
     try {
       const page = await api<Messages>(
-        `/api/conversations/${id}/messages?before=${encodeURIComponent(before ?? messages.data?.nextBefore ?? "")}`,
+        `/enterprise/api/conversations/${id}/messages?before=${encodeURIComponent(before ?? messages.data?.nextBefore ?? "")}`,
       );
       setOlder((prev) => [...page.items, ...prev]);
       setBefore(page.nextBefore);
@@ -474,10 +515,10 @@ function Thread({
           <small>
             {detail.data?.mode === "write" &&
             detail.data?.effectiveMode === "read"
-              ? "Read only for you"
+              ? "Read-only for you"
               : detail.data?.mode === "write"
                 ? "Full access"
-                : "Read only"}{" "}
+                : "Read-only"}{" "}
             · {detail.data?.harness} · {detail.data?.model}
           </small>
         </div>
@@ -564,6 +605,15 @@ function Thread({
                   m.content
                 )}
               </div>
+              {m.kind === "comment" ? (
+                <small>Comment</small>
+              ) : m.delivery && m.delivery !== "accepted" ? (
+                <small role="status">
+                  {m.delivery === "pending"
+                    ? "Awaiting agent delivery"
+                    : (m.error ?? m.delivery)}
+                </small>
+              ) : null}
               {m.role === "assistant" &&
               runs.data?.items.find((run) => run.id === m.runId)?.error ? (
                 <small className="danger">
@@ -576,7 +626,7 @@ function Thread({
               {m.citations?.length ? (
                 <div className="citations">
                   {m.citations.map((c, i) =>
-                    c.url?.startsWith("/api/files/") ? (
+                    c.url?.startsWith("/enterprise/api/files/") ? (
                       <a
                         key={i}
                         href={
@@ -652,33 +702,60 @@ function Thread({
             }}
           />
           <div className="composer-controls">
+            <label>
+              Send as{" "}
+              <select
+                aria-label="Message mode"
+                value={kind}
+                disabled={sending || uncertain}
+                onChange={(e) =>
+                  setKind(e.target.value as "message" | "comment")
+                }
+              >
+                <option value="message">Message</option>
+                <option value="comment">Comment</option>
+              </select>
+            </label>
             <span className="connection-state">
+              {kind === "comment"
+                ? "Saved for later agent context. "
+                : active.length
+                  ? "Messages steer the active run. "
+                  : ""}
               {active.length
                 ? `${active.length} ${active.length === 1 ? "run" : "runs"} in progress`
                 : streamState}
             </span>
             <div className="row-actions">
-              {active.length ? (
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={async () => {
-                    try {
-                      await send(`/api/conversations/${id}/cancel`, {});
-                      runs.reload();
-                    } catch (e) {
-                      setError(errorMessage(e));
-                    }
-                  }}
-                >
-                  <Square size={14} />
-                  Stop
-                </button>
-              ) : null}
+              <button
+                type="button"
+                className="secondary"
+                title="Stop this thread's current work and background processes. Other threads keep running."
+                onClick={async () => {
+                  try {
+                    await send(
+                      `/enterprise/api/conversations/${id}/cancel`,
+                      {},
+                    );
+                    runs.reload();
+                  } catch (e) {
+                    setError(errorMessage(e));
+                  }
+                }}
+              >
+                <Square size={14} />
+                {active.length ? "Stop" : "Stop background work"}
+              </button>
               <button
                 type="submit"
                 className="send-button"
-                aria-label={uncertain ? "Retry message" : "Send message"}
+                aria-label={
+                  uncertain
+                    ? "Retry message"
+                    : kind === "comment"
+                      ? "Send comment"
+                      : "Send message"
+                }
                 disabled={sending || (!draft.trim() && !uncertain)}
               >
                 {uncertain ? "Retry" : <ArrowUp size={20} />}
@@ -695,7 +772,7 @@ function Thread({
             conversation={detail.data}
             onCancel={() => setEditing(false)}
             onSave={async (body) => {
-              await send(`/api/conversations/${id}`, body, "PATCH");
+              await send(`/enterprise/api/conversations/${id}`, body, "PATCH");
               detail.reload();
               refresh();
               setEditing(false);
@@ -704,19 +781,16 @@ function Thread({
         </Modal>
       ) : null}
       {members ? (
-        <ThreadMembers
-          id={id}
-          project={project}
-          creator={creator}
-          onClose={() => setMembers(false)}
-        />
+        <ThreadMembers id={id} onClose={() => setMembers(false)} />
       ) : null}
       {deleting ? (
         <Confirm
           title="Delete conversation?"
           onClose={() => setDeleting(false)}
           onConfirm={async () => {
-            await api(`/api/conversations/${id}`, { method: "DELETE" });
+            await api(`/enterprise/api/conversations/${id}`, {
+              method: "DELETE",
+            });
             onDeleted();
           }}
         >
@@ -726,59 +800,38 @@ function Thread({
     </>
   );
 }
-function ThreadMembers({
-  id,
-  project,
-  creator,
-  onClose,
-}: {
-  id: string;
-  project: Project;
-  creator: boolean;
-  onClose: () => void;
-}) {
-  const members = useResource<List<User & { isCreator?: boolean }>>(
-    `/api/conversations/${id}/members`,
+function ThreadMembers({ id, onClose }: { id: string; onClose: () => void }) {
+  const members = useResource<
+    List<
+      User & {
+        isCreator?: boolean;
+      }
+    >
+  >(`/enterprise/api/conversations/${id}/members`);
+  const people = useResource<List<User>>(
+    `/enterprise/api/conversations/${id}/eligible-members`,
   );
-  const people = useResource<List<User>>(`/api/projects/${project.id}/members`);
-  const [error, setError] = useState("");
   return (
     <Modal title="Conversation members" onClose={onClose}>
       <p className="muted">
         Conversations are private until you add people. Everyone here can read
-        and send messages.
+        and send messages. Everyone inherits this thread’s access mode,
+        including full access to direct edits when enabled.
       </p>
-      <ErrorNotice message={members.error || people.error || error} />
+      <ErrorNotice message={members.error || people.error} />
       {members.data?.items.map((u) => (
         <div className="setting-row" key={u.id}>
           <div>
             {u.name || u.email}
             <small>{u.email}</small>
           </div>
-          {creator && !u.isCreator ? (
-            <button
-              className="text-button danger"
-              onClick={async () => {
-                try {
-                  await api(`/api/conversations/${id}/members/${u.id}`, {
-                    method: "DELETE",
-                  });
-                  members.reload();
-                } catch (e) {
-                  setError(errorMessage(e));
-                }
-              }}
-            >
-              Remove
-            </button>
-          ) : null}
         </div>
       ))}
-      {creator ? (
+      {people.data ? (
         <AsyncForm
           submitLabel="Add person"
           onSubmit={async (d) => {
-            await send(`/api/conversations/${id}/members`, {
+            await send(`/enterprise/api/conversations/${id}/members`, {
               userId: d.get("userId"),
             });
             members.reload();

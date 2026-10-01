@@ -1,107 +1,173 @@
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+import { assertIsolation, proxy } from "./process-boundary.js";
 import {
   prepareNativeConfiguration,
   runCodex,
   runGrok,
   applyEgressEnvironment,
-} from "./native.ts";
-import { runClaude, runPi } from "./sdk.ts";
+  type NativeSessionState,
+} from "./native.js";
+import { runClaude, runPi } from "./sdk.js";
+import { SteeringChannel } from "./steering.js";
 import {
   RuntimeError,
   type ContainerRequest,
   type RuntimeEvent,
-} from "./types.ts";
-import { MAX_LINE, validateContainerRequest } from "./validation.ts";
-import { verifyMountEvidence } from "./mount-evidence.ts";
-
+} from "./types.js";
+import { verifyMountEvidence } from "./mount-evidence.js";
+import { MAX_LINE, validateContainerRequest } from "./validation.js";
+import { backgroundService } from "./background.js";
+import { runtimeEnvironment, egressEnvironment } from "./native.js";
 process.umask(0o027);
-
-async function assertIsolation(): Promise<void> {
-  if (process.platform !== "linux" || process.getuid?.() !== 10001)
-    throw new RuntimeError(
-      "isolation_missing",
-      "The agent must run in its isolated Linux container",
-    );
-  const status = await readFile("/proc/self/status", "utf8");
-  if (
-    !/^NoNewPrivs:\s+1$/m.test(status) ||
-    !/^Seccomp:\s+2$/m.test(status) ||
-    !/^CapEff:\s+0+$/m.test(status)
-  )
-    throw new RuntimeError(
-      "isolation_missing",
-      "Required kernel isolation is missing",
-    );
-  const profile = await readFile("/proc/self/attr/current", "utf8");
-  if (!profile.startsWith("wme-platform-agent (enforce)"))
-    throw new RuntimeError(
-      "isolation_missing",
-      "Required AppArmor profile is missing",
-    );
-}
-async function input(): Promise<ContainerRequest> {
-  let content = Buffer.alloc(0);
-  for await (const chunk of process.stdin) {
-    content = Buffer.concat([content, chunk]);
-    if (content.length > MAX_LINE)
-      throw new RuntimeError("request_limit", "Runtime request exceeds limit");
-  }
-  const result = JSON.parse(content.toString("utf8"));
-  validateContainerRequest(result);
-  return result;
-}
-let terminal = false;
-async function emit(event: RuntimeEvent): Promise<void> {
-  if (terminal)
-    throw new RuntimeError("event_after_terminal", "Run is already complete");
-  if (["completed", "cancelled", "failed"].includes(event.type))
-    terminal = true;
-  if (!process.stdout.write(JSON.stringify(event) + "\n"))
+await assertIsolation();
+const retained: NativeSessionState = {};
+let active:
+  | { id: string; channel: SteeringChannel; controller: AbortController }
+  | undefined;
+let identity: string | undefined;
+let prepared = false;
+async function output(value: unknown) {
+  if (!process.stdout.write(JSON.stringify(value) + "\n"))
     await once(process.stdout, "drain");
 }
-const abort = new AbortController();
-process.once("SIGTERM", () => abort.abort());
-process.once("SIGINT", () => abort.abort());
-let restoreEgress = () => {};
-try {
-  await assertIsolation();
-  const request = await input();
-  await verifyMountEvidence(request.mountEvidence!);
-  if (
-    !request.mountEvidence?.some((entry) => entry.target === "/workspace") ||
-    !request.mountEvidence.some((entry) => entry.target === "/session")
-  )
-    throw new RuntimeError(
-      "mount_attestation_missing",
-      "Workspace and session admission evidence is required",
-    );
-  restoreEgress = applyEgressEnvironment(request);
-  await prepareNativeConfiguration(request);
-  await emit({ type: "started" });
-  const execute = {
-    codex: runCodex,
-    claude: runClaude,
-    grok: runGrok,
-    pi: runPi,
-  }[request.harness];
-  await execute(request, emit, abort.signal);
-  await emit(
-    abort.signal.aborted ? { type: "cancelled" } : { type: "completed" },
-  );
-} catch (error) {
-  if (!terminal)
-    await emit(
-      abort.signal.aborted
-        ? { type: "cancelled" }
-        : {
-            type: "failed",
-            code: error instanceof RuntimeError ? error.code : "agent_failed",
-            message:
-              "Agent execution failed; the request was not automatically replayed.",
-          },
-    );
-  process.exitCode = 1;
-} finally {
-  restoreEgress();
+async function turn(request: ContainerRequest) {
+  validateContainerRequest(request);
+  if (active) throw new Error("Concurrent turn");
+  const signature = JSON.stringify([
+    request.harness,
+    request.model,
+    request.access,
+    request.gateway,
+  ]);
+  if (identity && identity !== signature)
+    throw new Error("Environment identity changed");
+  identity = signature;
+  const current = {
+    id: request.runId,
+    channel: new SteeringChannel(),
+    controller: new AbortController(),
+  };
+  active = current;
+  let terminal = false;
+  const emit = async (event: RuntimeEvent) => {
+    if (terminal || active !== current) return;
+    if (["completed", "cancelled", "failed"].includes(event.type))
+      terminal = true;
+    await output({ runId: current.id, event });
+  };
+  try {
+    await verifyMountEvidence(request.mountEvidence!);
+    if (!prepared) {
+      await proxy(4101, "/broker/gateway.sock");
+      if (request.egressProxyUrl) await proxy(4102, "/broker/egress.sock");
+      applyEgressEnvironment(request);
+      await prepareNativeConfiguration(request);
+      await backgroundService(
+        "/session/background",
+        "/tmp/wme-background.sock",
+        { ...runtimeEnvironment(), ...egressEnvironment(request) },
+      );
+      prepared = true;
+    }
+    await emit({ type: "started" });
+    if (request.harness === "codex")
+      await runCodex(
+        request,
+        emit,
+        current.controller.signal,
+        undefined,
+        current.channel,
+        retained,
+      );
+    else if (request.harness === "grok")
+      await runGrok(
+        request,
+        emit,
+        current.controller.signal,
+        undefined,
+        current.channel,
+        retained,
+      );
+    else if (request.harness === "claude")
+      await runClaude(
+        request,
+        emit,
+        current.controller.signal,
+        current.channel,
+        undefined,
+        retained,
+      );
+    else
+      await runPi(
+        request,
+        emit,
+        current.controller.signal,
+        current.channel,
+        retained,
+      );
+    await current.channel.settle();
+    await emit({
+      type: current.controller.signal.aborted ? "cancelled" : "completed",
+    });
+  } catch (error) {
+    await current.channel.settle();
+    await emit({
+      type: "failed",
+      code: error instanceof RuntimeError ? error.code : "agent_failed",
+      message: "The native turn failed; it was not replayed.",
+    });
+  } finally {
+    if (active === current) active = undefined;
+    // Retain the namespace, native adapter, environment and deliberately detached tools.
+    await output({ type: "turn_settled", runId: current.id });
+  }
 }
+const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+lines.on("line", (line) => {
+  if (Buffer.byteLength(line) > MAX_LINE) process.exit(1);
+  try {
+    const data = JSON.parse(line);
+    if (data.type === "turn") {
+      void turn(data.request).catch(() => process.exit(1));
+      return;
+    }
+    const current = active;
+    if (
+      data.type !== "steer" ||
+      !current ||
+      current.id !== data.runId ||
+      typeof data.input?.content !== "string" ||
+      data.input.content.length > 100000 ||
+      !Number.isSafeInteger(data.input.sequence)
+    )
+      throw new Error("Invalid input");
+    void current.channel
+      .submit(data.input)
+      .then(
+        () =>
+          output({
+            type: "steering_receipt",
+            runId: current.id,
+            id: data.input.id,
+            accepted: true,
+          }),
+        (error) =>
+          output({
+            type: "steering_receipt",
+            runId: current.id,
+            id: data.input.id,
+            accepted: false,
+            code:
+              error instanceof RuntimeError ? error.code : "steering_uncertain",
+          }),
+      )
+      .catch(() => process.exit(1));
+  } catch {
+    process.exit(1);
+  }
+});
+// This pipe belongs to the workspace service, never to a client attachment.
+lines.on("close", () => process.exit(0));
+for (const signal of ["SIGTERM", "SIGINT"] as const)
+  process.once(signal, () => process.exit(0));

@@ -13,8 +13,14 @@ const stateDir = await mkdtemp(join(tmpdir(), "wme-browser-"));
 const webRoot = join(stateDir, "web");
 await cp(resolve("platform/apps/web/dist"), webRoot, { recursive: true });
 const runtime = {
+  async ensureProject() {},
+  async stopProject() {},
+  async restoreProject() {},
+  async purgeProject() {},
+  async steer() {},
   async execute(request, emit, signal) {
     await emit({ type: "started" });
+    await emit({ type: "input_accepted" });
     for (const delta of [
       "Synthetic protocol fixture: ",
       "the request reached the durable runtime.",
@@ -40,7 +46,7 @@ const system = await buildApp(
     port,
     publicOrigin: origin,
     secureCookies: false,
-    contentOriginTemplate: `http://{assetId}.localhost:${port}`,
+    hosts: [{ id: "local", name: "Initial host" }],
   },
   { runtime, jobs: false, webRoot },
 );
@@ -71,7 +77,9 @@ const headers = {
   cookie: `wme_session=${session.token}`,
   "x-csrf-token": session.csrfToken,
 };
-const output = resolve("platform/.state/e2e");
+const output = resolve(
+  process.env.WME_E2E_OUTPUT ?? `${tmpdir()}/wme-e2e-evidence`,
+);
 await mkdir(output, { recursive: true });
 await writeFile(
   join(output, "auth.json"),
@@ -81,7 +89,7 @@ await writeFile(
         name: "wme_session",
         value: session.token,
         domain: "localhost",
-        path: "/",
+        path: "/enterprise",
         httpOnly: true,
         secure: false,
         sameSite: "Lax",
@@ -96,6 +104,7 @@ await writeFile(
   join(output, "fixture.json"),
   JSON.stringify({
     origin,
+    database: join(stateDir, "control/platform.sqlite"),
   }),
 );
 system.jobs.start();

@@ -24,7 +24,6 @@ services:
       WME_EGRESS_PORT: 4101
       WME_MAX_CONCURRENT_RUNS: ${WME_MAX_CONCURRENT_RUNS:-8}
       WME_MAX_CONCURRENT_RUNS_PER_ORGANIZATION: ${WME_MAX_CONCURRENT_RUNS_PER_ORGANIZATION:-4}
-      WME_CONTENT_ORIGIN_TEMPLATE: ${WME_CONTENT_ORIGIN_TEMPLATE:?Set separate asset origin template}
       WME_SUPERVISOR_SOCKET: ${WME_CANDIDATE_ROOT}/run/supervisor.sock
       WME_SUPERVISOR_TOKEN_FILE: /run/secrets/supervisor-token
     volumes:
@@ -63,20 +62,18 @@ services:
       WME_EGRESS_ENABLED: ${WME_EGRESS_ENABLED:-false}
       WME_EGRESS_PORT: 4101
       WME_PUBLIC_ORIGIN: ${WME_PUBLIC_ORIGIN:?Set HTTPS portal origin}
-      WME_CONTENT_ORIGIN_TEMPLATE: ${WME_CONTENT_ORIGIN_TEMPLATE:?Set separate asset origin template}
       WME_EGRESS_DENIED_IPS: ${WME_EGRESS_DENIED_IPS:-}
       WME_EGRESS_DENIED_HOSTS: ${WME_EGRESS_DENIED_HOSTS:-}
       WME_EGRESS_INGRESS_HOSTS: ${WME_EGRESS_INGRESS_HOSTS:-}
       WME_GATEWAY_CONTAINER: ${WME_API_CONTAINER:-wme-candidate-api}
       WME_RUNNER_IMAGE: ${WME_RUNNER_IMAGE:?}
       WME_RUNNER_NETWORK: wme-runtime
-      WME_ISOLATED_NETWORK_POOL: ${WME_ISOLATED_NETWORK_POOL:?Reserve an unused RFC1918 pool for isolated runtime and library networks}
+      WME_ISOLATED_NETWORK_POOL: ${WME_ISOLATED_NETWORK_POOL:?Reserve an unused RFC1918 pool for isolated project networks}
       WME_RUNNER_APPARMOR_PROFILE: ${WME_RUNNER_APPARMOR_PROFILE:-wme-platform-agent}
       WME_INFERENCE_ROOT: ${WME_CANDIDATE_ROOT}/private/inference
       WME_INFERENCE_IMAGE: ${WME_INFERENCE_IMAGE:?}
       WME_INFERENCE_NETWORK: wme-inference
       WME_INFERENCE_FIREWALL_ATTESTATION: ${WME_CANDIDATE_ROOT}/private/firewall-boot-id
-      WME_LIBRARY_IMAGE: ${WME_LIBRARY_IMAGE:?}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${WME_CANDIDATE_ROOT}:${WME_CANDIDATE_ROOT}
@@ -89,7 +86,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "const t=require('fs').readFileSync(process.env.WME_SUPERVISOR_TOKEN_FILE,'utf8').trim();const q=require('http').request({socketPath:process.env.WME_SUPERVISOR_SOCKET,path:'/healthz',headers:{authorization:'Bearer '+t}},r=>{r.resume();process.exit(r.statusCode===200?0:1)});q.on('error',()=>process.exit(1));q.end()",
+          "const t=require('fs').readFileSync(process.env.WME_SUPERVISOR_TOKEN_FILE,'utf8').trim();const q=require('http').request({socketPath:process.env.WME_SUPERVISOR_SOCKET,path:'/healthz',headers:{authorization:'Bearer '+t,'x-wme-host':process.env.WME_HOST_ID||'local'}},r=>{r.resume();process.exit(r.statusCode===200?0:1)});q.on('error',()=>process.exit(1));q.end()",
         ]
       interval: 10s
       timeout: 3s
