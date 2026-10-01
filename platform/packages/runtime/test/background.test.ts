@@ -19,14 +19,52 @@ test("a deliberately launched background process outlives its tool client, with 
   );
   let pid: number | undefined;
   t.after(async () => {
-    if (pid) {
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    try {
+      // Recover ownership even when the tool client fails before returning its receipt.
+      const { jobs } = JSON.parse(
+        await backgroundCommand(["list"], socket),
+      ) as {
+        jobs: { id: string; pid?: number }[];
+      };
+      for (const job of jobs) {
+        if (!job.pid) continue;
+        try {
+          process.kill(-job.pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+        }
       }
+      for (const job of jobs) {
+        if (!job.pid) continue;
+        const deadline = Date.now() + 5000;
+        let observed = "no terminal ownership record";
+        for (;;) {
+          try {
+            const record = JSON.parse(
+              await readFile(join(root, "jobs", job.id + ".json"), "utf8"),
+            );
+            if (record.pid === job.pid && record.state === "leader_exited")
+              break;
+            observed = JSON.stringify(record);
+          } catch (error) {
+            if (
+              !(error instanceof SyntaxError) &&
+              (error as NodeJS.ErrnoException).code !== "ENOENT"
+            )
+              throw error;
+            observed = String(error);
+          }
+          assert.ok(
+            Date.now() < deadline,
+            `Background job ${job.id} (${job.pid}) did not persist its exit: ${observed}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
+    } finally {
+      await new Promise<void>((resolve) => service.close(() => resolve()));
     }
-    await new Promise<void>((resolve) => service.close(() => resolve()));
+    // Closing the listener alone does not drain the child's asynchronous exit writer.
     await rm(root, { recursive: true, force: true });
   });
   const module = new URL("../src/background.js", import.meta.url).href;
