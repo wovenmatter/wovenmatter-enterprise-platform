@@ -11,12 +11,27 @@ Thank you for helping improve WovenMatter Enterprise.
 - Do not include credentials, provider transcripts, personal paths, private
   hosts, generated build products, or proprietary assets.
 
+## Local private material
+
+Keep private worktrees in `.worktrees/` or `worktrees/`, and working files,
+results, operator data and secrets in the root `workdirs/`, `results/`,
+`data/`, `var/`, `secrets/` or `backups/` directories. These directories
+are excluded from Git and container build contexts. Environment files and
+local database/backup exports must remain private. Only reviewed generic
+`*.env.example` and `*.env.*.example` files belong in source control.
+
 ## Validation
 
-Platform code has not been imported yet. Build and test instructions will be
-added with the source code. For now, check documentation links and review any
-workflow or governance changes carefully. Describe validation performed and
-any environment limitations in your pull request.
+Use Node.js 24.21.0 and npm 12.2.0. Install dependencies with `npm ci`,
+then run `npm run check` for the build and deterministic tests. Run
+`npm run test:coverage` when checking coverage, and install Chromium with
+`npx playwright install chromium` before `npm run test:e2e` for browser
+workflows. See [the development guide](platform/docs/DEVELOPMENT.md).
+
+Container acceptance installs host security policy and belongs on a dedicated
+Linux acceptance host or the isolated CI runner. Do not run it against a shared
+production host. Describe validation performed and any environment limitations
+in your pull request.
 
 Tests must be deterministic, require no provider credentials, and make no real
 LLM calls. Dependency updates are reviewed deliberately by maintainers.

@@ -1,0 +1,92 @@
+package	version	coverage_limitation
+@anthropic-ai/claude-agent-sdk-darwin-arm64	0.3.278	not installed for this platform
+@anthropic-ai/claude-agent-sdk-darwin-x64	0.3.278	not installed for this platform
+@anthropic-ai/claude-agent-sdk-linux-arm64	0.3.278	not installed for this platform
+@anthropic-ai/claude-agent-sdk-linux-arm64-musl	0.3.278	not installed for this platform
+@anthropic-ai/claude-agent-sdk-linux-x64-musl	0.3.278	not installed for this platform
+@anthropic-ai/claude-agent-sdk-win32-arm64	0.3.278	not installed for this platform
+@anthropic-ai/claude-agent-sdk-win32-x64	0.3.278	not installed for this platform
+@aws-sdk/credential-provider-http	3.972.74	no top-level license/notice file in installed package
+@aws-sdk/credential-provider-login	3.972.79	no top-level license/notice file in installed package
+@aws-sdk/nested-clients	3.997.46	no top-level license/notice file in installed package
+@earendil-works/chord	0.86.1	no top-level license/notice file in installed package
+@earendil-works/pi-agent-core	0.86.1	no top-level license/notice file in installed package
+@earendil-works/pi-ai	0.86.1	no top-level license/notice file in installed package
+@earendil-works/pi-coding-agent	0.86.1	no top-level license/notice file in installed package
+@earendil-works/pi-telemetry	0.86.1	no top-level license/notice file in installed package
+@earendil-works/pi-tui	0.86.1	no top-level license/notice file in installed package
+@esbuild/aix-ppc64	0.28.2	not installed for this platform
+@esbuild/android-arm	0.28.2	not installed for this platform
+@esbuild/android-arm64	0.28.2	not installed for this platform
+@esbuild/android-x64	0.28.2	not installed for this platform
+@esbuild/darwin-arm64	0.28.2	not installed for this platform
+@esbuild/darwin-x64	0.28.2	not installed for this platform
+@esbuild/freebsd-arm64	0.28.2	not installed for this platform
+@esbuild/freebsd-x64	0.28.2	not installed for this platform
+@esbuild/linux-arm	0.28.2	not installed for this platform
+@esbuild/linux-arm64	0.28.2	not installed for this platform
+@esbuild/linux-ia32	0.28.2	not installed for this platform
+@esbuild/linux-loong64	0.28.2	not installed for this platform
+@esbuild/linux-mips64el	0.28.2	not installed for this platform
+@esbuild/linux-ppc64	0.28.2	not installed for this platform
+@esbuild/linux-riscv64	0.28.2	not installed for this platform
+@esbuild/linux-s390x	0.28.2	not installed for this platform
+@esbuild/linux-x64	0.28.2	no top-level license/notice file in installed package
+@esbuild/netbsd-arm64	0.28.2	not installed for this platform
+@esbuild/netbsd-x64	0.28.2	not installed for this platform
+@esbuild/openbsd-arm64	0.28.2	not installed for this platform
+@esbuild/openbsd-x64	0.28.2	not installed for this platform
+@esbuild/openharmony-arm64	0.28.2	not installed for this platform
+@esbuild/sunos-x64	0.28.2	not installed for this platform
+@esbuild/win32-arm64	0.28.2	not installed for this platform
+@esbuild/win32-ia32	0.28.2	not installed for this platform
+@esbuild/win32-x64	0.28.2	not installed for this platform
+@rolldown/binding-android-arm-eabi	1.2.11	not installed for this platform
+@rolldown/binding-android-arm64	1.2.11	not installed for this platform
+@rolldown/binding-darwin-arm64	1.2.11	not installed for this platform
+@rolldown/binding-darwin-x64	1.2.11	not installed for this platform
+@rolldown/binding-freebsd-x64	1.2.11	not installed for this platform
+@rolldown/binding-linux-arm-gnueabihf	1.2.11	not installed for this platform
+@rolldown/binding-linux-arm64-gnu	1.2.11	not installed for this platform
+@rolldown/binding-linux-arm64-musl	1.2.11	not installed for this platform
+@rolldown/binding-linux-ppc64-gnu	1.2.11	not installed for this platform
+@rolldown/binding-linux-s390x-gnu	1.2.11	not installed for this platform
+@rolldown/binding-linux-x64-gnu	1.2.11	no top-level license/notice file in installed package
+@rolldown/binding-linux-x64-musl	1.2.11	not installed for this platform
+@rolldown/binding-openharmony-arm64	1.2.11	not installed for this platform
+@rolldown/binding-win32-arm64-msvc	1.2.11	not installed for this platform
+@rolldown/binding-win32-x64-msvc	1.2.11	not installed for this platform
+@typescript/typescript-aix-ppc64	7.0.2	not installed for this platform
+@typescript/typescript-darwin-arm64	7.0.2	not installed for this platform
+@typescript/typescript-darwin-x64	7.0.2	not installed for this platform
+@typescript/typescript-freebsd-arm64	7.0.2	not installed for this platform
+@typescript/typescript-freebsd-x64	7.0.2	not installed for this platform
+@typescript/typescript-linux-arm	7.0.2	not installed for this platform
+@typescript/typescript-linux-arm64	7.0.2	not installed for this platform
+@typescript/typescript-linux-loong64	7.0.2	not installed for this platform
+@typescript/typescript-linux-mips64el	7.0.2	not installed for this platform
+@typescript/typescript-linux-ppc64	7.0.2	not installed for this platform
+@typescript/typescript-linux-riscv64	7.0.2	not installed for this platform
+@typescript/typescript-linux-s390x	7.0.2	not installed for this platform
+@typescript/typescript-netbsd-arm64	7.0.2	not installed for this platform
+@typescript/typescript-netbsd-x64	7.0.2	not installed for this platform
+@typescript/typescript-openbsd-arm64	7.0.2	not installed for this platform
+@typescript/typescript-openbsd-x64	7.0.2	not installed for this platform
+@typescript/typescript-sunos-x64	7.0.2	not installed for this platform
+@typescript/typescript-win32-arm64	7.0.2	not installed for this platform
+@typescript/typescript-win32-x64	7.0.2	not installed for this platform
+abstract-logging	2.0.1	no top-level license/notice file in installed package
+data-uri-to-buffer	4.0.1	no top-level license/notice file in installed package
+fsevents	2.3.3	not installed for this platform
+lightningcss-android-arm64	1.33.0	not installed for this platform
+lightningcss-darwin-arm64	1.33.0	not installed for this platform
+lightningcss-darwin-x64	1.33.0	not installed for this platform
+lightningcss-freebsd-x64	1.33.0	not installed for this platform
+lightningcss-linux-arm-gnueabihf	1.33.0	not installed for this platform
+lightningcss-linux-arm64-gnu	1.33.0	not installed for this platform
+lightningcss-linux-arm64-musl	1.33.0	not installed for this platform
+lightningcss-linux-x64-musl	1.33.0	not installed for this platform
+lightningcss-win32-arm64-msvc	1.33.0	not installed for this platform
+lightningcss-win32-x64-msvc	1.33.0	not installed for this platform
+proxy-agent-negotiate	1.1.0	no top-level license/notice file in installed package
+standardwebhooks	1.1.1	no top-level license/notice file in installed package

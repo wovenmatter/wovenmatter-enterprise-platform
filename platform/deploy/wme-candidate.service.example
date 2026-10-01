@@ -1,0 +1,16 @@
+[Unit]
+Description=WovenMatter Enterprise Platform candidate application
+Requires=docker.service wme-candidate-firewall.service
+After=docker.service wme-candidate-firewall.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/wovenmatter-enterprise-candidate
+ExecStart=/usr/bin/docker compose --env-file /etc/wovenmatter-enterprise/candidate.env -f platform/deploy/compose.yaml up -d --wait
+ExecStop=/usr/bin/docker compose --env-file /etc/wovenmatter-enterprise/candidate.env -f platform/deploy/compose.yaml stop
+TimeoutStartSec=120
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target

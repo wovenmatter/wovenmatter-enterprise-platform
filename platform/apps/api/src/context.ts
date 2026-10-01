@@ -1,0 +1,207 @@
+import type { FastifyRequest } from "fastify";
+import { randomUUID } from "node:crypto";
+import type { Database } from "./db/index.js";
+import type { AppConfig } from "./config.js";
+import { readSession } from "./auth/session.js";
+export type { Database, SqlValue } from "./db/index.js";
+export type { AppConfig } from "./config.js";
+export class AppError extends Error {
+  constructor(
+    public statusCode: number,
+    public code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AppError";
+  }
+}
+export interface User {
+  id: string;
+  orgId: string | null;
+  email: string;
+  name: string;
+  role: "owner" | "admin" | "member";
+  enabled: boolean;
+  theme: "green" | "cognac";
+}
+export interface Project {
+  id: string;
+  orgId: string;
+  name: string;
+  description: string;
+  status: string;
+  access: "read" | "write";
+  createdAt: string;
+}
+export interface AppContext {
+  db: Database;
+  config: AppConfig;
+  onAccessChanged?: () => Promise<void>;
+  getSessionId(request: FastifyRequest): Promise<string | null>;
+  isSessionActive(sessionId: string, userId: string): Promise<boolean>;
+  requireUser(request: FastifyRequest): Promise<User>;
+  requireOrgAdmin(user: User, orgId: string): Promise<void>;
+  requireOrgMember(user: User, orgId: string): Promise<void>;
+  requireProject(
+    user: User,
+    projectId: string,
+    access?: "read" | "write",
+  ): Promise<Project>;
+  audit(
+    user: User,
+    action: string,
+    entityId: string,
+    details?: Record<string, unknown>,
+  ): Promise<void>;
+}
+export function mapUser(r: any): User {
+  return {
+    id: r.id,
+    orgId: r.org_id,
+    email: r.email,
+    name: r.name,
+    role: r.role,
+    enabled: !!r.enabled,
+    theme: r.theme === "cognac" ? "cognac" : "green",
+  };
+}
+export function mapProject(r: any, access?: "read" | "write"): Project {
+  return {
+    id: r.id,
+    orgId: r.org_id,
+    name: r.name,
+    description: r.description,
+    status: r.status,
+    access: access ?? r.access,
+    createdAt: r.created_at,
+  };
+}
+function auditDetails(value: unknown, depth = 0): unknown {
+  if (depth > 6) return "[truncated]";
+  if (typeof value === "string") return value.slice(0, 2000);
+  if (Array.isArray(value))
+    return value.slice(0, 50).map((item) => auditDetails(item, depth + 1));
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value)
+        .slice(0, 50)
+        .filter(
+          ([key]) =>
+            !/password|secret|token|credential|authorization|api.?key/i.test(
+              key,
+            ),
+        )
+        .map(([key, item]) => [key, auditDetails(item, depth + 1)]),
+    );
+  return value;
+}
+export function createContext(db: Database, config: AppConfig): AppContext {
+  const fresh = async (user: User) => {
+    const r = await db.get<any>(
+      "SELECT * FROM users WHERE id=? AND enabled=1",
+      [user.id],
+    );
+    if (!r) throw new AppError(401, "unauthorized", "Sign in to continue");
+    return mapUser(r);
+  };
+  const ctx: AppContext = {
+    db,
+    config,
+    async getSessionId(request) {
+      const session = await readSession(db, request, config.secureCookies);
+      return session?.id ?? null;
+    },
+    async isSessionActive(sessionId, userId) {
+      return !!(await db.get(
+        "SELECT s.id FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.user_id=? AND s.expires_at>? AND u.enabled=1",
+        [sessionId, userId, new Date().toISOString()],
+      ));
+    },
+    async requireUser(request) {
+      const session = await readSession(db, request, config.secureCookies);
+      if (!session)
+        throw new AppError(401, "unauthorized", "Sign in to continue");
+      return session.user;
+    },
+    async requireOrgMember(user, orgId) {
+      user = await fresh(user);
+      if (user.role !== "owner" && user.orgId !== orgId)
+        throw new AppError(404, "not_found", "Organization not found");
+      if (!(await db.get("SELECT id FROM organizations WHERE id=?", [orgId])))
+        throw new AppError(404, "not_found", "Organization not found");
+    },
+    async requireOrgAdmin(user, orgId) {
+      user = await fresh(user);
+      await ctx.requireOrgMember(user, orgId);
+      if (user.role !== "owner" && user.role !== "admin")
+        throw new AppError(
+          403,
+          "forbidden",
+          "Organization administrator access required",
+        );
+    },
+    async requireProject(user, projectId, requested = "read") {
+      user = await fresh(user);
+      const p = await db.get<any>(
+        "SELECT * FROM projects WHERE id=? AND status NOT IN (?,?)",
+        [projectId, "deleted", "deleting"],
+      );
+      if (!p || (user.role !== "owner" && user.orgId !== p.org_id))
+        throw new AppError(404, "not_found", "Project not found");
+      let effective: "read" | "write" = p.access;
+      if (user.role !== "owner" && user.role !== "admin") {
+        const membership = await db.get<any>(
+          "SELECT access FROM project_members WHERE project_id=? AND user_id=?",
+          [projectId, user.id],
+        );
+        if (!membership)
+          throw new AppError(404, "not_found", "Project not found");
+        if (membership.access === "read") effective = "read";
+      }
+      if (requested === "write" && effective !== "write")
+        throw new AppError(403, "read_only", "This project is read-only");
+      return mapProject(p, effective);
+    },
+    async audit(user, action, entityId, details = {}) {
+      const clean = auditDetails(details);
+      await db.run("INSERT INTO audit_events VALUES (?,?,?,?,?,?,?)", [
+        randomUUID(),
+        user.orgId,
+        user.id,
+        action,
+        entityId,
+        JSON.stringify(clean),
+        new Date().toISOString(),
+      ]);
+    },
+  };
+  return ctx;
+}
+export function objectBody(body: unknown): Record<string, unknown> {
+  if (!body || typeof body !== "object" || Array.isArray(body))
+    throw new AppError(400, "invalid_request", "Expected a JSON object");
+  return body as Record<string, unknown>;
+}
+export function stringValue(
+  value: unknown,
+  name: string,
+  max = 200,
+  allowEmpty = false,
+): string {
+  if (
+    typeof value !== "string" ||
+    value.length > max ||
+    (!allowEmpty && !value.trim())
+  )
+    throw new AppError(400, "invalid_request", `Invalid ${name}`);
+  return value.trim();
+}
+export function accessValue(
+  value: unknown,
+  fallback: "read" | "write" = "write",
+): "read" | "write" {
+  if (value === undefined) return fallback;
+  if (value !== "read" && value !== "write")
+    throw new AppError(400, "invalid_request", "Access must be read or write");
+  return value;
+}

@@ -1,0 +1,17 @@
+FROM golang:1.26-bookworm AS build
+ARG CLI_PROXY_REVISION=acdace936fa7df2905500c7f5e0a97d683138dea
+WORKDIR /source
+RUN git init && git remote add origin https://github.com/router-for-me/CLIProxyAPI.git && git fetch --depth=1 origin ${CLI_PROXY_REVISION} && git checkout --detach FETCH_HEAD && test "$(git rev-parse HEAD)" = "${CLI_PROXY_REVISION}"
+RUN CGO_ENABLED=1 GOOS=linux go build -buildvcs=false -trimpath -ldflags="-s -w -X main.Commit=${CLI_PROXY_REVISION}" -o /out/CLIProxyAPI ./cmd/server
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/* && groupadd --gid 10002 inference && useradd --uid 10002 --gid 10002 --no-create-home inference
+COPY --from=build /out/CLIProxyAPI /usr/local/bin/CLIProxyAPI
+COPY --from=build /source/LICENSE /usr/share/doc/cliproxyapi/LICENSE
+WORKDIR /tmp
+COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/wovenmatter-enterprise/
+COPY third-party /usr/share/doc/wovenmatter-enterprise/third-party
+USER 10002:10002
+EXPOSE 8317
+ENTRYPOINT ["/usr/local/bin/CLIProxyAPI"]
+CMD ["--config", "/config/config.yaml"]

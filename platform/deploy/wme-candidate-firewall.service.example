@@ -1,0 +1,15 @@
+[Unit]
+Description=WovenMatter Enterprise Platform candidate network isolation
+Requires=docker.service
+After=docker.service
+Before=wme-candidate.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/wovenmatter-enterprise/candidate.env
+# Replace checkout path with the reviewed candidate release directory.
+ExecStart=/bin/sh /opt/wovenmatter-enterprise-candidate/platform/scripts/install-inference-firewall.sh ${WME_CANDIDATE_ROOT}
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
