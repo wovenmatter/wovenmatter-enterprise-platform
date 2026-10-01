@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 import {
   mkdir,
   mkdtemp,
@@ -12,7 +13,8 @@ import {
   chown,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, networkInterfaces } from "node:os";
+import { boundaryTargets } from "./boundary-targets.mjs";
 import { ProjectDockerRuntime } from "../dist/packages/runtime/src/project-runtime.js";
 import { storageVolumeName } from "../dist/packages/runtime/src/volumes.js";
 import { createIsolatedNetwork } from "../dist/packages/runtime/src/networks.js";
@@ -127,6 +129,7 @@ const spec = {
 };
 await save();
 let complete = false;
+const hostListeners = [];
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitForFile(
   name,
@@ -399,7 +402,7 @@ const python='import ctypes,errno\\nlibc=ctypes.CDLL(None,use_errno=True)\\nfor 
 await new Promise((resolve,reject)=>{const w=new Worker('require("worker_threads").parentPort.postMessage("thread okay")',{eval:true,execArgv:[]});w.once('message',resolve);w.once('error',reject);});
 await (${verifyOwnChildSignal.toString()})(fs,assert,(await import('node:child_process')).spawn);
 assert.equal(fs.readdirSync('/proc').filter(p=>/^\\d+$/.test(p)).length<12,true);assert.throws(()=>fs.readFileSync('/session/../../state/sessions/sibling/codex/write/private'));
-for(const host of directTargets)await new Promise((resolve,reject)=>{const s=requireNet.connect({host,port:4100});s.setTimeout(500,()=>s.destroy(new Error('blocked')));s.on('error',()=>resolve());s.on('connect',()=>{s.destroy();reject(Error('Direct network escaped namespace'));});});
+for(const target of directTargets)await new Promise((resolve,reject)=>{const s=requireNet.connect({host:target.host,port:target.port});s.setTimeout(500,()=>s.destroy(new Error('blocked')));s.on('error',()=>resolve());s.on('connect',()=>{s.destroy();reject(Error('Direct network escaped namespace: '+target.kind));});});
 `;
 try {
   await createIsolatedNetwork(
@@ -459,15 +462,54 @@ try {
   const network = JSON.parse(
     await docker("network", "inspect", container.HostConfig.NetworkMode),
   )[0];
-  const gatewayAddress =
-    gatewayDetail.NetworkSettings.Networks[network.Name].IPAddress;
-  assert.ok(
-    gatewayAddress && network.IPAM.Config[0].Gateway,
-    "Actual peer and host gateway addresses are required",
+  const targets = boundaryTargets(network, gatewayDetail, networkInterfaces());
+  const directTargets = [{ kind: "peer", host: targets.peer, port: 4100 }];
+  for (const host of targets.hosts) {
+    // A live listener on the actual fixture bridge prevents a closed host port
+    // from masquerading as isolation. No wildcard/production interface binding.
+    const server = createServer((socket) => socket.end());
+    hostListeners.push(server);
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen({ host, port: 0 }, resolve);
+    });
+    directTargets.push({ kind: "host", host, port: server.address().port });
+  }
+  await writeFile(
+    join(root, "network-targets.json"),
+    JSON.stringify(
+      {
+        ...targets.diagnostics,
+        directTargets,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log(
+    "Actual boundary targets " +
+      JSON.stringify({
+        bridge: targets.diagnostics.network.bridge,
+        ipam: network.IPAM?.Config,
+        targets: directTargets,
+      }),
+  );
+  // Positive controls from the trusted project network must reach the same
+  // peer/host endpoints that the inner agent namespaces must not reach.
+  await trustedProbe(`import {connect} from 'node:net';
+for(const target of ${JSON.stringify(directTargets)}){
+ let connected=false,last;for(let attempt=0;attempt<5&&!connected;attempt++){
+  try{await new Promise((resolve,reject)=>{const s=connect(target.port,target.host);s.setTimeout(1000,()=>s.destroy(new Error('Positive control timed out')));s.once('error',reject);s.once('connect',()=>{s.destroy();resolve();});});connected=true;}
+  catch(error){last=error;await new Promise(resolve=>setTimeout(resolve,100));}
+ }if(!connected)throw new Error('Boundary positive control failed: '+JSON.stringify(target)+' '+last?.message);
+}console.log('PEER_AND_HOST_POSITIVE_CONTROLS_OK');`);
+  console.log("Actual peer and host listener positive controls passed.");
+  directTargets.push(
+    { kind: "public", host: "1.1.1.1", port: 4100 },
+    { kind: "metadata", host: "169.254.169.254", port: 4100 },
   );
   const boundary =
-    `const directTargets=${JSON.stringify([gatewayAddress, network.IPAM.Config[0].Gateway, "1.1.1.1", "169.254.169.254"])};` +
-    commonProbe;
+    `const directTargets=${JSON.stringify(directTargets)};` + commonProbe;
   const sibling = join(
     sessions,
     organizationId,
@@ -777,6 +819,11 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     "Persistent runtime boundary, native protocols, shared workspace, restart and scheduled read-only share acceptance passed.",
   );
 } finally {
+  await Promise.all(
+    hostListeners.map(
+      (server) => new Promise((resolve) => server.close(resolve)),
+    ),
+  );
   await writeFile(
     join(root, "result.json"),
     JSON.stringify(

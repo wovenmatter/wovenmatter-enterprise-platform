@@ -7,14 +7,15 @@ fi
 repo_root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$repo_root"
 docker info >/dev/null
+profiles=$(sudo cat /sys/kernel/security/apparmor/profiles)
 for profile in wme-platform-agent wme-project-supervisor; do
-  if ! sudo cat /sys/kernel/security/apparmor/profiles | rg -q "^${profile} \(enforce\)$"; then
+  if ! grep -Fxq "$profile (enforce)" <<< "$profiles"; then
     if [[ "${WME_INSTALL_TEST_PROFILES:-}" != 1 ]]; then
       echo "Required profile $profile is absent; operator policy setup is required." >&2
       exit 2
     fi
     # Fresh disposable CI runner only. Never replace a host's existing profile.
-    if sudo cat /sys/kernel/security/apparmor/profiles | rg -q "^${profile} "; then
+    if grep -Eq "^${profile} " <<< "$profiles"; then
       echo "Existing profile $profile is not enforcing; refusing to replace it." >&2
       exit 2
     fi
@@ -23,7 +24,7 @@ for profile in wme-platform-agent wme-project-supervisor; do
   fi
 done
 npm run build:server
-node --test platform/runtime/fixture-cleanup.test.mjs
+node --test platform/runtime/*.test.mjs
 image="${WME_AGENT_IMAGE:-wme-pr2-acceptance:ci-$(date +%s)-$$}"
 docker build --platform linux/amd64 -f platform/runtime/Dockerfile -t "$image" .
 if [[ "$EUID" == 0 ]]; then
