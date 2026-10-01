@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -83,6 +83,28 @@ async function fixture(t: test.TestContext) {
     owner,
   };
 }
+test("production image healthcheck uses the application's actual base-path route", async (t) => {
+  const s = await fixture(t);
+  const dockerfile = await readFile("Dockerfile", "utf8");
+  const healthPath = /^HEALTHCHECK .*path:'([^']+)'/m.exec(dockerfile)?.[1];
+  assert.ok(healthPath, "Production image must declare its HTTP health route");
+  const result = await s.app.inject({
+    url: healthPath,
+    headers: { host: "portal.test" },
+  });
+  assert.equal(result.statusCode, 200, result.body);
+  assert.deepEqual(result.json(), { status: "ok" });
+  assert.equal(
+    (
+      await s.app.inject({
+        url: healthPath,
+        headers: { host: "unrelated.test" },
+      })
+    ).statusCode,
+    404,
+  );
+});
+
 test("assembled platform provisions a project, renders a safe report and immediately revokes it on deletion", async (t) => {
   const s = await fixture(t);
   const org = await s.app.inject({
