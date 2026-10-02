@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, stat, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,17 +10,22 @@ import { fileURLToPath } from "node:url";
 import { buildApp } from "../apps/api/src/app.js";
 import { newSession } from "../apps/api/src/auth/session.js";
 import type { Runtime } from "../packages/runtime/src/types.js";
-
 async function fixture(t: test.TestContext) {
   const stateDir = await mkdtemp(join(tmpdir(), "wme-application-"));
   const runtime: Runtime = {
+    async ensureProject() {},
+    async stopProject() {},
     async execute(_request, emit) {
-      await emit({ type: "started" });
+      await emit({
+        type: "started",
+      });
       await emit({
         type: "assistant_delta",
         delta: "Deterministic protocol fixture",
       });
-      await emit({ type: "completed" });
+      await emit({
+        type: "completed",
+      });
     },
     async cancel() {},
     async recover() {
@@ -36,11 +41,18 @@ async function fixture(t: test.TestContext) {
       secureCookies: false,
       contentOriginTemplate: "http://{assetId}.assets.test",
     },
-    { jobs: false, runtime, webRoot: join(stateDir, "absent") },
+    {
+      jobs: false,
+      runtime,
+      webRoot: join(stateDir, "absent"),
+    },
   );
   t.after(async () => {
     await system.app.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, {
+      recursive: true,
+      force: true,
+    });
   });
   const owner = randomUUID();
   await system.ctx.db.run(
@@ -64,117 +76,107 @@ async function fixture(t: test.TestContext) {
     };
   }
   const headers = await identity(owner);
-  return { ...system, headers, identity, owner };
+  return {
+    ...system,
+    headers,
+    identity,
+    owner,
+  };
 }
+test("production image healthcheck uses the application's actual base-path route", async (t) => {
+  const s = await fixture(t);
+  const dockerfile = await readFile("Dockerfile", "utf8");
+  const healthPath = /^HEALTHCHECK .*path:'([^']+)'/m.exec(dockerfile)?.[1];
+  assert.ok(healthPath, "Production image must declare its HTTP health route");
+  const result = await s.app.inject({
+    url: healthPath,
+    headers: { host: "portal.test" },
+  });
+  assert.equal(result.statusCode, 200, result.body);
+  assert.deepEqual(result.json(), { status: "ok" });
+  assert.equal(
+    (
+      await s.app.inject({
+        url: healthPath,
+        headers: { host: "unrelated.test" },
+      })
+    ).statusCode,
+    404,
+  );
+});
 
-test("assembled platform provisions projects, serves versioned isolated assets, and revokes public access", async (t) => {
+test("assembled platform provisions a project, renders a safe report and immediately revokes it on deletion", async (t) => {
   const s = await fixture(t);
   const org = await s.app.inject({
     method: "POST",
-    url: "/api/organizations",
-    headers: s.headers,
-    payload: { name: "Integration organization" },
-  });
-  assert.equal(org.statusCode, 201, org.body);
-  const orgId = org.json().id;
-  const created = await s.app.inject({
-    method: "POST",
-    url: `/api/organizations/${orgId}/projects`,
-    headers: s.headers,
-    payload: { name: "Matter workspace" },
-  });
-  assert.equal(created.statusCode, 202, created.body);
-  const projectId = created.json().id;
-  assert.equal(await s.jobs.runOnce(), true);
-  const project = await s.app.inject({
-    url: `/api/projects/${projectId}`,
-    headers: s.headers,
-  });
-  assert.equal(project.json().status, "ready");
-  const folder = await s.app.inject({
-    method: "POST",
-    url: "/api/files/folders",
-    headers: s.headers,
-    payload: { orgId, projectId, path: "Reports" },
-  });
-  assert.ok([200, 201].includes(folder.statusCode), folder.body);
-  const asset = await s.app.inject({
-    method: "POST",
-    url: `/api/organizations/${orgId}/assets`,
-    headers: s.headers,
-    payload: { name: "Report", type: "static", projectId },
-  });
-  assert.equal(asset.statusCode, 201, asset.body);
-  const assetId = asset.json().id;
-  const publish = await s.app.inject({
-    method: "POST",
-    url: `/api/assets/${assetId}/publish`,
+    url: "/enterprise/api/organizations",
     headers: s.headers,
     payload: {
-      expectedVersionId: null,
-      files: [
-        {
-          path: "index.html",
-          contentBase64: Buffer.from("<h1>Isolated report</h1>").toString(
-            "base64",
-          ),
-        },
-      ],
+      name: "Test organization",
     },
   });
-  assert.equal(publish.statusCode, 201, publish.body);
-  const share = await s.app.inject({
+  assert.equal(org.statusCode, 201, org.body);
+  const project = await s.app.inject({
     method: "POST",
-    url: `/api/assets/${assetId}/shares`,
+    url: `/enterprise/api/organizations/${org.json().id}/projects`,
     headers: s.headers,
-    payload: { visibility: "public" },
+    payload: {
+      name: "Workspace",
+    },
   });
-  assert.equal(share.statusCode, 201, share.body);
-  const landing = await s.app.inject({
-    url: new URL(share.json().url).pathname,
-    headers: { host: "portal.test" },
+  assert.equal(project.statusCode, 202, project.body);
+  assert.equal(await s.jobs.runOnce(), true);
+  const asset = await s.app.inject({
+    method: "POST",
+    url: `/enterprise/api/organizations/${org.json().id}/assets`,
+    headers: s.headers,
+    payload: {
+      projectId: project.json().id,
+      name: "Report",
+      visibility: "public",
+      publish: true,
+      document: {
+        version: 1,
+        blocks: [
+          {
+            type: "text",
+            text: "Fresh report",
+          },
+        ],
+      },
+    },
   });
-  assert.ok([302, 303].includes(landing.statusCode), landing.body);
-  const exchangeUrl = new URL(landing.headers.location!);
-  assert.equal(exchangeUrl.hostname, `${assetId}.assets.test`);
-  const exchange = await s.app.inject({
-    url: exchangeUrl.pathname + exchangeUrl.search,
-    headers: { host: exchangeUrl.host },
+  assert.equal(asset.statusCode, 201, asset.body);
+  const report = await s.app.inject({
+    url: asset.json().url,
+    headers: {
+      host: "portal.test",
+    },
   });
-  assert.ok([302, 303].includes(exchange.statusCode), exchange.body);
-  const setCookies = exchange.headers["set-cookie"];
-  const cookie = (Array.isArray(setCookies) ? setCookies : [setCookies])
-    .filter(Boolean)
-    .map((c) => String(c).split(";")[0])
-    .join("; ");
-  const view = await s.app.inject({
-    url: "/",
-    headers: { host: exchangeUrl.host, cookie },
-  });
-  assert.equal(view.statusCode, 200, view.body);
-  assert.match(view.body, /Isolated report/);
-  const apiOnContent = await s.app.inject({
-    url: "/api/organizations",
-    headers: { ...s.headers, host: exchangeUrl.host, cookie },
-  });
-  assert.notEqual(
-    apiOnContent.statusCode,
-    200,
-    "Content host cannot access the platform API",
+  assert.equal(report.statusCode, 200, report.body);
+  assert.match(report.body, /Fresh report/);
+  assert.match(
+    String(report.headers["content-security-policy"]),
+    /script-src 'none'/,
   );
-  const revoke = await s.app.inject({
+  const deleted = await s.app.inject({
     method: "DELETE",
-    url: `/api/assets/${assetId}/shares/${share.json().share.id}`,
+    url: `/enterprise/api/projects/${project.json().id}`,
     headers: s.headers,
   });
-  assert.equal(revoke.statusCode, 200, revoke.body);
-  const denied = await s.app.inject({
-    url: "/",
-    headers: { host: exchangeUrl.host, cookie },
-  });
-  assert.ok([403, 404].includes(denied.statusCode), denied.body);
+  assert.equal(deleted.statusCode, 202, deleted.body);
+  assert.equal(
+    (
+      await s.app.inject({
+        url: asset.json().url,
+        headers: {
+          host: "portal.test",
+        },
+      })
+    ).statusCode,
+    404,
+  );
 });
-
 test("assembled admission uses real SQLite and remains private until a project member is added", async (t) => {
   const s = await fixture(t);
   s.inference.validateSelection = async () => {};
@@ -185,17 +187,21 @@ test("assembled admission uses real SQLite and remains private until a project m
   const org = (
     await s.app.inject({
       method: "POST",
-      url: "/api/organizations",
+      url: "/enterprise/api/organizations",
       headers: s.headers,
-      payload: { name: "Conversation organization" },
+      payload: {
+        name: "Conversation organization",
+      },
     })
   ).json();
   const project = (
     await s.app.inject({
       method: "POST",
-      url: `/api/organizations/${org.id}/projects`,
+      url: `/enterprise/api/organizations/${org.id}/projects`,
       headers: s.headers,
-      payload: { name: "Shared project" },
+      payload: {
+        name: "Shared project",
+      },
     })
   ).json();
   await s.jobs.runOnce();
@@ -213,14 +219,17 @@ test("assembled admission uses real SQLite and remains private until a project m
   );
   await s.app.inject({
     method: "POST",
-    url: `/api/projects/${project.id}/members`,
+    url: `/enterprise/api/projects/${project.id}/members`,
     headers: s.headers,
-    payload: { userId: member, access: "write" },
+    payload: {
+      userId: member,
+      access: "write",
+    },
   });
   const other = await s.identity(member);
   const creation = await s.app.inject({
     method: "POST",
-    url: `/api/projects/${project.id}/conversations`,
+    url: `/enterprise/api/projects/${project.id}/conversations`,
     headers: s.headers,
     payload: {
       title: "Private work",
@@ -232,15 +241,18 @@ test("assembled admission uses real SQLite and remains private until a project m
   assert.equal(creation.statusCode, 201, creation.body);
   const id = creation.json().id;
   const hidden = await s.app.inject({
-    url: `/api/conversations/${id}`,
+    url: `/enterprise/api/conversations/${id}`,
     headers: other,
   });
   assert.equal(hidden.statusCode, 404, hidden.body);
   const message = await s.app.inject({
     method: "POST",
-    url: `/api/conversations/${id}/messages`,
+    url: `/enterprise/api/conversations/${id}/messages`,
     headers: s.headers,
-    payload: { requestId: randomUUID(), content: "Protocol fixture request" },
+    payload: {
+      requestId: randomUUID(),
+      content: "Protocol fixture request",
+    },
   });
   assert.equal(message.statusCode, 202, message.body);
   let result: any;
@@ -255,59 +267,73 @@ test("assembled admission uses real SQLite and remains private until a project m
   assert.equal(result?.status, "completed");
   const added = await s.app.inject({
     method: "POST",
-    url: `/api/conversations/${id}/members`,
+    url: `/enterprise/api/conversations/${id}/members`,
     headers: s.headers,
-    payload: { userId: member },
+    payload: {
+      userId: member,
+    },
   });
   assert.ok([200, 201].includes(added.statusCode), added.body);
   const visible = await s.app.inject({
-    url: `/api/conversations/${id}/messages`,
+    url: `/enterprise/api/conversations/${id}/messages`,
     headers: other,
   });
   assert.equal(visible.statusCode, 200, visible.body);
   assert.match(visible.body, /Deterministic protocol fixture/);
   await s.app.inject({
     method: "DELETE",
-    url: `/api/projects/${project.id}/members/${member}`,
+    url: `/enterprise/api/projects/${project.id}/members/${member}`,
     headers: s.headers,
   });
   const revoked = await s.app.inject({
-    url: `/api/conversations/${id}/messages`,
+    url: `/enterprise/api/conversations/${id}/messages`,
     headers: other,
   });
   assert.equal(revoked.statusCode, 404, revoked.body);
 });
-
 test("core app rejects forged origins and unknown hosts, preserving safe error envelopes", async (t) => {
   const s = await fixture(t);
   const forged = await s.app.inject({
     method: "POST",
-    url: "/api/organizations",
-    headers: { ...s.headers, origin: "https://attacker.test" },
-    payload: { name: "Forbidden" },
+    url: "/enterprise/api/organizations",
+    headers: {
+      ...s.headers,
+      origin: "https://attacker.test",
+    },
+    payload: {
+      name: "Forbidden",
+    },
   });
   assert.equal(forged.statusCode, 403);
   assert.equal(forged.json().error.code, "invalid_origin");
   const badHost = await s.app.inject({
-    url: "/api/session",
-    headers: { host: "attacker.test" },
+    url: "/enterprise/api/session",
+    headers: {
+      host: "attacker.test",
+    },
   });
   assert.equal(badHost.statusCode, 404);
   const invalid = await s.app.inject({
     method: "POST",
-    url: "/api/organizations",
+    url: "/enterprise/api/organizations",
     headers: s.headers,
     payload: {},
   });
   assert.equal(invalid.statusCode, 400);
   assert.equal(invalid.json().error.code, "invalid_request");
 });
-
 test("production startup leaves durable state untouched while supervisor is unavailable", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "wme-startup-order-"));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() =>
+    rm(root, {
+      recursive: true,
+      force: true,
+    }),
+  );
   const tokenFile = join(root, "synthetic-supervisor-token");
-  await writeFile(tokenFile, "a".repeat(64), { mode: 0o600 });
+  await writeFile(tokenFile, "a".repeat(64), {
+    mode: 0o600,
+  });
   const stateDir = join(root, "state-not-opened");
   const main = fileURLToPath(
     new URL("../apps/api/src/main.js", import.meta.url),
@@ -324,12 +350,17 @@ test("production startup leaves durable state untouched while supervisor is unav
       },
     }),
     (error: unknown) => {
-      const failure = error as { code?: number; stderr?: string };
+      const failure = error as {
+        code?: number;
+        stderr?: string;
+      };
       assert.equal(failure.code, 1);
       assert.match(failure.stderr ?? "", /Runtime supervisor is unavailable/);
       assert.ok(!failure.stderr?.includes("a".repeat(64)));
       return true;
     },
   );
-  await assert.rejects(stat(stateDir), { code: "ENOENT" });
+  await assert.rejects(stat(stateDir), {
+    code: "ENOENT",
+  });
 });

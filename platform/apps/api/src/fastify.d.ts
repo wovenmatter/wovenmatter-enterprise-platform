@@ -1,8 +1,9 @@
-import 'fastify';
-declare module 'fastify' {
- interface FastifyContextConfig {
-  internalInference?: boolean;
-  libraryContent?: boolean;
-  isolatedContent?: boolean;
- }
+import "fastify";
+declare module "fastify" {
+  interface FastifyContextConfig {
+    safeReport?: boolean;
+    internalInference?: boolean;
+    libraryContent?: boolean;
+    isolatedContent?: boolean;
+  }
 }

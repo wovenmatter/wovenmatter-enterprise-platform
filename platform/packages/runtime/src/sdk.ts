@@ -1,9 +1,12 @@
+import { randomUUID } from "node:crypto";
+import { SteeringChannel, steeringText } from "./steering.js";
 import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import {
   agentInstructions,
   runtimeEnvironment,
   egressEnvironment,
+  type NativeSessionState,
 } from "./native.ts";
 import {
   RuntimeError,
@@ -16,16 +19,25 @@ export async function runClaude(
   request: ContainerRequest,
   emit: EventSink,
   signal: AbortSignal,
+  steering?: SteeringChannel,
+  dependencies?: {
+    query: typeof import("@anthropic-ai/claude-agent-sdk").query;
+    sessionDirectory: string;
+  },
+  retained?: NativeSessionState,
 ): Promise<void> {
-  const { query } = await import("@anthropic-ai/claude-agent-sdk");
-  const abortController = new AbortController();
+  const { query } =
+    dependencies ?? (await import("@anthropic-ai/claude-agent-sdk"));
+  const sessionDirectory = dependencies?.sessionDirectory ?? "/session/claude";
+  const abortController =
+    retained?.claude?.abortController ?? new AbortController();
   const abort = () => abortController.abort();
   signal.addEventListener("abort", abort, { once: true });
-  await mkdir("/session/claude", { recursive: true, mode: 0o700 });
+  await mkdir(sessionDirectory, { recursive: true, mode: 0o700 });
   const env = {
     ...runtimeEnvironment(),
     ...egressEnvironment(request),
-    CLAUDE_CONFIG_DIR: "/session/claude",
+    CLAUDE_CONFIG_DIR: sessionDirectory,
     ANTHROPIC_BASE_URL: request.gateway.baseUrl,
     ANTHROPIC_AUTH_TOKEN: request.gateway.token,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -35,32 +47,105 @@ export async function runClaude(
   const toolNames = new Map<string, string>();
   const streamedMessages = new Set<string>();
   let currentMessageId = "";
-  const stream = query({
-    prompt: request.prompt,
-    options: {
-      cwd: "/workspace",
-      model: request.model,
-      env,
-      abortController,
-      ...(request.resumeId ? { resume: request.resumeId } : {}),
-      // Docker enforces ceilings for all tools/subagents, including shell commands.
-      permissionMode: "bypassPermissions",
-      allowDangerouslySkipPermissions: true,
-      settingSources: [],
-      mcpServers: {},
-      includePartialMessages: true,
-      systemPrompt: {
-        type: "preset",
-        preset: "claude_code",
-        append: agentInstructions + ` Current access: ${request.access}.`,
-      },
-    },
+  const { PassThrough } = await import("node:stream");
+  const inputStream =
+    retained?.claude?.input ?? new PassThrough({ objectMode: true });
+  const receipts = new Map<
+    string,
+    { resolve: () => void; reject: (e: Error) => void }
+  >();
+  const initialId = randomUUID();
+  const unfinished = new Set<string>([initialId]);
+  inputStream.write({
+    type: "user",
+    uuid: initialId,
+    message: { role: "user", content: request.prompt },
+    parent_tool_use_id: null,
   });
+  const stream =
+    retained?.claude?.stream ??
+    query({
+      prompt: inputStream,
+      options: {
+        cwd: "/workspace",
+        model: request.model,
+        env,
+        abortController,
+        ...(request.resumeId ? { resume: request.resumeId } : {}),
+        // Docker enforces ceilings for all tools/subagents, including shell commands.
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        settingSources: [],
+        mcpServers: {},
+        includePartialMessages: true,
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: agentInstructions + ` Current access: ${request.access}.`,
+        },
+      },
+    });
+  const iterator = retained?.claude?.iterator ?? stream[Symbol.asyncIterator]();
+  if (retained && !retained.claude)
+    retained.claude = { input: inputStream, stream, iterator, abortController };
+  if (retained?.claude?.sessionId)
+    await emit({
+      type: "native_session",
+      sessionId: retained.claude.sessionId,
+    });
   try {
     signal.throwIfAborted();
-    for await (const message of stream) {
-      if (message.type === "system" && message.subtype === "init")
+    steering?.set(
+      (input) =>
+        new Promise<void>((resolve, reject) => {
+          signal.throwIfAborted();
+          const timer = setTimeout(() => {
+            receipts.delete(input.id);
+            reject(
+              new RuntimeError(
+                "steering_uncertain",
+                "Claude did not acknowledge this input.",
+              ),
+            );
+          }, 30000);
+          receipts.set(input.id, {
+            resolve: () => {
+              clearTimeout(timer);
+              resolve();
+            },
+            reject: (e) => {
+              clearTimeout(timer);
+              reject(e);
+            },
+          });
+          unfinished.add(input.id);
+          inputStream.write({
+            type: "user",
+            uuid: input.id,
+            priority: "now",
+            message: { role: "user", content: steeringText(input) },
+            parent_tool_use_id: null,
+          });
+        }),
+    );
+    for await (const message of {
+      [Symbol.asyncIterator]: () => ({
+        next: () => iterator.next(),
+        return: async () => ({ done: true as const, value: undefined }),
+      }),
+    }) {
+      if (
+        message.type === "user" &&
+        message.uuid &&
+        receipts.has(message.uuid)
+      ) {
+        receipts.get(message.uuid)!.resolve();
+        receipts.delete(message.uuid);
+      }
+      if (message.type === "system" && message.subtype === "init") {
+        if (retained?.claude) retained.claude.sessionId = message.session_id;
         await emit({ type: "native_session", sessionId: message.session_id });
+      }
       if (message.type === "stream_event") {
         const event = message.event;
         if (event.type === "message_start") currentMessageId = event.message.id;
@@ -107,7 +192,33 @@ export async function runClaude(
             "agent_failed",
             "Claude did not finish the requested work",
           );
-        finished = true;
+        const consumed =
+          message.user_message_uuids ??
+          (message.user_message_uuid ? [message.user_message_uuid] : []);
+        // Echoed inputs acknowledge admission, not completion. The installed SDK
+        // reports exactly which client UUIDs a result consumed, including fold-ins.
+        if (!consumed.length)
+          throw new RuntimeError(
+            "native_receipt_missing",
+            "Claude did not identify the inputs completed by this result; their outcome is uncertain.",
+          );
+        for (const id of consumed) {
+          unfinished.delete(id);
+          if (id === initialId) await emit({ type: "input_accepted" });
+          const receipt = receipts.get(id);
+          if (receipt) {
+            receipt.resolve();
+            receipts.delete(id);
+          }
+        }
+        if (!unfinished.size) {
+          // Close admissions synchronously before releasing this execution.
+          const settled = steering?.settle();
+          if (!retained) inputStream.end();
+          await settled;
+          finished = true;
+          break;
+        }
       }
     }
     if (!finished)
@@ -117,7 +228,19 @@ export async function runClaude(
       );
   } finally {
     signal.removeEventListener("abort", abort);
-    stream.close();
+    for (const receipt of receipts.values())
+      receipt.reject(
+        new RuntimeError(
+          "steering_uncertain",
+          "Claude ended before acknowledging input.",
+        ),
+      );
+    await steering?.settle();
+    if (!retained || !finished) {
+      if (retained) delete retained.claude;
+      inputStream.destroy();
+      stream.close();
+    }
   }
 }
 
@@ -126,7 +249,26 @@ export async function runPi(
   request: ContainerRequest,
   emit: EventSink,
   signal: AbortSignal,
+  steering?: SteeringChannel,
+  retained?: NativeSessionState,
 ): Promise<void> {
+  if (retained?.pi) {
+    const session = retained.pi as PiSession;
+    try {
+      return await drivePiSession(
+        session,
+        request,
+        emit,
+        signal,
+        steering,
+        true,
+      );
+    } catch (error) {
+      delete retained.pi;
+      session.dispose();
+      throw error;
+    }
+  }
   const {
     ModelRuntime,
     SessionManager,
@@ -172,7 +314,10 @@ export async function runPi(
       },
     ],
   });
-  await runtime.setRuntimeApiKey("wovenmatter-enterprise", request.gateway.token);
+  await runtime.setRuntimeApiKey(
+    "wovenmatter-enterprise",
+    request.gateway.token,
+  );
   let sessionManager;
   if (request.resumeId) {
     const file = (await readdir("/session/pi")).find((name) =>
@@ -218,6 +363,42 @@ export async function runPi(
   const stream = session.agent.streamFunction;
   session.agent.streamFunction = (model, context, options) =>
     stream(model, context, { ...options, maxRetries: 0, transport: "sse" });
+  if (retained) retained.pi = session;
+  try {
+    await drivePiSession(
+      session,
+      request,
+      emit,
+      signal,
+      steering,
+      Boolean(retained),
+    );
+  } catch (error) {
+    if (retained) {
+      delete retained.pi;
+      session.dispose();
+    }
+    throw error;
+  }
+}
+
+type PiSession = Pick<
+  Awaited<
+    ReturnType<
+      typeof import("@earendil-works/pi-coding-agent").createAgentSession
+    >
+  >["session"],
+  "subscribe" | "abort" | "prompt" | "clearQueue" | "sessionId" | "dispose"
+>;
+/** Keep the native subscription alive through admitted preflight and continuations. */
+export async function drivePiSession(
+  session: PiSession,
+  request: ContainerRequest,
+  emit: EventSink,
+  signal: AbortSignal,
+  steering?: SteeringChannel,
+  retained = false,
+) {
   // SDK notifications are synchronous. Chain persistence to preserve event order and surface failures.
   let events = Promise.resolve();
   let agentError = false;
@@ -263,7 +444,45 @@ export async function runPi(
   try {
     signal.throwIfAborted();
     await emit({ type: "native_session", sessionId: session.sessionId });
-    await session.prompt(request.prompt);
+    const continuations: Promise<void>[] = [];
+    await session.prompt(request.prompt, {
+      preflightResult: (ok) => {
+        if (signal.aborted) {
+          session.clearQueue();
+          signal.throwIfAborted();
+        }
+        if (ok) {
+          push({ type: "input_accepted" });
+          steering?.set(
+            (input) =>
+              new Promise<void>((resolve, reject) => {
+                signal.throwIfAborted();
+                const task = session.prompt(steeringText(input), {
+                  streamingBehavior: "steer",
+                  preflightResult: (accepted) => {
+                    if (signal.aborted) {
+                      session.clearQueue();
+                      signal.throwIfAborted();
+                    }
+                    if (accepted) resolve();
+                    else
+                      reject(
+                        new RuntimeError(
+                          "steering_rejected",
+                          "Pi rejected the input.",
+                        ),
+                      );
+                  },
+                });
+                continuations.push(task);
+                void task.catch(reject);
+              }),
+          );
+        }
+      },
+    });
+    await steering?.settle();
+    while (continuations.length) await Promise.all(continuations.splice(0));
     await events;
     if (agentError)
       throw new RuntimeError(
@@ -272,7 +491,8 @@ export async function runPi(
       );
   } finally {
     signal.removeEventListener("abort", abort);
+    await steering?.settle();
     unsubscribe();
-    session.dispose();
+    if (!retained) session.dispose();
   }
 }

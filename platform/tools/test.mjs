@@ -19,7 +19,11 @@ const files = [
   ...(await discover(resolve("platform/dist/packages/runtime/test"))),
 ];
 if (!files.length) throw new Error("No compiled platform tests discovered");
-files.push(resolve("platform/runtime/fixture-cleanup.test.mjs"));
+files.push(
+  ...(await readdir("platform/runtime"))
+    .filter((name) => name.endsWith(".test.mjs"))
+    .map((name) => resolve("platform/runtime", name)),
+);
 files.sort();
 const coverage = process.argv.includes("--coverage");
 if (coverage) await mkdir("coverage", { recursive: true });

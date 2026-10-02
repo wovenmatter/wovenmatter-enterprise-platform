@@ -30,7 +30,7 @@ export function SourcePage() {
   const params = new URLSearchParams();
   if (projectId) params.set("projectId", projectId);
   if (versionId) params.set("versionId", versionId);
-  const contentUrl = `/api/files/${encodeURIComponent(fileId ?? "")}/content${params.size ? `?${params}` : ""}`;
+  const contentUrl = `/enterprise/api/files/${encodeURIComponent(fileId ?? "")}/content${params.size ? `?${params}` : ""}`;
   const [preview, setPreview] = useState<Preview>();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);

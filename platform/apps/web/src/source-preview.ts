@@ -135,7 +135,9 @@ export function sourcePathFromContentUrl(
   try {
     const parsed = new URL(url, "https://preview.invalid");
     if (parsed.origin !== "https://preview.invalid") return;
-    const match = parsed.pathname.match(/^\/api\/files\/([^/]+)\/content$/);
+    const match = parsed.pathname.match(
+      /^\/enterprise\/api\/files\/([^/]+)\/content$/,
+    );
     if (!match) return;
     return sourcePath(decodeURIComponent(match[1]), {
       projectId: parsed.searchParams.get("projectId"),

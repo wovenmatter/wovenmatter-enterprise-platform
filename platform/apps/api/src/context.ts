@@ -32,9 +32,11 @@ export interface Project {
   status: string;
   access: "read" | "write";
   createdAt: string;
+  hostId: string;
 }
 export interface AppContext {
   db: Database;
+  runtime?: import("../../../packages/runtime/src/types.js").Runtime;
   config: AppConfig;
   onAccessChanged?: () => Promise<void>;
   getSessionId(request: FastifyRequest): Promise<string | null>;
@@ -42,6 +44,11 @@ export interface AppContext {
   requireUser(request: FastifyRequest): Promise<User>;
   requireOrgAdmin(user: User, orgId: string): Promise<void>;
   requireOrgMember(user: User, orgId: string): Promise<void>;
+  membership(
+    user: User,
+    orgId: string,
+  ): Promise<{ role: "admin" | "member"; libraryAccess: "read" | "write" }>;
+  requireLibraryFull(user: User, orgId: string): Promise<void>;
   requireProject(
     user: User,
     projectId: string,
@@ -49,6 +56,7 @@ export interface AppContext {
   ): Promise<Project>;
   audit(
     user: User,
+    orgId: string | null,
     action: string,
     entityId: string,
     details?: Record<string, unknown>,
@@ -74,6 +82,7 @@ export function mapProject(r: any, access?: "read" | "write"): Project {
     status: r.status,
     access: access ?? r.access,
     createdAt: r.created_at,
+    hostId: r.host_id ?? "local",
   };
 }
 function auditDetails(value: unknown, depth = 0): unknown {
@@ -123,50 +132,68 @@ export function createContext(db: Database, config: AppConfig): AppContext {
         throw new AppError(401, "unauthorized", "Sign in to continue");
       return session.user;
     },
-    async requireOrgMember(user, orgId) {
+    async membership(user, orgId) {
       user = await fresh(user);
-      if (user.role !== "owner" && user.orgId !== orgId)
-        throw new AppError(404, "not_found", "Organization not found");
       if (!(await db.get("SELECT id FROM organizations WHERE id=?", [orgId])))
         throw new AppError(404, "not_found", "Organization not found");
+      if (user.role === "owner")
+        return { role: "admin", libraryAccess: "write" };
+      const membership = await db.get<{
+        role: "admin" | "member";
+        library_access: "read" | "write";
+      }>(
+        "SELECT role,library_access FROM organization_memberships WHERE org_id=? AND user_id=?",
+        [orgId, user.id],
+      );
+      if (!membership)
+        throw new AppError(404, "not_found", "Organization not found");
+      return {
+        role: membership.role,
+        libraryAccess:
+          membership.role === "admin" ? "write" : membership.library_access,
+      };
+    },
+    async requireOrgMember(user, orgId) {
+      await ctx.membership(user, orgId);
     },
     async requireOrgAdmin(user, orgId) {
-      user = await fresh(user);
-      await ctx.requireOrgMember(user, orgId);
-      if (user.role !== "owner" && user.role !== "admin")
+      if ((await ctx.membership(user, orgId)).role !== "admin")
         throw new AppError(
           403,
           "forbidden",
           "Organization administrator access required",
         );
     },
+    async requireLibraryFull(user, orgId) {
+      if ((await ctx.membership(user, orgId)).libraryAccess !== "write")
+        throw new AppError(403, "read_only", "Full library access required");
+    },
     async requireProject(user, projectId, requested = "read") {
-      user = await fresh(user);
       const p = await db.get<any>(
-        "SELECT * FROM projects WHERE id=? AND status NOT IN (?,?)",
-        [projectId, "deleted", "deleting"],
+        "SELECT * FROM projects WHERE id=? AND status NOT IN ('deleted','deleting','purged')",
+        [projectId],
       );
-      if (!p || (user.role !== "owner" && user.orgId !== p.org_id))
-        throw new AppError(404, "not_found", "Project not found");
+      if (!p) throw new AppError(404, "not_found", "Project not found");
+      const membership = await ctx.membership(user, p.org_id);
       let effective: "read" | "write" = p.access;
-      if (user.role !== "owner" && user.role !== "admin") {
-        const membership = await db.get<any>(
+      if (membership.role !== "admin") {
+        const projectMember = await db.get<any>(
           "SELECT access FROM project_members WHERE project_id=? AND user_id=?",
           [projectId, user.id],
         );
-        if (!membership)
+        if (!projectMember)
           throw new AppError(404, "not_found", "Project not found");
-        if (membership.access === "read") effective = "read";
+        if (projectMember.access === "read") effective = "read";
       }
       if (requested === "write" && effective !== "write")
         throw new AppError(403, "read_only", "This project is read-only");
       return mapProject(p, effective);
     },
-    async audit(user, action, entityId, details = {}) {
+    async audit(user, orgId, action, entityId, details = {}) {
       const clean = auditDetails(details);
       await db.run("INSERT INTO audit_events VALUES (?,?,?,?,?,?,?)", [
         randomUUID(),
-        user.orgId,
+        orgId,
         user.id,
         action,
         entityId,

@@ -1,98 +1,62 @@
-# WovenMatter Enterprise Platform v2 deployment
+# Deployment and recovery
 
-These examples describe an opt-in, isolated self-hosted installation with fresh state. They are not preconfigured for an existing host or account. The canonical application Dockerfile is the repository-root `Dockerfile`; its default target is the unprivileged application. `supervisor` is an explicit separate target.
+Examples describe a fresh self-hosted installation. They do not import another application's accounts or data. Use immutable image revisions, a private configuration directory and an explicitly authorized Linux host. Actual owner email, provider sign-in, DNS/edge changes and production provisioning belong to the operator.
 
-## Boundaries
-
-- Node 24 is supplied by images; the host's Node installation need not change. SQLite is local disk only, never NFS. The API's database connections run in a dedicated worker.
-- Run exactly **one API coordinator per SQLite installation**. Atomic SQL claims and global/per-organization limits protect admission; they do not make horizontal API replicas supported. Defaults are `WME_MAX_CONCURRENT_RUNS=8` and `WME_MAX_CONCURRENT_RUNS_PER_ORGANIZATION=4`, counting uncertain stopping executions until cleanup is confirmed. Increase limits only after measuring host/container capacity.
-- API UID/GID 10001 owns `state`. Only the supervisor receives Docker authority. It uses a Unix socket plus a random 256-bit bearer secret; no TCP control endpoint is exposed.
-- The trusted supervisor uses host networking solely to reach isolated live applications at their private bridge addresses. Its image/root filesystem is read-only. Container source mount paths are identical inside supervisor/API and on the host.
-- Every agent execution gets its own internal network. Only that run and the API inference gateway join it; generated tools cannot directly reach other runs, external networks, or central credential services. Optional public HTTP/S access uses an authenticated internal proxy and an active run credential. Scoped host INPUT rules also reject newly initiated connections from the `br-wmerun*` and `br-wmeapp*` bridges to host services. Native sessions live outside editable project storage.
-- Each live application gets its own internal network, bounded resources, a read-only source snapshot, optional read-only data mounts, and a persistent `/data` directory under `state/library-data/<assetId>`. Viewers enter through the authenticated library proxy; no application port is published on the host.
-- Set `WME_ISOLATED_NETWORK_POOL` to an unused private IPv4 pool after checking host routes and existing Docker subnets. Agents and live applications share an allocator that reserves separate `/28` networks through Docker's atomic overlap check. It never consumes Docker's large default subnet pool or removes another network. The example `10.253.0.0/16` provides 4,096 slots; select a different private pool if it overlaps a host, VPN, or existing container route.
-- Each organization gets a separate pinned CLIProxyAPI container and separate credential/config directories. The API sees only endpoint credentials over the supervisor socket. Agents receive per-run application gateway credentials, never these central secrets.
-- The inference bridge has host firewall rules blocking private/link-local/host destinations for proxy egress. This matters for custom provider URLs that can change DNS after validation. The API is the sole reserved `.2` address; proxy containers occupy other addresses. IPv6 is disabled. Proxy processes use `restart=no` so they cannot come up before the firewall on reboot. The supervisor checks a current-boot firewall attestation before provisioning/restarting one.
-
-## Candidate setup on a Linux Docker host
-
-Use an isolated checkout and unique immutable image tags. Use a dedicated Linux Docker host. Check available CPU/memory/disk, existing port 4180, subnet 172.31.251.0/24, names `wme-candidate-api`, `wme-inference`, and bridge `br-wmeinference` before proceeding. If any are owned by another deployment, use a separate host or consistently change the network/address configuration and firewall rules.
-
-From the repository root:
+Build the application, supervisor, persistent runtime and pinned inference images from the repository root:
 
 ```sh
-docker build --target application -t wovenmatter-enterprise:CANDIDATE .
-docker build --target supervisor -t wovenmatter-enterprise-supervisor:CANDIDATE .
-docker build -f platform/runtime/Dockerfile -t wovenmatter-enterprise-runner:CANDIDATE .
-docker build -f platform/deploy/Dockerfile.library -t wovenmatter-enterprise-library:CANDIDATE .
-docker build -f platform/deploy/Dockerfile.inference -t wovenmatter-enterprise-inference:acdace936fa7df2905500c7f5e0a97d683138dea .
+docker build -t wovenmatter-enterprise:REVISION .
+docker build --target supervisor -t wovenmatter-enterprise-supervisor:REVISION .
+docker build -f platform/runtime/Dockerfile -t wovenmatter-enterprise-runner:REVISION .
+docker build -f platform/deploy/Dockerfile.inference -t wovenmatter-enterprise-inference:REVISION .
 ```
 
-The supervisor is built from the same application revision. CLIProxyAPI is fetched at the exact pinned commit, verified before compilation. Record image IDs/digests in the review evidence. The image preserves the upstream license; see the root third-party notices for additional distribution obligations.
+The API runs as UID10001 and never receives the Docker socket. The trusted host supervisor controls only configured storage roots, project allocations and organization inference services. Persistent project containers contain a trusted namespace launcher; untrusted native tools run as UID10001 with mandatory independent kernel boundaries. See [runtime security](../runtime/README.md).
 
-Initialize the candidate directories using the image's Node 24 (run once; refuses to replace the secret):
+Use `node platform/scripts/init-candidate.mjs NEW_CANDIDATE_ROOT` once to create private layout and a random supervisor credential. Supply reviewed images, origin and private paths in a copy of `candidate.env.example` outside Git. Check ports, host routes, existing container/network names and the configured private network pool before provisioning. Do not use an existing deployment's data or services as fixtures. No default credentials exist. Bootstrap the first owner with `platform/dist/apps/api/src/cli.js bootstrap-owner`, `WME_OWNER_EMAIL`, `WME_OWNER_NAME`, `WME_STATE_DIR` and `--password-stdin` (or `WME_BOOTSTRAP_PASSWORD_FILE`); never put the password in command arguments.
+
+Load the reviewed `wme-project-supervisor` and `wme-platform-agent` AppArmor profiles on the authorized host before starting project containers. Supervisor-only netlink/net_admin permission constructs isolated loopback interfaces; tools retain zero capabilities. Never replace an unrelated host profile. Provision the existing scoped inference firewall using `install-inference-firewall.sh` only on an explicitly authorized deployment lane. Its boot-specific attestation is required before inference service provisioning; never flush unrelated rules. Project tools have private network namespaces plus scoped relays even when public egress is enabled.
+
+The inference bridge uses an operator-selected canonical RFC1918 IPv4 `/24`: set `WME_INFERENCE_SUBNET`, `WME_INFERENCE_API_ADDRESS` (that subnet's `.2`), `WME_INFERENCE_NETWORK` and `WME_INFERENCE_BRIDGE` together. Reserve `.1` for the bridge; organization proxies use `.3` through `.254`. The default firewall script is specifically for `172.31.251.0/24` and `br-wmeinference`. A different subnet/bridge requires a separately reviewed, deployment-scoped policy with matching API exception and host/private destination denials before writing the boot attestation. Do not run the default script unchanged against a different allocation or reuse another deployment's network.
+
+The app, API, authentication routes, static build assets and reports live under `/enterprise`. `WME_PUBLIC_ORIGIN` is the origin only, without a path. The edge must preserve `/enterprise` and Host; see `nginx.candidate.conf.example`. Other site routes are configured separately. Secure sessions use `__Host-wme_session; Secure; Path=/` without Domain, preserving host-cookie protection; development cookies use Path=/enterprise. OpenAI/Grok subscription sign-in uses server-owned device authorization; Anthropic uses a provider-hosted code page and explicit manual-code input. The authenticated Connections API stays under `/enterprise/api`. No localhost callback listener or browser-to-management access is required. Never expose management or runtime ports to browsers.
+
+## Host placement
+
+The initial host ID is `local`; organization defaults and new-project overrides are owner-only. The assigned host is persisted on every project, and changing an organization default affects only new projects. A stored project cannot be moved implicitly.
+
+The default transport is a private Unix socket and random256-bit token. `WME_HOSTS_FILE` can supply a private JSON array of `{id,name,socketPath?,origin?,tokenFile,caFile?,certFile?,keyFile?,apiStateRoot,supervisorStateRoot,storageMode?}`. Remote entries require an HTTPS origin, pinned CA, client certificate/key, a per-host token and `storageMode:"shared"`. These files never enter browser responses; users see only ID/name labels. All entries must use the same apiStateRoot equal to WME_STATE_DIR. Independent API storage trees are rejected. Each supervisor must explicitly mount that same shared tree at its declared supervisorStateRoot; this supports a single coherent organization library and file/version/recovery paths. Before readiness, provisioning, restoration and dispatch, a random API-written storage probe must be visible to that supervisor. A missing/mismatched mount fails closed. Runtime paths are translated only within the selected root.
+
+A TLS supervisor uses `WME_HOST_ID`, `WME_SUPERVISOR_TLS_HOST`, `WME_SUPERVISOR_TLS_PORT`, `WME_SUPERVISOR_TLS_CA_FILE`, `WME_SUPERVISOR_TLS_CERT_FILE`, `WME_SUPERVISOR_TLS_KEY_FILE` instead of `WME_SUPERVISOR_SOCKET`. It requires a client certificate and the correct host token/header. Use an operator-managed private network and unique credentials. Loopback two-supervisor tests prove wire authentication and storage validation, not physical remote-host deployment. No host purchasing, wake-up, filesystem replication or relocation service is provided.
+
+## Optional public HTTP/S
+
+Set `WME_EGRESS_ENABLED=true` only after defining the trusted host/ingress exclusion inventory. Port4101 stays private. The supervisor reports current interfaces, configured public origin and `WME_EGRESS_DENIED_IPS`, `WME_EGRESS_DENIED_HOSTS`, `WME_EGRESS_INGRESS_HOSTS`. DNS resolution is pinned and all answers must be public and outside that inventory. Private/link-local/metadata destinations, host services, container networks and direct connections are denied. Bounded connections, bytes, timeouts and periodic authorization checks also apply to CONNECT tunnels.
+
+Native sessions use run credentials. Unattended scripts use separate project network capabilities checked against current project status and host; these cannot call inference. Neither is an upstream provider credential. A network capability can fetch public data but cannot guarantee a website's availability or prevent a user from intentionally using a public relay.
+
+## Trash and recovery
+
+Deletion blocks project access immediately and requests runtime stop before returning success. Files, native history and schedule definitions remain for30 days. Admins use Organization settings → Deleted projects to restore or recover ordinary files into the organization library. Recovery excludes live share mountpoints and rejects symlinks/devices. Expired projects are purged with no-follow filesystem operations after runtime removal. Resource cleanup verifies allocation labels and tolerates resources already removed by a previous attempt.
+
+Runtime restart stops uncertain thread processes before releasing their leases and restarts retained project containers. Durable native history can continue with a new explicit message; uncertain input is not replayed. Operator maintenance and image replacement must preserve workspace/session/journal volumes and reconcile allocations. Do not start old code against a newer incompatible database or delete volumes to force rollback.
+
+## Encrypted backup
+
+`platform/scripts/backup.mjs` implements encrypted full backup and authenticated restore. No destination is selected or provisioned. Supply a private JSON configuration with `database`, named `roots` covering that database and ALL durable state on every configured host, a0600 `keyFile` containing32 random bytes as hex, `stagingDirectory`, and absolute executable/argument arrays `quiesce`, `resume`, `transport`.
+
+The quiesce/resume hooks are operator-controlled and must coordinate every writer, including the API, project processes and inference services. Resume runs even if quiescing only partially succeeds. Include SQLite, workspaces, file-version blobs, native/tool state, schedule receipts, runtime allocation journals and private inference credentials. Unix sockets are ephemeral and excluded; devices/FIFOs fail closed. Symlinks are archived as metadata without reading targets and restored only after all ordinary files. Numeric ownership and modes are retained; control journals must not become agent-owned.
 
 ```sh
-sudo mkdir -p /srv/wovenmatter-enterprise-candidate
-sudo docker run --rm --user 0 --entrypoint node \
-  -v /srv/wovenmatter-enterprise-candidate:/srv/wovenmatter-enterprise-candidate \
-  wovenmatter-enterprise:CANDIDATE platform/scripts/init-candidate.mjs /srv/wovenmatter-enterprise-candidate
-sudo apparmor_parser -r platform/runtime/wme-platform-agent.apparmor
-sudo sh platform/scripts/install-inference-firewall.sh /srv/wovenmatter-enterprise-candidate
+node platform/scripts/backup.mjs backup /secure/backup.json daily
+node platform/scripts/backup.mjs backup /secure/backup.json pre-update
+node platform/scripts/backup.mjs restore ARCHIVE /secure/backup.key NEW_DIRECTORY
 ```
 
-Copy `candidate.env.example` to a private environment file outside Git. Set all image tags, `WME_CANDIDATE_ROOT`, the checked `WME_ISOLATED_NETWORK_POOL`, HTTPS portal origin, and an asset origin template on separate wildcard DNS/TLS. No provider key belongs in this file. Use `nginx.candidate.conf.example` as edge configuration guidance; preserve `Host`, support upgrades/SSE, reject unknown hosts, and never expose port 4100 directly. The asset listener must accept only UUID hosts. The application additionally restricts portal routes on asset origins and issues host-only capability cookies.
+The transport receives `put LOCAL_ENCRYPTED_ARCHIVE NAME`, then `prune ISO_30_DAY_CUTOFF`; it must provide verified off-host storage and enforce retention. The example timer runs daily only after the operator supplies a transport. The utility encrypts with AES256-GCM, includes a SQLite online snapshot of committed WAL content, propagates stream errors and removes local staging. Restore authenticates the entire archive before creating output, refuses an existing destination and validates restored SQLite integrity. Keep keys separate from archives. Restore into an isolated new root, review matching configuration/host mappings and remove stale host-boot attestation/socket references before starting reviewed services. Test actual UID10001 access, file versions, native continuation, reports, schedules and provider credential usability before cutover. Backup success is not evidence that a restore drill has passed.
 
-```sh
-docker compose --env-file /secure/candidate.env -f platform/deploy/compose.yaml config --quiet
-docker compose --env-file /secure/candidate.env -f platform/deploy/compose.yaml up -d
-```
+Run application, browser, mTLS, backup and real container acceptance on disposable data before release. Real provider/SMTP and separately located host acceptance require separate authorization. Publishing a review PR does not authorize deployment.
 
-Migrations apply during API startup. They are transactional and recorded in SQLite. There are no default users or passwords. Bootstrap the owner once using stdin, with the password supplied by the operator's password manager/interactive terminal and never a shell argument or Docker environment value:
+## Updating persistent runtimes
 
-```sh
-docker compose --env-file /secure/candidate.env -f platform/deploy/compose.yaml run --rm --no-deps -T \
-  -e WME_OWNER_EMAIL=owner@example.com -e WME_OWNER_NAME='Platform Owner' \
-  api node platform/dist/apps/api/src/cli.js bootstrap-owner --password-stdin
-```
-
-For invitation delivery, add `WME_SMTP_HOST`, `WME_SMTP_PORT`, `WME_SMTP_FROM`, optional `WME_SMTP_USER`, and `WME_SMTP_PASSWORD_FILE` to the API service through a private Compose override; bind the password file read-only. Without mail configuration invitation delivery remains explicitly unavailable; no success is fabricated. Configure the operator's email service deliberately, then verify against a test SMTP sink before any real recipients.
-
-## Restart, rollback, and verification
-
-### Optional public agent HTTP/S access
-
-`WME_EGRESS_ENABLED` defaults to `false`. Enabling it starts a separate API listener on internal port 4101; Compose never publishes this port and the edge must never route to it. Every connection requires an active project/run credential. Only public HTTP/S ports 80 and 443 are supported (CONNECT on port 80 also supports Node's native proxy client); destination DNS is pinned before dialing, private/special address ranges are denied, and revocation terminates active connections. Agents retain internal per-run networks, so bypassing the proxy does not grant public connectivity. Scoped API firewall rules additionally reject new host connections and private forwarding destinations while preserving the dedicated central inference subnet.
-
-The API obtains fresh host-boundary metadata from the authenticated supervisor socket. It includes host interface addresses, `os.hostname()`, `WME_EGRESS_DENIED_IPS` (additional public NAT addresses), and `WME_EGRESS_DENIED_HOSTS` (names and their subdomains). Set `WME_EGRESS_INGRESS_HOSTS` to **every additional public hostname routed back to this server**, including management, reverse-proxy, CDN, or tunnel ingress. Public portal and wildcard asset origins are inferred automatically. The wildcard asset check resolves a synthetic UUID child because wildcard DNS need not define its parent apex. Reserved candidate `.test` / `.localhost` names remain denied without requiring public DNS.
-
-Public ingress DNS addresses are also excluded, with a five-second bounded cache and fail-closed refresh. This blocks alternate destination names resolving to a server/ingress address. Shared CDN addresses may consequently block unrelated sites sharing those IPs; declare the complete boundary and accept that tradeoff rather than permitting a route back to hosted services. Dynamic host interfaces refresh on each metadata read. Configuration changes require restart. Public internet access cannot prevent access to an arbitrary external relay service; this boundary controls direct host/private/container destinations and declared ingress, without TLS interception.
-
-### Recovery checks
-
-Reapply the scoped inference firewall after every host boot before opening provider connections. A systemd oneshot ordered after Docker/before this Compose stack is appropriate; preserve other firewall policy. Never flush the host firewall. Supervisor startup stops uncertain native executions before reporting recovered runs; no uncertain provider request is replayed. SQLite jobs and conversations recover from durable state.
-
-Before review, run `npm run check`, runtime `check-container.sh`, and real Linux container checks: non-root user/capabilities/mounts, per-run network isolation, read-only file enforcement, cancellation/restart, invalid-host rejection, all three library access modes, live dashboard HTTP/WebSocket traffic/revocation, isolated `/data` persistence across new versions, first-connect proxy provisioning without any provider authentication, and backup restore below. Provider-paid/live authentication tests are separate acceptance gates and require user-operated sign-in. Do not claim those from protocol mocks.
-
-Rollback changes image tags to the previous reviewed candidate and preserves volumes. Take a verified backup before migrations; if a schema migration is not backward-compatible, restore the matching backup rather than booting an older binary against the newer database. Never delete candidate volumes to make rollback appear successful. Production cutover is a separate explicit operation.
-
-## Backup and restore
-
-For an online **database-only** snapshot use SQLite's online backup API, which captures committed WAL contents:
-
-```sh
-node platform/scripts/sqlite-backup.mjs backup /state/control/platform.sqlite /backup/platform-TIMESTAMP.sqlite
-node platform/scripts/sqlite-backup.mjs check /backup/platform-TIMESTAMP.sqlite
-```
-
-Run through the Node 24 image if the host has an older Node. The destination must be new; backups are mode 0600 and validated by integrity/foreign-key checks. Never copy only a live `.sqlite` file, ignoring WAL.
-
-A **full recoverable snapshot** must include `state/` (workspaces, original/version blobs, library source, SQLite, native sessions), `private/` (provider credentials/config, supervisor credential, dispatch journals), including `state/library-data/<assetId>` for every live dashboard. These contain customer data and account credentials: encrypt backups at rest and store them off-host with access controls. Keep multiple generations and a measured restore drill.
-
-Quiesce first: stop accepting requests, stop API and supervisor, stop candidate agent containers, live apps, and organization proxy containers. Confirm none remain running. Then snapshot the candidate directory together; preserving only SQLite is insufficient. For restoration, keep candidate services stopped, restore into a **new** candidate root preserve numeric ownership (including UID 65532 for live application data), and let the supervisor recreate its path-derived `wme-storage-*` mount volumes from the new root, validate the database, set matching configuration paths, and start the reviewed images. Do not restore over a running database or start both source and restored instances against the same storage. Test a restored conversation, file version, private share, and dashboard data. Restoring provider credentials does not guarantee the provider has kept the session valid.
-
-The full offline snapshot tool is `platform/scripts/candidate-snapshot.mjs backup CANDIDATE_ROOT NEW_SNAPSHOT_DIRECTORY`; restore uses `restore SNAPSHOT_DIRECTORY NEW_CANDIDATE_ROOT`. Run with Node 24 and Docker CLI on the host, or the supervisor image with the Docker socket and explicit source/destination mounts. It rejects running services, hashes the archive, validates SQLite, preserves numeric owners, and refuses an existing destination. It does not stop services for you. Old stopped organization proxy containers must be explicitly removed before a restored deployment starts with a new root; provisioning rejects a container whose credential mounts belong to the old root.
-
-For the snapshot tool's container mounts, keep the quiesced source directory writable: SQLite opens the database read-only but can still need to create WAL shared-memory metadata beside it. A read-only bind mount can reject that integrity check. The tool never opens the source database for application writes.
-
-Live dashboards require republishing their restored source revision after a restore: container identities and pinned source device/inode values belong to the original host files. Automatic replay/relaunch of old container receipts is not attempted. Verify that the republished dashboard reads the restored `state/library-data/<assetId>` contents, including any SQLite database it owns; do not replace that directory with an empty volume. Native interrupted agent turns similarly require an explicit new user request, preserving the original conversation and receipt.
+Use an immutable versioned image reference. Existing projects reject a different configured image instead of silently claiming the new runtime is active. In an explicitly authorized maintenance window, stop new admissions, quiesce active work and create the encrypted `pre-update` backup. Record and verify each project's allocation labels and exact container ID, then recreate only those stopped project containers with the new image, preserving their placement journals, storage volumes, native sessions and schedule receipts. Resume through the supervisor and run the isolated acceptance checks before reopening admissions. Never delete persistent volumes or change the stored host to perform an image update. Rollback uses the recorded image and authenticated backup where needed.

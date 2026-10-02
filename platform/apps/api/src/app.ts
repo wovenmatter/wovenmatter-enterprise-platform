@@ -11,6 +11,12 @@ import {
 import { createContext, AppError, type AppConfig } from "./context.js";
 import { registerAuth } from "./auth/index.js";
 import { registerOrganizations } from "./organizations/index.js";
+import { projectRuntimeSpec } from "./projects/runtime.js";
+import {
+  purgeExpiredProject,
+  withProjectLifecycle,
+  requireProjectRuntime,
+} from "./projects/trash.js";
 import { registerProjects } from "./projects/index.js";
 import {
   createJobWorker,
@@ -24,12 +30,7 @@ import {
   captureProjectManifest,
 } from "./files/index.js";
 import { ensureRoot } from "./files/paths.js";
-import {
-  registerLibrary,
-  setLibraryRuntime,
-  recheckLibrary,
-  type LibraryRuntimeHost,
-} from "./library/index.js";
+import { registerReports } from "./library/reports.js";
 import {
   createConversationService,
   registerConversations,
@@ -47,12 +48,10 @@ import {
   sendPasswordReset,
   type MailConfig,
 } from "./mail/index.js";
-
 export interface ApplicationOptions {
   database?: Database;
   runtime?: Runtime;
   registry?: ProxyRegistry;
-  libraryHost?: LibraryRuntimeHost;
   mail?: MailConfig;
   webRoot?: string;
   jobs?: boolean;
@@ -80,16 +79,22 @@ export async function buildApp(
   config: AppConfig,
   options: ApplicationOptions = {},
 ) {
-  await mkdir(config.stateDir, { recursive: true, mode: 0o700 });
+  await mkdir(config.stateDir, {
+    recursive: true,
+    mode: 0o700,
+  });
   const db =
     options.database ??
     (await createDatabase(join(config.stateDir, "control", "platform.sqlite")));
   await migrateFoundation(db);
   const ctx = createContext(db, config);
+  ctx.runtime = options.runtime;
   const app = Fastify({
     bodyLimit: 48 * 1024 * 1024,
     trustProxy: false,
-    logController: new LogController({ disableRequestLogging: true }),
+    logController: new LogController({
+      disableRequestLogging: true,
+    }),
     requestTimeout: 120_000,
     logger: options.logger
       ? {
@@ -121,11 +126,13 @@ export async function buildApp(
     `^(?:${[...names].map(regexLiteral).join("|")})$`,
     "i",
   );
-  // Content routes supply their own exact per-asset host constraint. The ordinary
-  // API and SPA must never become reachable on an untrusted generated-app origin.
+  // Every route, including safe reports, belongs to the configured portal host.
   app.addHook("onRoute", (route) => {
     if (!route.constraints?.host)
-      route.constraints = { ...route.constraints, host: portalHosts };
+      route.constraints = {
+        ...route.constraints,
+        host: portalHosts,
+      };
   });
   app.setErrorHandler((error, request, reply) => {
     const known = error instanceof AppError || error instanceof InferenceError;
@@ -177,16 +184,27 @@ export async function buildApp(
               ? "The service is busy. Please try again."
               : "The request could not be completed.";
     if (status >= 500)
-      request.log.error({ code, requestId: request.id }, "Request failed");
+      request.log.error(
+        {
+          code,
+          requestId: request.id,
+        },
+        "Request failed",
+      );
     if (!reply.sent)
-      reply
-        .code(status)
-        .header("cache-control", "no-store")
-        .send({ error: { code, message } });
+      reply.code(status).header("cache-control", "no-store").send({
+        error: {
+          code,
+          message,
+        },
+      });
   });
   app.addHook("onSend", async (request, reply, payload) => {
     reply.header("x-content-type-options", "nosniff");
-    if (portalHosts.test(request.headers.host ?? "")) {
+    if (
+      portalHosts.test(request.headers.host ?? "") &&
+      !request.routeOptions.config.safeReport
+    ) {
       reply
         .header("referrer-policy", "no-referrer")
         .header("x-frame-options", "DENY")
@@ -221,13 +239,13 @@ export async function buildApp(
   await registerProjects(app, ctx);
   await registerJobs(app, ctx);
   await registerFiles(app, ctx);
-  if (options.libraryHost) setLibraryRuntime(ctx, options.libraryHost);
-  await registerLibrary(app, ctx);
+  await registerReports(app, ctx);
   await registerInferenceRoutes(app, ctx, inference);
   conversations = await createConversationService(ctx, {
     runtime: options.runtime ?? unavailableRuntime,
     files: {
-      resolveProjectMounts,
+      resolveProjectMounts: (ctx, user, projectId, mode) =>
+        resolveProjectMounts(ctx, user, projectId, mode, true),
       reconcileProjectFiles,
       captureProjectManifest,
     },
@@ -243,31 +261,114 @@ export async function buildApp(
       validateSelection: (...args) => inference.validateSelection(...args),
     },
   });
-  ctx.onAccessChanged = async () => {
-    await conversations!.recheckAccess();
-    await recheckLibrary(ctx);
+  let accessSyncPending = false;
+  let accessSyncRevision = 0;
+  let accessSyncLane = Promise.resolve();
+  ctx.onAccessChanged = () => {
+    const revision = ++accessSyncRevision;
+    accessSyncPending = true;
+    // Serialize the authoritative read as well as dispatch. Otherwise a slow
+    // older read can restore a share after a newer revocation has returned.
+    const operation = accessSyncLane
+      .catch(() => {})
+      .then(async () => {
+        await conversations!.recheckAccess();
+        if (options.runtime?.updateProject) {
+          const projects = await db.all<{
+            id: string;
+            org_id: string;
+            host_id: string;
+          }>("SELECT id,org_id,host_id FROM projects WHERE status<>'purged'");
+          // Wait for every revoked schedule mount to stop before acknowledging access changes.
+          const results = await Promise.allSettled(
+            projects.map((p) =>
+              withProjectLifecycle(ctx, p.id, async () => {
+                // Provision and restore share this lock. Re-read after either finishes,
+                // including projects that were still deleted when this sync was queued.
+                const current = await db.get<{
+                  status: string;
+                }>("SELECT status FROM projects WHERE id=?", [p.id]);
+                if (
+                  !current ||
+                  !["ready", "provisioning"].includes(current.status)
+                )
+                  return;
+                let spec;
+                try {
+                  spec = await projectRuntimeSpec(ctx, p.id);
+                } catch (e) {
+                  await options.runtime!.updateProject!({
+                    projectId: p.id,
+                    organizationId: p.org_id,
+                    hostId: p.host_id,
+                    scheduleEnabled: false,
+                    scheduleMounts: [],
+                  });
+                  throw e;
+                }
+                await options.runtime!.updateProject!(spec);
+              }),
+            ),
+          );
+          const failed = results.find((r) => r.status === "rejected");
+          if (failed?.status === "rejected") throw failed.reason;
+        }
+        await inference.recheckOAuthAccess();
+        if (revision === accessSyncRevision) accessSyncPending = false;
+      });
+    accessSyncLane = operation;
+    return operation;
   };
   await registerConversations(app, ctx, conversations);
   const handlers: Record<string, JobHandler> = {
     "project.provision": {
       replaySafe: true,
       async run({ job }) {
-        const project = await db.get<{
-          id: string;
-          org_id: string;
-          status: string;
-        }>("SELECT id,org_id,status FROM projects WHERE id=?", [
-          job.projectId!,
-        ]);
-        if (!project || project.status !== "provisioning") return;
-        await ensureRoot(ctx, { orgId: project.org_id, projectId: project.id });
+        return withProjectLifecycle(ctx, job.projectId!, async () => {
+          const project = await db.get<{
+            id: string;
+            org_id: string;
+            status: string;
+            host_id: string;
+          }>("SELECT id,org_id,status,host_id FROM projects WHERE id=?", [
+            job.projectId!,
+          ]);
+          if (!project || project.status !== "provisioning") return;
+          await ensureRoot(ctx, {
+            orgId: project.org_id,
+            projectId: project.id,
+          });
+          if (!options.runtime?.ensureProject)
+            throw new AppError(
+              503,
+              "runtime_unavailable",
+              "Project runtime provisioning is not configured.",
+            );
+          await options.runtime.ensureProject(
+            await projectRuntimeSpec(ctx, project.id),
+          );
+        });
       },
     },
     "project.remove": {
       replaySafe: true,
-      async run() {
-        await conversations!.recheckAccess();
-        await recheckLibrary(ctx);
+      async run({ job }) {
+        await withProjectLifecycle(ctx, job.projectId!, async () => {
+          const project = await db.get<any>(
+            "SELECT * FROM projects WHERE id=? AND status='deleting'",
+            [job.projectId!],
+          );
+          if (project)
+            await requireProjectRuntime(
+              ctx,
+              "stopProject",
+            )({
+              projectId: project.id,
+              organizationId: project.org_id,
+              hostId: project.host_id,
+            });
+          await conversations!.recheckAccess();
+        });
       },
     },
   };
@@ -314,8 +415,10 @@ export async function buildApp(
       },
     };
   const jobs = createJobWorker(ctx, handlers);
-  app.get("/healthz", async () => ({ status: "ok" }));
-  app.get("/readyz", async () => {
+  app.get("/enterprise/healthz", async () => ({
+    status: "ok",
+  }));
+  app.get("/enterprise/readyz", async () => {
     await db.get("SELECT 1");
     return {
       status: "ready",
@@ -326,39 +429,87 @@ export async function buildApp(
   if (existsSync(join(webRoot, "index.html"))) {
     await app.register(staticFiles, {
       root: webRoot,
+      prefix: "/enterprise/",
       wildcard: false,
       index: false,
       cacheControl: true,
       maxAge: "1h",
     });
-    app.get("/", async (_request, reply) =>
-      reply.header("cache-control", "no-cache").sendFile("index.html"),
-    );
+    for (const route of ["/enterprise", "/enterprise/"])
+      app.get(route, async (_request, reply) =>
+        reply.header("cache-control", "no-cache").sendFile("index.html"),
+      );
     app.setNotFoundHandler(async (request, reply) => {
       if (
         portalHosts.test(request.headers.host ?? "") &&
         request.method === "GET" &&
-        !request.url.startsWith("/api/") &&
-        !request.url.startsWith("/share/")
+        /^\/enterprise\/(?:login|organizations|projects|personal-settings|activate|forgot-password|reset-password)(?:[/?]|$)/.test(
+          request.url,
+        )
       )
         return reply.header("cache-control", "no-cache").sendFile("index.html");
-      return reply
-        .code(404)
-        .send({ error: { code: "not_found", message: "Not found" } });
+      return reply.code(404).send({
+        error: {
+          code: "not_found",
+          message: "Not found",
+        },
+      });
     });
   }
+  let accessRetry: Promise<void> | undefined;
+  const accessTimer = setInterval(() => {
+    if (accessSyncPending && !accessRetry)
+      accessRetry = ctx.onAccessChanged!()
+        .catch(() => {})
+        .finally(() => {
+          accessRetry = undefined;
+        });
+  }, 5000);
+  accessTimer.unref();
+  let purging: Promise<void> | undefined;
+  const purgeTimer = setInterval(() => {
+    if (purging) return;
+    purging = (async () => {
+      for (const row of await db.all<{
+        id: string;
+      }>(
+        "SELECT id FROM projects WHERE status IN ('deleted','deleting') AND purge_after<=?",
+        [new Date().toISOString()],
+      ))
+        await purgeExpiredProject(ctx, row.id);
+    })()
+      .catch(() => {})
+      .finally(() => {
+        purging = undefined;
+      });
+  }, 60000);
+  purgeTimer.unref();
   app.addHook("onClose", async () => {
+    clearInterval(purgeTimer);
+    clearInterval(accessTimer);
+    await accessRetry;
+    await purging;
     await jobs.stop();
+    await accessSyncLane.catch(() => {});
     await conversations!.close();
     if (!options.database) await db.close();
   });
   try {
     await app.ready();
-    if (options.startConversations !== false) await conversations.start();
+    if (options.startConversations !== false) {
+      await conversations.start();
+      await ctx.onAccessChanged();
+    }
     if (options.jobs !== false) jobs.start();
   } catch (error) {
     await app.close();
     throw error;
   }
-  return { app, ctx, conversations, inference, jobs };
+  return {
+    app,
+    ctx,
+    conversations,
+    inference,
+    jobs,
+  };
 }

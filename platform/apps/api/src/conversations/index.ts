@@ -22,94 +22,131 @@ export async function registerConversations(
   app.addHook("preClose", async () => {
     for (const close of streams) close();
   });
-  app.get("/api/projects/:projectId/conversations", async (r) =>
+  app.get("/enterprise/api/projects/:projectId/conversations", async (r) =>
     service.list(await ctx.requireUser(r), params(r).projectId!),
   );
-  app.post("/api/projects/:projectId/conversations", async (r, reply) =>
-    reply
-      .code(201)
-      .send(
-        await service.create(
-          await ctx.requireUser(r),
-          params(r).projectId!,
-          body(r),
+  app.post(
+    "/enterprise/api/projects/:projectId/conversations",
+    async (r, reply) =>
+      reply
+        .code(201)
+        .send(
+          await service.create(
+            await ctx.requireUser(r),
+            params(r).projectId!,
+            body(r),
+          ),
         ),
-      ),
   );
-  app.get("/api/conversations/:conversationId", async (r) =>
+  app.get("/enterprise/api/conversations/:conversationId", async (r) =>
     service.get(await ctx.requireUser(r), params(r).conversationId!),
   );
-  app.patch("/api/conversations/:conversationId", async (r) =>
+  app.patch("/enterprise/api/conversations/:conversationId", async (r) =>
     service.update(
       await ctx.requireUser(r),
       params(r).conversationId!,
       body(r),
     ),
   );
-  app.delete("/api/conversations/:conversationId", async (r) =>
+  app.delete("/enterprise/api/conversations/:conversationId", async (r) =>
     service.remove(await ctx.requireUser(r), params(r).conversationId!),
   );
-  app.get("/api/conversations/:conversationId/members", async (r) =>
+  app.get("/enterprise/api/conversations/:conversationId/members", async (r) =>
     service.members(await ctx.requireUser(r), params(r).conversationId!),
   );
-  app.post("/api/conversations/:conversationId/members", async (r) => {
-    const input = body(r);
-    if (typeof input.userId !== "string")
-      throw new AppError(400, "invalid_input", "Select a project member.");
-    return service.addMember(
-      await ctx.requireUser(r),
-      params(r).conversationId!,
-      input.userId,
-    );
-  });
-  app.delete("/api/conversations/:conversationId/members/:userId", async (r) =>
-    service.removeMember(
-      await ctx.requireUser(r),
-      params(r).conversationId!,
-      params(r).userId!,
-    ),
-  );
-  app.get("/api/conversations/:conversationId/messages", async (r) => {
-    const query = r.query as Record<string, unknown>;
-    return service.messages(
-      await ctx.requireUser(r),
-      params(r).conversationId!,
-      typeof query.before === "string" ? query.before : undefined,
-    );
-  });
-  app.post("/api/conversations/:conversationId/messages", async (r, reply) =>
-    reply
-      .code(202)
-      .send(
-        await service.admit(
-          await ctx.requireUser(r),
-          params(r).conversationId!,
-          body(r),
+  app.get(
+    "/enterprise/api/conversations/:conversationId/eligible-members",
+    async (r) => {
+      const c = await service.requireConversation(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+      );
+      const project = await ctx.db.get<{
+        org_id: string;
+      }>("SELECT org_id FROM projects WHERE id=?", [c.project_id]);
+      return {
+        items: await ctx.db.all(
+          "SELECT u.id,u.name,u.email FROM users u WHERE u.enabled=1 AND (u.role='owner' OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u.id AND m.org_id=? AND (m.role='admin' OR EXISTS(SELECT 1 FROM project_members p WHERE p.user_id=u.id AND p.project_id=?)))) ORDER BY u.name,u.email",
+          [project!.org_id, c.project_id],
         ),
+      };
+    },
+  );
+  app.post(
+    "/enterprise/api/conversations/:conversationId/members",
+    async (r) => {
+      const input = body(r);
+      if (typeof input.userId !== "string")
+        throw new AppError(400, "invalid_input", "Select a project member.");
+      return service.addMember(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+        input.userId,
+      );
+    },
+  );
+  app.delete(
+    "/enterprise/api/conversations/:conversationId/members/:userId",
+    async (r) =>
+      service.removeMember(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+        params(r).userId!,
       ),
   );
-  app.get("/api/conversations/:conversationId/runs/:runId/sources", async (r) =>
-    service.sources(
-      await ctx.requireUser(r),
-      params(r).conversationId!,
-      params(r).runId!,
-    ),
+  app.get(
+    "/enterprise/api/conversations/:conversationId/messages",
+    async (r) => {
+      const query = r.query as Record<string, unknown>;
+      return service.messages(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+        typeof query.before === "string" ? query.before : undefined,
+      );
+    },
   );
-  app.get("/api/conversations/:conversationId/runs", async (r) =>
+  app.post(
+    "/enterprise/api/conversations/:conversationId/messages",
+    async (r, reply) =>
+      reply
+        .code(202)
+        .send(
+          await service.admit(
+            await ctx.requireUser(r),
+            params(r).conversationId!,
+            body(r),
+          ),
+        ),
+  );
+  app.get(
+    "/enterprise/api/conversations/:conversationId/runs/:runId/sources",
+    async (r) =>
+      service.sources(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+        params(r).runId!,
+      ),
+  );
+  app.get("/enterprise/api/conversations/:conversationId/runs", async (r) =>
     service.runs(await ctx.requireUser(r), params(r).conversationId!),
   );
-  app.post("/api/conversations/:conversationId/cancel", async (r) => {
-    const input = r.body ? body(r) : {};
-    if (input.runId !== undefined && typeof input.runId !== "string")
-      throw new AppError(400, "invalid_input", "Invalid run ID.");
-    return service.cancel(
-      await ctx.requireUser(r),
-      params(r).conversationId!,
-      input.runId as string | undefined,
-    );
-  });
-  app.get("/api/conversations/:conversationId/events", async (request, reply) =>
-    streamEvents(request, reply, ctx, service, streams),
+  app.post(
+    "/enterprise/api/conversations/:conversationId/cancel",
+    async (r) => {
+      const input = r.body ? body(r) : {};
+      if (input.runId !== undefined && typeof input.runId !== "string")
+        throw new AppError(400, "invalid_input", "Invalid run ID.");
+      return service.cancel(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+        input.runId as string | undefined,
+      );
+    },
+  );
+  app.get(
+    "/enterprise/api/conversations/:conversationId/events",
+    async (request, reply) =>
+      streamEvents(request, reply, ctx, service, streams),
   );
 }
 async function streamEvents(

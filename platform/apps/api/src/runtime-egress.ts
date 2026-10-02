@@ -1,6 +1,8 @@
 import { createEgressProxy, type EgressScope } from "./egress/index.js";
-import type { Runtime } from "../../../packages/runtime/src/types.js";
-
+import type {
+  Runtime,
+  ProjectRuntimeSpec,
+} from "../../../packages/runtime/src/types.js";
 export interface NetworkBoundary {
   addresses: string[];
   hostnames: string[];
@@ -11,6 +13,7 @@ export interface RuntimeEgressOptions {
   host: string;
   port: number;
   networkBoundary(): Promise<NetworkBoundary>;
+  issueProjectCapability?(spec: ProjectRuntimeSpec): Promise<string>;
   authorize(projectId: string, token: string): Promise<EgressScope>;
 }
 
@@ -58,10 +61,41 @@ export async function createRuntimeEgress(options: RuntimeEgressOptions) {
   });
   let listening = false;
   const runtime: Runtime = {
+    steer: options.runtime.steer?.bind(options.runtime),
+    updateProject: options.runtime.updateProject?.bind(options.runtime),
+    ensureProject: options.runtime.ensureProject
+      ? async (spec) =>
+          options.runtime.ensureProject!({
+            ...spec,
+            ...(options.issueProjectCapability
+              ? {
+                  egressProxyUrl: origin.origin,
+                  egressToken: await options.issueProjectCapability(spec),
+                }
+              : {}),
+          })
+      : undefined,
+    stopProject: options.runtime.stopProject?.bind(options.runtime),
+    restoreProject: options.runtime.restoreProject
+      ? async (spec) =>
+          options.runtime.restoreProject!({
+            ...spec,
+            ...(options.issueProjectCapability
+              ? {
+                  egressProxyUrl: origin.origin,
+                  egressToken: await options.issueProjectCapability(spec),
+                }
+              : {}),
+          })
+      : undefined,
+    purgeProject: options.runtime.purgeProject?.bind(options.runtime),
     async execute(request, emit, signal) {
       if (!listening) throw new Error("Agent public network is unavailable");
       return options.runtime.execute(
-        { ...request, egressProxyUrl: origin.origin },
+        {
+          ...request,
+          egressProxyUrl: origin.origin,
+        },
         emit,
         signal,
       );

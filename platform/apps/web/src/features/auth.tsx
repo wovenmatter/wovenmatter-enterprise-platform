@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { send, type User } from "../api";
 import { Brand } from "../components/Brand";
 import { AsyncForm, Field, Success } from "../components/ui";
@@ -7,10 +7,12 @@ import { AsyncForm, Field, Success } from "../components/ui";
 export type Session = { user: User | null; csrfToken: string | null };
 
 export function AuthPage({ onSuccess }: { onSuccess: (s: Session) => void }) {
-  const activate = window.location.pathname === "/activate";
-  const forgot = window.location.pathname === "/forgot-password";
-  const reset = window.location.pathname === "/reset-password";
-  const token = new URLSearchParams(window.location.search).get("token");
+  const location = useLocation(),
+    navigate = useNavigate();
+  const activate = location.pathname === "/activate";
+  const forgot = location.pathname === "/forgot-password";
+  const reset = location.pathname === "/reset-password";
+  const token = new URLSearchParams(location.search).get("token");
   const [notice, setNotice] = useState("");
   const title = activate
     ? "Set up your account"
@@ -55,7 +57,7 @@ export function AuthPage({ onSuccess }: { onSuccess: (s: Session) => void }) {
               );
             if (forgot) {
               const result = await send<{ message: string }>(
-                "/api/password-reset/request",
+                "/enterprise/api/password-reset/request",
                 { email: data.get("email") },
               );
               setNotice(result.message);
@@ -69,18 +71,18 @@ export function AuthPage({ onSuccess }: { onSuccess: (s: Session) => void }) {
                 }
               : reset
                 ? { token, password: data.get("password") }
-              : { email: data.get("email"), password: data.get("password") };
+                : { email: data.get("email"), password: data.get("password") };
             onSuccess(
               await send<Session>(
                 activate
-                  ? "/api/activate"
+                  ? "/enterprise/api/activate"
                   : reset
-                    ? "/api/password-reset/confirm"
-                    : "/api/login",
+                    ? "/enterprise/api/password-reset/confirm"
+                    : "/enterprise/api/login",
                 body,
               ),
             );
-            if (activate) window.location.assign("/");
+            if (activate || reset) navigate("/", { replace: true });
           }}
         >
           {activate ? (
@@ -101,12 +103,16 @@ export function AuthPage({ onSuccess }: { onSuccess: (s: Session) => void }) {
           {!forgot ? (
             <Field
               label="Password"
-              hint={activate || reset ? "Use at least 12 characters." : undefined}
+              hint={
+                activate || reset ? "Use at least 12 characters." : undefined
+              }
             >
               <input
                 name="password"
                 type="password"
-                autoComplete={activate || reset ? "new-password" : "current-password"}
+                autoComplete={
+                  activate || reset ? "new-password" : "current-password"
+                }
                 minLength={activate || reset ? 12 : undefined}
                 required
               />

@@ -5,6 +5,7 @@ type Workspace = {
   user: User;
   org: Organization;
   isAdmin: boolean;
+  libraryFull: boolean;
   refreshOrganizations: () => void;
   selectOrganization: (orgId: string) => void;
   orgBase: string;

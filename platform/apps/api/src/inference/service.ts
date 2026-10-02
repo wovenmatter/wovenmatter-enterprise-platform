@@ -1,6 +1,7 @@
+import { setTimeout as wait } from "node:timers/promises";
 import { discoverProviderModels } from "./discovery.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import type { AppContext, User } from "../context.js";
+import { AppError, mapUser, type AppContext, type User } from "../context.js";
 import {
   CLAUDE_SUBSCRIPTION_NOTICE,
   InferenceError,
@@ -10,7 +11,6 @@ import {
   text,
   type ProxyEndpoint,
 } from "./proxy-client.js";
-
 export interface ProxyRegistry {
   resolve(organizationId: string): Promise<ProxyEndpoint | undefined>;
   ensure?(organizationId: string): Promise<ProxyEndpoint>;
@@ -33,7 +33,11 @@ export interface InferenceOptions {
   /** Operator-approved additional origins, including self-hosted model endpoints. */
   customProviderOrigins?: string[];
 }
-export type InferenceModel = { id: string; name: string; provider: string };
+export type InferenceModel = {
+  id: string;
+  name: string;
+  provider: string;
+};
 type ApiProvider = "openai" | "anthropic" | "openrouter" | "xai" | "custom";
 type SubscriptionProvider = "openai" | "anthropic" | "xai";
 interface ApiAccount {
@@ -53,6 +57,12 @@ interface OAuthRow {
   state: string;
   expires_at: string;
   status: string;
+  flow: string | null;
+  url: string | null;
+  user_code: string | null;
+  interval: number | null;
+  auth_session_id: string | null;
+  protocol: number;
 }
 interface GatewayRow {
   org_id: string;
@@ -70,15 +80,33 @@ const providerNames: Record<SubscriptionProvider, string> = {
   anthropic: "claude",
   xai: "xai",
 };
-const apiDefaults: Record<ApiProvider, { family: string; url: string }> = {
-  openai: { family: "codex", url: "https://api.openai.com/v1" },
-  anthropic: { family: "claude", url: "https://api.anthropic.com" },
+const apiDefaults: Record<
+  ApiProvider,
+  {
+    family: string;
+    url: string;
+  }
+> = {
+  openai: {
+    family: "codex",
+    url: "https://api.openai.com/v1",
+  },
+  anthropic: {
+    family: "claude",
+    url: "https://api.anthropic.com",
+  },
   openrouter: {
     family: "openai-compatibility",
     url: "https://openrouter.ai/api/v1",
   },
-  xai: { family: "xai", url: "https://api.x.ai/v1" },
-  custom: { family: "openai-compatibility", url: "" },
+  xai: {
+    family: "xai",
+    url: "https://api.x.ai/v1",
+  },
+  custom: {
+    family: "openai-compatibility",
+    url: "",
+  },
 };
 function hash(input: string) {
   return createHash("sha256").update(input).digest("hex");
@@ -107,6 +135,11 @@ function familyProvider(value: unknown): string {
 /** A single API process owns proxy configuration writes; worker jobs call this owner. */
 export class InferenceService {
   readonly proxy: ProxyClient;
+  private readonly oauthWorkers = new Map<
+    string,
+    { controller: AbortController; task: Promise<void> }
+  >();
+  private closing = false;
   private readonly mutations = new Map<string, Promise<unknown>>();
   constructor(
     readonly ctx: AppContext,
@@ -129,6 +162,83 @@ export class InferenceService {
       CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
     `,
     );
+    await this.ctx.db.migrate(
+      "remote-signin-v1",
+      `
+      ALTER TABLE inference_oauth_sessions ADD COLUMN flow TEXT;
+      ALTER TABLE inference_oauth_sessions ADD COLUMN url TEXT;
+      ALTER TABLE inference_oauth_sessions ADD COLUMN user_code TEXT;
+      ALTER TABLE inference_oauth_sessions ADD COLUMN interval INTEGER;
+      ALTER TABLE inference_oauth_sessions ADD COLUMN auth_session_id TEXT;
+      ALTER TABLE inference_oauth_sessions ADD COLUMN protocol INTEGER NOT NULL DEFAULT 0;
+      UPDATE inference_oauth_sessions SET status='interrupted' WHERE status='pending';
+    `,
+    );
+    const pending = await this.ctx.db.all<OAuthRow>(
+      "SELECT * FROM inference_oauth_sessions WHERE protocol=1 AND status IN ('starting','pending','cancelling')",
+    );
+    for (const row of pending) this.watchOAuth(row.id, row.org_id);
+    await this.ctx.db.migrate(
+      "project-egress-v1",
+      "CREATE TABLE project_egress_capabilities(project_id TEXT PRIMARY KEY REFERENCES projects(id),org_id TEXT NOT NULL REFERENCES organizations(id),host_id TEXT NOT NULL,token_hash TEXT NOT NULL);",
+    );
+  }
+  async closeOAuth() {
+    this.closing = true;
+    for (const worker of this.oauthWorkers.values()) worker.controller.abort();
+    await Promise.allSettled(
+      [...this.oauthWorkers.values()].map((w) => w.task),
+    );
+  }
+  /** Project-owned scheduled scripts receive public-network authority only. */
+  async issueProjectEgress(
+    spec: import("../../../../packages/runtime/src/types.js").ProjectRuntimeSpec,
+  ): Promise<string> {
+    const row = await this.ctx.db.get(
+      "SELECT id FROM projects WHERE id=? AND org_id=? AND host_id=? AND status<>'purged'",
+      [spec.projectId, spec.organizationId, spec.hostId],
+    );
+    if (!row)
+      throw new InferenceError(
+        403,
+        "project_unavailable",
+        "Project placement is unavailable.",
+      );
+    const token = `wme_schedule_${randomBytes(32).toString("base64url")}`;
+    await this.ctx.db.run(
+      "INSERT INTO project_egress_capabilities(project_id,org_id,host_id,token_hash) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET token_hash=excluded.token_hash,host_id=excluded.host_id",
+      [spec.projectId, spec.organizationId, spec.hostId, hash(token)],
+    );
+    return token;
+  }
+  async authorizeEgress(
+    projectId: string,
+    token: string,
+  ): Promise<import("../egress/index.js").EgressScope> {
+    if (!token.startsWith("wme_schedule_"))
+      return this.authorizeGateway(projectId, token);
+    if (!/^wme_schedule_[a-zA-Z0-9_-]{43}$/.test(token))
+      throw new InferenceError(
+        403,
+        "project_unavailable",
+        "Project network access is unavailable.",
+      );
+    const row = await this.ctx.db.get<any>(
+      "SELECT c.* FROM project_egress_capabilities c JOIN projects p ON p.id=c.project_id AND p.org_id=c.org_id AND p.host_id=c.host_id WHERE c.project_id=? AND c.token_hash=? AND p.status='ready' AND p.deleted_at IS NULL",
+      [projectId, hash(token)],
+    );
+    if (!row)
+      throw new InferenceError(
+        403,
+        "project_unavailable",
+        "Project network access is unavailable.",
+      );
+    return {
+      orgId: row.org_id,
+      projectId,
+      userId: "project-scheduler",
+      runId: row.token_hash,
+    };
   }
   private async locked<T>(orgId: string, fn: () => Promise<T>): Promise<T> {
     const previous = this.mutations.get(orgId) ?? Promise.resolve();
@@ -148,7 +258,18 @@ export class InferenceService {
     const data = object(
       await this.proxy.request(orgId, "/v8/management/credentials"),
     );
-    return Array.isArray(data.files) ? data.files.map(object) : [];
+    const attempts = await this.ctx.db.all<{ id: string }>(
+      "SELECT id FROM inference_oauth_sessions WHERE org_id=? AND protocol=1 AND status<>'complete'",
+      [orgId],
+    );
+    const unconfirmed = new Set(
+      attempts.map((row) => `enterprise-${row.id}.json`),
+    );
+    return Array.isArray(data.files)
+      ? data.files
+          .map(object)
+          .filter((row) => !unconfirmed.has(String(row.name)))
+      : [];
   }
   private subscriptionId(orgId: string, entry: Record<string, unknown>) {
     return `sub_${hash(`${orgId}\0${String(entry.name)}\0${String(entry.auth_index ?? "")}`).slice(0, 32)}`;
@@ -248,7 +369,11 @@ export class InferenceService {
   async discover(
     user: User,
     orgId: string,
-    input: { provider: ApiProvider; apiKey: string; baseUrl?: string },
+    input: {
+      provider: ApiProvider;
+      apiKey: string;
+      baseUrl?: string;
+    },
   ) {
     await this.ctx.requireOrgAdmin(user, orgId);
     if (!apiDefaults[input.provider])
@@ -286,7 +411,11 @@ export class InferenceService {
           this.options.customProviderOrigins,
           input.provider,
         )
-      ).map((id) => ({ id, name: id, provider: input.provider })),
+      ).map((id) => ({
+        id,
+        name: id,
+        provider: input.provider,
+      })),
     };
   }
   async addApiKey(
@@ -406,9 +535,18 @@ export class InferenceService {
         name: `wme-${id}`,
         "base-url": baseUrl,
         "request-retry": 0,
-        keys: [{ "api-key": input.apiKey }],
+        keys: [
+          {
+            "api-key": input.apiKey,
+          },
+        ],
         ...(modelNames.length
-          ? { models: modelNames.map((name) => ({ name, alias: name })) }
+          ? {
+              models: modelNames.map((name) => ({
+                name,
+                alias: name,
+              })),
+            }
           : {}),
       };
       try {
@@ -427,7 +565,7 @@ export class InferenceService {
         );
         throw error;
       }
-      await this.ctx.audit(user, "inference.api_key.added", id, {
+      await this.ctx.audit(user, orgId, "inference.api_key.added", id, {
         provider: input.provider,
       });
       return {
@@ -454,7 +592,11 @@ export class InferenceService {
     user: User,
     orgId: string,
     accountId: string,
-    input: { enabled?: boolean; priority?: number; label?: string },
+    input: {
+      enabled?: boolean;
+      priority?: number;
+      label?: string;
+    },
   ) {
     await this.ctx.requireOrgAdmin(user, orgId);
     if (
@@ -489,7 +631,10 @@ export class InferenceService {
         await this.proxy.request(
           orgId,
           `/v8/management/config/api-keys/${api.group_family}`,
-          { method: "PUT", body: groups },
+          {
+            method: "PUT",
+            body: groups,
+          },
         );
         await this.ctx.db.run(
           "UPDATE inference_api_accounts SET label=?,state=? WHERE id=? AND org_id=?",
@@ -514,20 +659,31 @@ export class InferenceService {
             "account_not_found",
             "Account not found.",
           );
-        const lookup = { name: entry.name, auth_index: entry.auth_index };
+        const lookup = {
+          name: entry.name,
+          auth_index: entry.auth_index,
+        };
         if (input.enabled !== undefined)
           await this.proxy.request(orgId, "/v8/management/credentials/status", {
             method: "PATCH",
-            body: { ...lookup, disabled: !input.enabled },
+            body: {
+              ...lookup,
+              disabled: !input.enabled,
+            },
           });
         if (input.priority !== undefined)
           await this.proxy.request(orgId, "/v8/management/credentials/fields", {
             method: "PATCH",
-            body: { ...lookup, priority: input.priority },
+            body: {
+              ...lookup,
+              priority: input.priority,
+            },
           });
       }
-      await this.ctx.audit(user, "inference.account.updated", accountId);
-      return { ok: true };
+      await this.ctx.audit(user, orgId, "inference.account.updated", accountId);
+      return {
+        ok: true,
+      };
     });
   }
   async removeAccount(user: User, orgId: string, accountId: string) {
@@ -564,11 +720,15 @@ export class InferenceService {
         await this.proxy.request(
           orgId,
           `/v8/management/credentials?name=${encodeURIComponent(String(entry.name))}`,
-          { method: "DELETE" },
+          {
+            method: "DELETE",
+          },
         );
       }
-      await this.ctx.audit(user, "inference.account.removed", accountId);
-      return { ok: true };
+      await this.ctx.audit(user, orgId, "inference.account.removed", accountId);
+      return {
+        ok: true,
+      };
     });
   }
   async refreshAccount(user: User, orgId: string, accountId: string) {
@@ -584,48 +744,125 @@ export class InferenceService {
       );
     await this.proxy.request(orgId, "/v8/management/credentials/refresh", {
       method: "POST",
-      body: { name: entry.name, auth_index: entry.auth_index },
+      body: {
+        name: entry.name,
+        auth_index: entry.auth_index,
+      },
     });
-    await this.ctx.audit(user, "inference.account.refreshed", accountId);
-    return { ok: true };
+    await this.ctx.audit(user, orgId, "inference.account.refreshed", accountId);
+    return {
+      ok: true,
+    };
   }
-  async startOAuth(
-    user: User,
-    orgId: string,
-    provider: SubscriptionProvider,
-    acceptedRisk: boolean,
-  ) {
-    await this.ctx.requireOrgAdmin(user, orgId);
-    if (!(provider in providerNames))
-      throw new InferenceError(
-        400,
-        "invalid_provider",
-        "Choose a supported subscription provider.",
-      );
-    if (provider === "anthropic" && !acceptedRisk)
-      throw new InferenceError(
-        400,
-        "claude_notice_required",
-        CLAUDE_SUBSCRIPTION_NOTICE,
-      );
-    await this.ensure(orgId);
-    const data = object(
-      await this.proxy.request(
-        orgId,
-        `/v8/management/oauth/auth-url?provider=${providerNames[provider]}&is_webui=true`,
-      ),
+  private oauthDto(row: OAuthRow) {
+    const messages: Record<string, string> = {
+      starting: "Preparing sign-in…",
+      pending: "Waiting for provider approval.",
+      complete: "Connection saved.",
+      expired: "This sign-in expired. Start a new sign-in.",
+      denied: "The provider denied sign-in. You can try again.",
+      interrupted:
+        "Sign-in was interrupted. Check Connections, then start a new sign-in if needed.",
+      error:
+        "The provider could not complete sign-in. Check that subscription sign-in is available for your account, then try again or use an API key.",
+      cancelling: "Cancelling sign-in…",
+      cancelled: "Sign-in cancelled.",
+    };
+    return {
+      id: row.id,
+      provider: row.provider,
+      status: row.status,
+      message: messages[row.status],
+      expiresAt: row.expires_at,
+      flow: row.flow,
+      interval: row.interval,
+      ...(["starting", "pending"].includes(row.status)
+        ? { url: row.url, userCode: row.user_code }
+        : {}),
+    };
+  }
+  private async oauthAuthority(row: OAuthRow) {
+    const record = await this.ctx.db.get(
+      "SELECT * FROM users WHERE id=? AND enabled=1",
+      [row.user_id],
     );
-    const state = text(data.state, 512);
-    const authUrl = text(data.url, 8192);
-    if (!state || !authUrl)
+    if (!record)
+      throw new InferenceError(
+        403,
+        "signin_revoked",
+        "Sign-in access was removed.",
+      );
+    const user = mapUser(record);
+    await this.ctx.requireOrgAdmin(user, row.org_id);
+    if (
+      row.auth_session_id &&
+      !(await this.ctx.isSessionActive(row.auth_session_id, row.user_id))
+    )
+      throw new InferenceError(
+        403,
+        "signin_revoked",
+        "The initiating sign-in session ended.",
+      );
+    return user;
+  }
+  private async saveOAuthStatus(
+    id: string,
+    status: string,
+    finishCancellation = false,
+  ) {
+    await this.ctx.db.run(
+      "UPDATE inference_oauth_sessions SET status=?,url=CASE WHEN ? IN ('starting','pending') THEN url ELSE NULL END,user_code=CASE WHEN ? IN ('starting','pending') THEN user_code ELSE NULL END WHERE id=? AND (status<>'cancelling' OR ?=1)",
+      [
+        status,
+        status,
+        status,
+        id,
+        finishCancellation ||
+        status === "cancelling" ||
+        status === "cancelled" ||
+        status === "expired" ||
+        status === "interrupted"
+          ? 1
+          : 0,
+      ],
+    );
+  }
+  private remotePath(row: OAuthRow) {
+    return `/v8/management/oauth/remote/${encodeURIComponent(row.state)}`;
+  }
+  private async readRemote(row: OAuthRow, data: Record<string, unknown>) {
+    const allowed = [
+      "starting",
+      "pending",
+      "ready",
+      "complete",
+      "denied",
+      "expired",
+      "error",
+      "interrupted",
+      "cancelled",
+    ];
+    if (!allowed.includes(String(data.status)))
       throw new InferenceError(
         502,
         "invalid_oauth_response",
-        "The inference service did not return a sign-in session.",
+        "The inference service returned an invalid sign-in status.",
       );
+    if (data.status !== "pending" && data.status !== "ready")
+      return String(data.status);
+    const flow = data.flow,
+      authUrl = text(data.url, 8192),
+      deadline =
+        typeof data.expires_at === "string" ? Date.parse(data.expires_at) : NaN;
+    const hosts =
+      row.provider === "openai"
+        ? ["auth.openai.com", "chatgpt.com"]
+        : row.provider === "anthropic"
+          ? ["claude.ai", "platform.claude.com", "console.anthropic.com"]
+          : ["accounts.x.ai", "grok.com", "auth.x.ai"];
     let parsed: URL;
     try {
-      parsed = new URL(authUrl);
+      parsed = new URL(authUrl!);
     } catch {
       throw new InferenceError(
         502,
@@ -633,149 +870,365 @@ export class InferenceService {
         "The inference service returned an invalid sign-in URL.",
       );
     }
-    const hosts =
-      provider === "openai"
-        ? ["auth.openai.com", "chatgpt.com"]
-        : provider === "anthropic"
-          ? ["claude.ai", "platform.claude.com", "console.anthropic.com"]
-          : ["accounts.x.ai", "grok.com", "auth.x.ai"];
     if (
       parsed.protocol !== "https:" ||
       parsed.username ||
       parsed.password ||
-      !hosts.includes(parsed.hostname)
+      parsed.port ||
+      !hosts.includes(parsed.hostname) ||
+      flow !== (row.provider === "anthropic" ? "manual_code" : "device") ||
+      !Number.isFinite(deadline) ||
+      deadline > Date.parse(row.expires_at) + 30_000 ||
+      (flow === "device" &&
+        (!text(data.user_code, 64) ||
+          !Number.isInteger(data.interval) ||
+          Number(data.interval) < 1))
     )
       throw new InferenceError(
         502,
         "invalid_oauth_response",
-        "The inference service returned an unapproved sign-in URL.",
+        "The inference service returned unsupported sign-in instructions.",
       );
-    const id = randomUUID();
-    const expiresAt = new Date(
-      Date.now() + Math.min(count(data.expires_in) || 900, 1800) * 1000,
-    ).toISOString();
     await this.ctx.db.run(
-      "INSERT INTO inference_oauth_sessions (id,org_id,user_id,provider,state,expires_at,status) VALUES (?,?,?,?,?,?,?)",
-      [id, orgId, user.id, provider, state, expiresAt, "pending"],
+      "UPDATE inference_oauth_sessions SET flow=?,url=?,user_code=?,interval=?,expires_at=? WHERE id=?",
+      [
+        String(flow),
+        authUrl!,
+        text(data.user_code, 64) ?? null,
+        Number(data.interval) || 0,
+        new Date(Math.min(deadline, Date.parse(row.expires_at))).toISOString(),
+        row.id,
+      ],
     );
-    await this.ctx.audit(user, "inference.subscription.started", id, {
-      provider,
-      ...(provider === "anthropic" ? { riskAcknowledged: true } : {}),
-    });
-    return { id, url: authUrl, userCode: text(data.user_code, 32), expiresAt };
+    return String(data.status);
   }
-  private async oauthSession(
+  async startOAuth(
     user: User,
     orgId: string,
-    id: string,
-  ): Promise<OAuthRow> {
+    provider: SubscriptionProvider,
+    acceptedRisk: boolean,
+    authSessionId?: string,
+  ) {
+    return this.locked(orgId, async () => {
+      await this.ctx.requireOrgAdmin(user, orgId);
+      if (!(provider in providerNames))
+        throw new InferenceError(
+          400,
+          "invalid_provider",
+          "Choose a supported subscription provider.",
+        );
+      if (provider === "anthropic" && !acceptedRisk)
+        throw new InferenceError(
+          400,
+          "claude_notice_required",
+          CLAUDE_SUBSCRIPTION_NOTICE,
+        );
+      const existing = await this.ctx.db.get<OAuthRow>(
+        "SELECT * FROM inference_oauth_sessions WHERE org_id=? AND user_id=? AND provider=? AND status IN ('starting','pending','cancelling') ORDER BY expires_at DESC LIMIT 1",
+        [orgId, user.id, provider],
+      );
+      if (existing) {
+        this.watchOAuth(existing.id, orgId);
+        return this.oauthDto(existing);
+      }
+      await this.ensure(orgId);
+      const id = randomUUID(),
+        expiresAt = new Date(
+          Date.now() +
+            (provider === "anthropic"
+              ? 300
+              : provider === "openai"
+                ? 900
+                : 1800) *
+              1000,
+        ).toISOString();
+      await this.ctx.db.run(
+        "INSERT INTO inference_oauth_sessions(id,org_id,user_id,provider,state,expires_at,status,auth_session_id,protocol) VALUES(?,?,?,?,?,?,'starting',?,1)",
+        [id, orgId, user.id, provider, id, expiresAt, authSessionId ?? null],
+      );
+      let row = (await this.ctx.db.get<OAuthRow>(
+        "SELECT * FROM inference_oauth_sessions WHERE id=?",
+        [id],
+      ))!;
+      try {
+        await this.oauthAuthority(row);
+        const data = object(
+          await this.proxy.request(orgId, "/v8/management/oauth/remote", {
+            method: "POST",
+            body: { id, provider: providerNames[provider] },
+          }),
+        );
+        const state = await this.readRemote(row, data);
+        await this.oauthAuthority(row);
+        await this.saveOAuthStatus(id, state === "ready" ? "pending" : state);
+      } catch (error) {
+        // A lost initiation response is uncertain: reconnect by ID, never request another grant.
+        if (
+          error instanceof AppError &&
+          ([401, 403, 404].includes(error.statusCode) ||
+            error.code === "invalid_oauth_response")
+        ) {
+          await this.saveOAuthStatus(id, "cancelling");
+          try {
+            await this.proxy.request(orgId, this.remotePath(row), {
+              method: "DELETE",
+            });
+            await this.saveOAuthStatus(id, "error", true);
+          } catch {
+            /* Bounded worker retries cancellation. */
+          }
+        }
+      }
+      row = (await this.ctx.db.get<OAuthRow>(
+        "SELECT * FROM inference_oauth_sessions WHERE id=?",
+        [id],
+      ))!;
+      this.watchOAuth(id, orgId);
+      await this.ctx.audit(user, orgId, "inference.subscription.started", id, {
+        provider,
+        ...(provider === "anthropic" ? { riskAcknowledged: true } : {}),
+      });
+      return this.oauthDto(row);
+    });
+  }
+  private watchOAuth(id: string, orgId: string) {
+    if (this.closing || this.oauthWorkers.has(id)) return;
+    const controller = new AbortController();
+    const task = (async () => {
+      let retryDelay = 1500;
+      while (!controller.signal.aborted) {
+        try {
+          const pending = await this.locked(orgId, () => this.syncOAuth(id));
+          if (!pending) return;
+          retryDelay = 1500;
+        } catch {
+          // Only cleanup may outlive the grant deadline. Persist its fence until confirmed.
+          const row = await this.ctx.db.get<OAuthRow>(
+            "SELECT * FROM inference_oauth_sessions WHERE id=?",
+            [id],
+          );
+          if (!row) return;
+          if (Date.now() >= Date.parse(row.expires_at))
+            await this.saveOAuthStatus(id, "cancelling");
+          retryDelay = Math.min(retryDelay * 2, 30_000);
+        }
+        try {
+          await wait(retryDelay, undefined, { signal: controller.signal });
+        } catch {
+          return;
+        }
+      }
+    })()
+      .finally(async () => {
+        this.oauthWorkers.delete(id);
+        // A cancel can arrive as a terminal observer exits. Do not lose its retry owner.
+        if (!this.closing) {
+          const row = await this.ctx.db.get<OAuthRow>(
+            "SELECT * FROM inference_oauth_sessions WHERE id=?",
+            [id],
+          );
+          if (row?.status === "cancelling") this.watchOAuth(id, orgId);
+        }
+      })
+      .catch(() => {
+        /* Database shutdown cannot erase the durable retry receipt. */
+      });
+    this.oauthWorkers.set(id, { controller, task });
+  }
+  private async syncOAuth(id: string) {
+    const row = await this.ctx.db.get<OAuthRow>(
+      "SELECT * FROM inference_oauth_sessions WHERE id=?",
+      [id],
+    );
+    if (!row || !["starting", "pending", "cancelling"].includes(row.status))
+      return false;
+    let permitted = true;
+    try {
+      await this.oauthAuthority(row);
+    } catch {
+      permitted = false;
+    }
+    const expired = Date.parse(row.expires_at) <= Date.now();
+    if (row.status === "cancelling" || !permitted || expired) {
+      await this.saveOAuthStatus(id, "cancelling");
+      await this.proxy.request(row.org_id, this.remotePath(row), {
+        method: "DELETE",
+      });
+      await this.saveOAuthStatus(id, expired ? "expired" : "cancelled");
+      return false;
+    }
+    const data = object(
+      await this.proxy.request(row.org_id, this.remotePath(row)),
+    );
+    let status: string;
+    try {
+      status = await this.readRemote(row, data);
+    } catch {
+      await this.saveOAuthStatus(id, "cancelling");
+      await this.proxy.request(row.org_id, this.remotePath(row), {
+        method: "DELETE",
+      });
+      await this.saveOAuthStatus(id, "error", true);
+      return false;
+    }
+    if (status === "ready") {
+      await this.oauthAuthority(row);
+      const committed = object(
+        await this.proxy.request(row.org_id, `${this.remotePath(row)}/commit`, {
+          method: "POST",
+          body: {},
+        }),
+      );
+      status = String(committed.status);
+      if (!["complete", "error", "expired", "interrupted"].includes(status))
+        throw new InferenceError(
+          502,
+          "invalid_oauth_response",
+          "Could not confirm connection persistence.",
+        );
+    }
+    if (status === "interrupted") {
+      // An inference crash during saving is uncertain. Retire only this attempt before retry.
+      await this.saveOAuthStatus(id, "cancelling");
+      await this.proxy.request(row.org_id, this.remotePath(row), {
+        method: "DELETE",
+      });
+      await this.saveOAuthStatus(id, "interrupted", true);
+      return false;
+    }
+    const current = await this.ctx.db.get<OAuthRow>(
+      "SELECT * FROM inference_oauth_sessions WHERE id=?",
+      [id],
+    );
+    if (current?.status === "cancelling") {
+      await this.proxy.request(row.org_id, this.remotePath(row), {
+        method: "DELETE",
+      });
+      await this.saveOAuthStatus(id, "cancelled");
+      return false;
+    }
+    if (status === "complete") {
+      try {
+        await this.oauthAuthority(row);
+      } catch {
+        await this.saveOAuthStatus(id, "cancelling");
+        await this.proxy.request(row.org_id, this.remotePath(row), {
+          method: "DELETE",
+        });
+        await this.saveOAuthStatus(id, "cancelled");
+        return false;
+      }
+    }
+    await this.saveOAuthStatus(id, status);
+    return ["starting", "pending"].includes(status);
+  }
+  async recheckOAuthAccess() {
+    const rows = await this.ctx.db.all<OAuthRow>(
+      "SELECT * FROM inference_oauth_sessions WHERE protocol=1 AND status IN ('starting','pending','cancelling')",
+    );
+    const results = await Promise.allSettled(
+      rows.map(async (row) => {
+        let revoked = false;
+        try {
+          await this.oauthAuthority(row);
+        } catch {
+          revoked = true;
+        }
+        if (revoked) await this.saveOAuthStatus(row.id, "cancelling");
+        this.watchOAuth(row.id, row.org_id);
+        if (revoked)
+          await this.locked(row.org_id, async () => {
+            await this.proxy.request(row.org_id, this.remotePath(row), {
+              method: "DELETE",
+            });
+            await this.saveOAuthStatus(row.id, "cancelled");
+          });
+      }),
+    );
+    const failed = results.find((r) => r.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+  }
+  private async oauthSession(user: User, orgId: string, id: string) {
     await this.ctx.requireOrgAdmin(user, orgId);
     const row = await this.ctx.db.get<OAuthRow>(
       "SELECT * FROM inference_oauth_sessions WHERE id=? AND org_id=? AND user_id=?",
       [id, orgId, user.id],
     );
-    if (!row || row.expires_at < new Date().toISOString())
+    if (!row)
       throw new InferenceError(
         404,
         "oauth_session_not_found",
-        "This sign-in session has expired or is unavailable.",
+        "Sign-in session unavailable.",
       );
     return row;
   }
+  async oauthSessions(user: User, orgId: string) {
+    await this.ctx.requireOrgAdmin(user, orgId);
+    const rows = await this.ctx.db.all<OAuthRow>(
+      "SELECT * FROM inference_oauth_sessions WHERE org_id=? AND user_id=? AND expires_at>? ORDER BY expires_at DESC LIMIT 12",
+      [orgId, user.id, new Date(Date.now() - 86400000).toISOString()],
+    );
+    for (const row of rows)
+      if (["starting", "pending", "cancelling"].includes(row.status))
+        this.watchOAuth(row.id, orgId);
+    return { items: rows.map((row) => this.oauthDto(row)) };
+  }
   async oauthStatus(user: User, orgId: string, id: string) {
     const row = await this.oauthSession(user, orgId, id);
-    if (row.status !== "pending") return { status: row.status };
-    const data = object(
-      await this.proxy.request(
-        orgId,
-        `/v8/management/oauth/status?state=${encodeURIComponent(row.state)}`,
-      ),
-    );
-    const status =
-      data.status === "ok"
-        ? "complete"
-        : data.status === "error"
-          ? "error"
-          : "pending";
-    if (status !== "pending")
-      await this.ctx.db.run(
-        "UPDATE inference_oauth_sessions SET status=? WHERE id=?",
-        [status, row.id],
-      );
-    return {
-      status,
-      ...(status === "error"
-        ? { message: "Sign-in did not complete. Start a new sign-in session." }
-        : {}),
-    };
+    if (["starting", "pending", "cancelling"].includes(row.status))
+      this.watchOAuth(id, orgId);
+    return this.oauthDto(row);
   }
-  async oauthCallback(
-    user: User,
-    orgId: string,
-    id: string,
-    redirectUrl: string,
-  ) {
-    const row = await this.oauthSession(user, orgId, id);
-    if (row.status !== "pending")
-      throw new InferenceError(
-        409,
-        "oauth_session_closed",
-        "This sign-in session is already closed.",
-      );
-    if (typeof redirectUrl !== "string" || redirectUrl.length > 16384)
-      throw new InferenceError(
-        400,
-        "invalid_callback",
-        "Enter the callback URL from your sign-in flow.",
-      );
-    let parsed: URL;
-    try {
-      parsed = new URL(redirectUrl);
-    } catch {
-      throw new InferenceError(
-        400,
-        "invalid_callback",
-        "Enter a valid callback URL.",
-      );
-    }
-    // Parse only; never navigate or fetch the supplied URL.
-    if (
-      parsed.searchParams.get("state") !== row.state ||
-      !parsed.searchParams.get("code")
-    )
-      throw new InferenceError(
-        400,
-        "oauth_state_mismatch",
-        "The callback does not belong to this sign-in session.",
-      );
-    await this.proxy.request(orgId, "/v8/management/oauth/callback", {
-      method: "POST",
-      body: {
-        provider: providerNames[row.provider],
-        state: row.state,
-        code: parsed.searchParams.get("code"),
-      },
+  async oauthCode(user: User, orgId: string, id: string, code: string) {
+    return this.locked(orgId, async () => {
+      const row = await this.oauthSession(user, orgId, id);
+      await this.oauthAuthority(row);
+      if (
+        row.status !== "pending" ||
+        row.flow !== "manual_code" ||
+        Date.parse(row.expires_at) <= Date.now()
+      )
+        throw new InferenceError(
+          409,
+          "oauth_session_closed",
+          "This sign-in is closed or does not accept a code.",
+        );
+      if (typeof code !== "string" || !code.trim() || code.length > 4096)
+        throw new InferenceError(
+          400,
+          "invalid_code",
+          "Enter the authorization code shown by the provider.",
+        );
+      await this.proxy.request(orgId, `${this.remotePath(row)}/code`, {
+        method: "POST",
+        body: { code: code.trim() },
+      });
+      return { status: "pending" };
     });
-    return { status: "pending" }; // Exchange and persistence still need status confirmation.
   }
   async cancelOAuth(user: User, orgId: string, id: string) {
-    const row = await this.oauthSession(user, orgId, id);
-    if (row.status === "pending")
-      await this.proxy.request(
-        orgId,
-        `/v8/management/oauth/session?state=${encodeURIComponent(row.state)}`,
-        { method: "DELETE" },
-      );
-    await this.ctx.db.run(
-      "UPDATE inference_oauth_sessions SET status=? WHERE id=?",
-      ["cancelled", row.id],
-    );
-    return { status: "cancelled" };
+    const admitted = await this.oauthSession(user, orgId, id);
+    if (!["starting", "pending", "cancelling"].includes(admitted.status))
+      return this.oauthDto(admitted);
+    // Persist intent before waiting behind an in-flight token save. Completion cannot erase it.
+    await this.saveOAuthStatus(id, "cancelling");
+    this.watchOAuth(id, orgId);
+    return this.locked(orgId, async () => {
+      const row = await this.oauthSession(user, orgId, id);
+      if (row.status === "cancelled") return this.oauthDto(row);
+      await this.proxy.request(orgId, this.remotePath(row), {
+        method: "DELETE",
+      });
+      await this.saveOAuthStatus(id, "cancelled");
+      return { status: "cancelled" };
+    });
   }
   async models(orgId: string): Promise<InferenceModel[]> {
     if (!(await this.options.registry.resolve(orgId))) return [];
     const data = object(
-      await this.proxy.request(orgId, "/v1/models", { client: true }),
+      await this.proxy.request(orgId, "/v1/models", {
+        client: true,
+      }),
     );
     if (!Array.isArray(data.data)) return [];
     const accounts = await this.ctx.db.all<Pick<ApiAccount, "id" | "provider">>(
@@ -857,14 +1310,21 @@ export class InferenceService {
       );
   }
   async usage(orgId: string) {
-    if (!(await this.options.registry.resolve(orgId))) return { items: [] };
+    if (!(await this.options.registry.resolve(orgId)))
+      return {
+        items: [],
+      };
     const [apiUsage, subscriptions] = await Promise.all([
       this.proxy.request(orgId, "/v8/management/observability/usage/api-keys"),
       this.rawAccounts(orgId),
     ]);
     const totals = new Map<
       string,
-      { provider: string; successes: number; failures: number }
+      {
+        provider: string;
+        successes: number;
+        failures: number;
+      }
     >();
     function add(provider: string, success: unknown, failed: unknown) {
       const total = totals.get(provider) ?? {
@@ -891,15 +1351,31 @@ export class InferenceService {
       observedAt: new Date().toISOString(),
     };
   }
-  async issueGateway(
-    scope: RunScope,
-  ): Promise<{ baseUrl: string; token: string }> {
+  private async requireSettledCleanup(orgId: string) {
+    const row = await this.ctx.db.get<OAuthRow>(
+      "SELECT * FROM inference_oauth_sessions WHERE org_id=? AND protocol=1 AND (status='cancelling' OR (status IN ('starting','pending') AND expires_at<=?)) LIMIT 1",
+      [orgId, new Date().toISOString()],
+    );
+    if (row) {
+      this.watchOAuth(row.id, orgId);
+      throw new InferenceError(
+        503,
+        "signin_cleanup_pending",
+        "A cancelled sign-in is awaiting confirmed cleanup. Inference will resume when cleanup finishes.",
+      );
+    }
+  }
+  async issueGateway(scope: RunScope): Promise<{
+    baseUrl: string;
+    token: string;
+  }> {
     if (!(await this.options.canUseRun(scope)))
       throw new InferenceError(
         403,
         "run_access_denied",
         "This run no longer has access to inference.",
       );
+    await this.requireSettledCleanup(scope.orgId);
     await this.proxy.endpoint(scope.orgId);
     const token = `wme_run_${randomBytes(32).toString("base64url")}`;
     await this.ctx.db.run(
@@ -920,7 +1396,7 @@ export class InferenceService {
       this.options.runtimeApiOrigin ?? this.ctx.config.publicOrigin
     ).replace(/\/$/, "");
     return {
-      baseUrl: `${origin}/api/runtime/inference/${encodeURIComponent(scope.projectId)}`,
+      baseUrl: `${origin}/enterprise/api/runtime/inference/${encodeURIComponent(scope.projectId)}`,
       token,
     };
   }
@@ -950,6 +1426,7 @@ export class InferenceService {
         "run_access_denied",
         "This run no longer has access to inference.",
       );
+    await this.requireSettledCleanup(scope.orgId);
     return scope;
   }
   async revokeGateway(runId: string) {

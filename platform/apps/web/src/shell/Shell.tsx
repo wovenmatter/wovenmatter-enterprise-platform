@@ -18,7 +18,13 @@ import {
   type User,
 } from "../api";
 import { Brand } from "../components/Brand";
-import { AsyncForm, ErrorNotice, Field, Loading, Modal } from "../components/ui";
+import {
+  AsyncForm,
+  ErrorNotice,
+  Field,
+  Loading,
+  Modal,
+} from "../components/ui";
 import { AdministrationPage } from "../features/administration";
 import { PersonalSettings } from "../features/personal-settings";
 import { AdministrationNav, OrganizationNav } from "./Navigation";
@@ -33,7 +39,9 @@ export function Shell({
   onUserChange: (user: User) => void;
   logout: () => Promise<void>;
 }) {
-  const organizations = useResource<List<Organization>>("/api/organizations");
+  const organizations = useResource<List<Organization>>(
+    "/enterprise/api/organizations",
+  );
   const [creating, setCreating] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [error, setError] = useState("");
@@ -104,9 +112,11 @@ export function Shell({
             setMobileOpen(false);
           }
           if (event.key === "Tab") {
-            const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(
-              "a[href],button:not([disabled]),select:not([disabled])",
-            )).filter((element) => element.getClientRects().length > 0);
+            const controls = Array.from(
+              event.currentTarget.querySelectorAll<HTMLElement>(
+                "a[href],button:not([disabled]),select:not([disabled])",
+              ),
+            ).filter((element) => element.getClientRects().length > 0);
             const first = controls[0];
             const last = controls.at(-1);
             if (event.shiftKey && document.activeElement === first) {
@@ -119,26 +129,30 @@ export function Shell({
           }
         }}
       >
-        {(!orgRoute || mobileOpen) && (<div className="sidebar-top">
-          <Routes>
-            <Route path="/organizations/:orgId/*" element={null} />
-            <Route
-              path="*"
-              element={
-                user.role === "owner" ? <Brand /> : (
-                  <strong className="sidebar-heading">Your access</strong>
-                )
-              }
-            />
-          </Routes>
-          <button
-            className="icon-button mobile-close"
-            aria-label="Close navigation"
-            onClick={() => setMobileOpen(false)}
-          >
-            <X size={20} />
-          </button>
-        </div>)}
+        {(!orgRoute || mobileOpen) && (
+          <div className="sidebar-top">
+            <Routes>
+              <Route path="/organizations/:orgId/*" element={null} />
+              <Route
+                path="*"
+                element={
+                  user.role === "owner" ? (
+                    <Brand />
+                  ) : (
+                    <strong className="sidebar-heading">Your access</strong>
+                  )
+                }
+              />
+            </Routes>
+            <button
+              className="icon-button mobile-close"
+              aria-label="Close navigation"
+              onClick={() => setMobileOpen(false)}
+            >
+              <X size={20} />
+            </button>
+          </div>
+        )}
         <Routes>
           <Route
             path="/organizations/:orgId/*"
@@ -151,14 +165,29 @@ export function Shell({
           />
           <Route
             path="*"
-            element={<AdministrationNav user={user} organizations={organizations.data?.items ?? []} onCreate={() => { setMobileOpen(false); setCreating(true); }} />}
+            element={
+              <AdministrationNav
+                user={user}
+                organizations={organizations.data?.items ?? []}
+                onCreate={() => {
+                  setMobileOpen(false);
+                  setCreating(true);
+                }}
+              />
+            }
           />
         </Routes>
         <div className="sidebar-footer">
-          <Link className="account nav-link" to={`/personal-settings${accountReturn}`}
-            title={`Settings · ${user.name || user.email}`}>
+          <Link
+            className="account nav-link"
+            to={`/personal-settings${accountReturn}`}
+            title={`Settings · ${user.name || user.email}`}
+          >
             <Settings size={18} />
-            <span className="account-label">Settings <span className="account-name">· {user.name || user.email}</span></span>
+            <span className="account-label">
+              Settings{" "}
+              <span className="account-name">· {user.name || user.email}</span>
+            </span>
           </Link>
           <button
             className="nav-link"
@@ -193,9 +222,14 @@ export function Shell({
               />
               <Route
                 path="/personal-settings"
-                element={<PersonalSettings user={user} onUserChange={onUserChange} />}
+                element={
+                  <PersonalSettings user={user} onUserChange={onUserChange} />
+                }
               />
-              <Route path="/projects/:projectId/*" element={<LegacyProjectRedirect />} />
+              <Route
+                path="/projects/:projectId/*"
+                element={<LegacyProjectRedirect />}
+              />
               <Route
                 path="/organizations/:orgId/*"
                 element={
@@ -217,9 +251,12 @@ export function Shell({
             submitLabel="Create organization"
             onCancel={() => setCreating(false)}
             onSubmit={async (data) => {
-              const result = await send<Organization>("/api/organizations", {
-                name: data.get("name"),
-              });
+              const result = await send<Organization>(
+                "/enterprise/api/organizations",
+                {
+                  name: data.get("name"),
+                },
+              );
               organizations.reload();
               setCreating(false);
               navigate(`/organizations/${result.id}/projects`);
@@ -239,7 +276,7 @@ function LegacyProjectRedirect() {
   const { projectId = "" } = useParams();
   const location = useLocation();
   const project = useResource<Project>(
-    projectId ? `/api/projects/${projectId}` : null,
+    projectId ? `/enterprise/api/projects/${projectId}` : null,
   );
   if (project.loading) return <Loading />;
   if (!project.data)

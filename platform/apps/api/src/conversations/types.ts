@@ -3,6 +3,7 @@ import type { AppContext, User } from "../context.js";
 export type Harness = "codex" | "claude" | "grok" | "pi";
 export type Mode = "read" | "write";
 export interface ConversationRow {
+  runtime_generation?: number;
   id: string;
   org_id: string;
   project_id: string;
@@ -17,6 +18,7 @@ export interface ConversationRow {
   deleted_at: string | null;
 }
 export interface RunRow {
+  runtime_generation?: number;
   id: string;
   conversation_id: string;
   org_id: string;
@@ -42,6 +44,10 @@ export interface MessageRow {
   conversation_id: string;
   run_id: string;
   role: "user" | "assistant";
+  kind?: string;
+  delivery?: string;
+  sequence?: number;
+  error?: string | null;
   author_id: string | null;
   author_name?: string | null;
   content: string;
@@ -140,6 +146,10 @@ export function messageView(m: MessageRow) {
     conversationId: m.conversation_id,
     runId: m.run_id,
     role: m.role,
+    kind: m.kind ?? "message",
+    delivery: m.delivery,
+    sequence: m.sequence,
+    error: m.error,
     authorId: m.author_id,
     authorName: m.author_name ?? null,
     content: m.content,

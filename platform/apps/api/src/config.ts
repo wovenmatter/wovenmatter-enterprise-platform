@@ -58,7 +58,5 @@ export function loadConfig(env = process.env): AppConfig {
     host: env.WME_HOST ?? "127.0.0.1",
     port,
     secureCookies,
-    contentOriginTemplate:
-      env.WME_CONTENT_ORIGIN_TEMPLATE ?? `http://{assetId}.localhost:${port}`,
   };
 }

@@ -35,29 +35,28 @@ On macOS some Linux filesystem/socket regressions skip. Use Linux for release
 validation. E2E uses localhost:4155 by default and installed Chrome on macOS or
 Playwright Chromium on Linux; CI installs Chromium. Set `WME_E2E_PORT` to an unused test port when needed. The suite always starts
 its own fixture server and refuses to reuse an existing listener. Screenshots/traces remain
-in ignored `test-results/` on failure.
+under `WME_E2E_OUTPUT` (default `/tmp/wme-e2e-evidence`).
 
 ## Local application
 
-`npm run build && npm start` serves the browser and API together at the configured
+`npm run build && npm start` serves the browser and API together under `/enterprise` at the configured
 portal origin (default localhost:4100). Set `WME_STATE_DIR` to a disposable state
 directory. Bootstrap an owner through the stdin/file workflow in the deployment
 README; there are no default credentials. Without a supervisor, ordinary account,
-file and static-library workflows work while agent execution reports unavailable.
+file and report workflows work while agent execution reports unavailable.
 
 For separate Vite/API development, see the [frontend guide](frontend/README.md).
 Never point test fixtures or a second coordinator at a running installation's state.
 
 ## Dependencies and acceptance
 
-Root and runner-toolkit npm dependencies use committed lockfiles; Python document
+Root npm dependencies use the committed lockfile; Python document
 readers use `runtime/document-requirements.txt`. Review advisories for those exact
-versions when updating pins. Run `npm audit --audit-level=high` at the root and in
-`platform/runtime/toolkit`. Pin changes need native protocol/document/build checks
+versions when updating pins. Run `npm audit --audit-level=high` at the root. Pin changes need native protocol/document/build checks
 on Linux as well as application checks.
 
 GitHub CI runs application, browser and container-boundary jobs. The container
-script installs an AppArmor profile and builds images: use a dedicated acceptance
+script verifies reviewed preinstalled AppArmor profiles and builds images: use a dedicated acceptance
 host or hosted CI, not an unreviewed invocation on a shared production host.
 Synthetic protocol checks do not prove live-provider entitlement, real SMTP
 receipt, public DNS/TLS, production migration or a full restore. Those remain

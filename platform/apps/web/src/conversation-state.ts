@@ -1,4 +1,8 @@
-export type PendingMessage = { id: string; content: string };
+export type PendingMessage = {
+  id: string;
+  content: string;
+  kind?: "message" | "comment";
+};
 export function emptyAssistantLabel(status?: string) {
   if (status === "queued") return "Queued";
   if (status === "dispatching" || status === "running") return "Working…";
@@ -71,7 +75,11 @@ export function loadPendingMessage(
       candidate.content.length > 100_000
     )
       return;
-    return { id: candidate.id, content: candidate.content };
+    return {
+      id: candidate.id,
+      content: candidate.content,
+      ...(candidate.kind === "comment" ? { kind: "comment" as const } : {}),
+    };
   } catch {
     return;
   }
