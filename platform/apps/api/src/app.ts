@@ -313,6 +313,7 @@ export async function buildApp(
           const failed = results.find((r) => r.status === "rejected");
           if (failed?.status === "rejected") throw failed.reason;
         }
+        await inference.recheckOAuthAccess();
         if (revision === accessSyncRevision) accessSyncPending = false;
       });
     accessSyncLane = operation;

@@ -27,7 +27,17 @@ type Account = {
   nextRetryAt?: string;
   lastRefreshAt?: string;
 };
-type OAuth = { id: string; url: string; userCode?: string; expiresAt: string };
+type OAuth = {
+  id: string;
+  provider: string;
+  status: string;
+  message?: string;
+  flow: "device" | "manual_code" | null;
+  url?: string;
+  userCode?: string;
+  expiresAt: string;
+  interval?: number;
+};
 const names: Record<string, string> = {
   openai: "OpenAI / ChatGPT",
   anthropic: "Anthropic / Claude",
@@ -53,6 +63,8 @@ export function ConnectionsPage() {
   const models = useResource<
     List<{ id: string; name: string; provider: string }>
   >(`${base}/models`);
+  const signins = useResource<List<OAuth>>(`${base}/oauth`);
+  const [resuming, setResuming] = useState<OAuth>();
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<Account>();
   const [removing, setRemoving] = useState<Account>();
@@ -61,6 +73,7 @@ export function ConnectionsPage() {
     accounts.reload();
     usage.reload();
     models.reload();
+    signins.reload();
   }
   return (
     <section>
@@ -76,13 +89,49 @@ export function ConnectionsPage() {
             >
               <RefreshCw size={18} />
             </button>
-            <button className="primary" onClick={() => setAdding(true)}>
+            <button
+              className="primary"
+              onClick={() => {
+                setResuming(undefined);
+                setAdding(true);
+              }}
+            >
               <Plus size={17} />
               Add connection
             </button>
           </>
         }
       />
+      <ErrorNotice message={signins.error} />
+      {signins.data?.items
+        .filter((s) =>
+          [
+            "starting",
+            "pending",
+            "cancelling",
+            "interrupted",
+            "expired",
+            "denied",
+            "error",
+          ].includes(s.status),
+        )
+        .map((s) => (
+          <div className="setting-row" key={s.id}>
+            <div>
+              <strong>{names[s.provider]} sign-in</strong>
+              <small>{s.message}</small>
+            </div>
+            <button
+              className="secondary"
+              onClick={() => {
+                setResuming(s);
+                setAdding(true);
+              }}
+            >
+              View sign-in
+            </button>
+          </div>
+        ))}
       <ErrorNotice
         message={accounts.error || usage.error || models.error || error}
       />
@@ -177,7 +226,13 @@ export function ConnectionsPage() {
             <Empty
               title="No connections yet"
               action={
-                <button className="primary" onClick={() => setAdding(true)}>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setResuming(undefined);
+                    setAdding(true);
+                  }}
+                >
                   Add connection
                 </button>
               }
@@ -238,8 +293,13 @@ export function ConnectionsPage() {
       </section>
       {adding ? (
         <AddConnection
+          initial={resuming}
           base={base}
-          onClose={() => setAdding(false)}
+          onClose={() => {
+            setAdding(false);
+            setResuming(undefined);
+            signins.reload();
+          }}
           onSaved={() => {
             reload();
             setAdding(false);
@@ -316,6 +376,7 @@ export function ConnectionsPage() {
   );
 }
 function AddConnection({
+  initial,
   base,
   onClose,
   onSaved,
@@ -323,16 +384,18 @@ function AddConnection({
   base: string;
   onClose: () => void;
   onSaved: () => void;
+  initial?: OAuth;
 }) {
-  const [type, setType] = useState("api_key");
-  const [provider, setProvider] = useState("openai");
-  const [oauth, setOauth] = useState<OAuth>();
+  const [type, setType] = useState(initial ? "subscription" : "api_key");
+  const [provider, setProvider] = useState(initial?.provider ?? "openai");
+  const [oauth, setOauth] = useState<OAuth | undefined>(initial);
   return (
     <Modal title="Add connection" onClose={onClose}>
       {oauth ? (
         <OAuthFlow
           base={base}
           oauth={oauth}
+          onRetry={() => setOauth(undefined)}
           onSaved={onSaved}
           onClose={onClose}
         />
@@ -444,109 +507,150 @@ function OAuthFlow({
   oauth,
   onSaved,
   onClose,
+  onRetry,
 }: {
   base: string;
   oauth: OAuth;
   onSaved: () => void;
   onClose: () => void;
+  onRetry: () => void;
 }) {
-  const [status, setStatus] = useState("pending");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [current, setCurrent] = useState(oauth),
+    [error, setError] = useState(""),
+    [retry, setRetry] = useState(0);
+  const active = ["starting", "pending", "cancelling"].includes(current.status);
   useEffect(() => {
-    let cancelled = false;
-    let timeout: number;
+    let disposed = false;
+    let timeout: number | undefined;
+    const controller = new AbortController();
     async function poll() {
       try {
-        const result = await api<{ status: string; message?: string }>(
+        const result = await api<OAuth>(
           `${base}/oauth/${encodeURIComponent(oauth.id)}`,
+          { signal: controller.signal },
         );
-        if (cancelled) return;
-        setStatus(result.status);
-        setMessage(result.message ?? "");
-        if (result.status === "complete") {
-          onSaved();
-          return;
-        }
-        if (result.status === "pending")
-          timeout = window.setTimeout(poll, 2500);
+        if (disposed) return;
+        setCurrent(result);
+        setError("");
+        if (["starting", "pending", "cancelling"].includes(result.status))
+          timeout = window.setTimeout(poll, 1500);
       } catch (e) {
-        if (!cancelled) setError(errorMessage(e));
+        if (!disposed) setError(errorMessage(e));
       }
     }
     void poll();
     return () => {
-      cancelled = true;
+      disposed = true;
+      controller.abort();
       clearTimeout(timeout);
     };
-  }, [base, oauth.id]);
+  }, [base, oauth.id, retry]);
   return (
     <div className="oauth-flow">
-      <p>
-        Open the provider’s sign-in page, complete the steps, then return here.
-      </p>
-      {oauth.userCode ? (
-        <div className="device-code">
-          <span>Device code</span>
-          <strong>{oauth.userCode}</strong>
-        </div>
+      {active && current.flow === "device" ? (
+        <>
+          <p>
+            Open the provider’s sign-in page and enter this one-time code there.
+            This server will finish connecting after you approve.
+          </p>
+          <div className="device-code">
+            <span>Device code</span>
+            <strong>{current.userCode}</strong>
+          </div>
+          {current.provider === "openai" ? (
+            <p className="muted">
+              Device-code sign-in is in beta. You may need to enable it in your
+              ChatGPT security settings or ask your workspace administrator.
+            </p>
+          ) : null}
+        </>
+      ) : active && current.flow === "manual_code" ? (
+        <p>
+          Sign in with Claude in your browser. Copy the authorization code it
+          shows, then return here and paste it below.
+        </p>
       ) : null}
-      <a
-        className="primary button-link"
-        href={oauth.url}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        Continue to provider <ExternalLink size={16} />
-      </a>
-      <p className="muted">Expires {date(oauth.expiresAt)}</p>
+      {active && current.url ? (
+        <a
+          className="primary button-link"
+          href={current.url}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Continue to provider <ExternalLink size={16} />
+        </a>
+      ) : null}
+      {active ? (
+        <p className="muted">
+          Complete by {date(current.expiresAt)}. You can close this dialog and
+          resume from Connections.
+        </p>
+      ) : null}
       <div role="status">
-        <Status value={status} />
-        {message ? <p>{message}</p> : null}
+        <Status value={current.status} />
+        {current.message ? <p>{current.message}</p> : null}
       </div>
       <ErrorNotice message={error} />
-      {status === "pending" ? (
-        <details>
-          <summary>Complete with a callback URL</summary>
-          <AsyncForm
-            submitLabel="Complete sign in"
-            onSubmit={async (d) => {
-              await send(
-                `${base}/oauth/${encodeURIComponent(oauth.id)}/callback`,
-                { redirectUrl: d.get("redirectUrl") },
-              );
-            }}
-          >
-            <Field
-              label="Callback URL"
-              hint="If the provider redirects to a page that cannot open, paste that complete URL here."
-            >
-              <input
-                name="redirectUrl"
-                type="url"
-                required
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </Field>
-          </AsyncForm>
-        </details>
+      {error ? (
+        <button className="secondary" onClick={() => setRetry(retry + 1)}>
+          Check sign-in status
+        </button>
       ) : null}
-      <button
-        className="text-button"
-        onClick={async () => {
-          try {
-            await api(`${base}/oauth/${encodeURIComponent(oauth.id)}`, {
-              method: "DELETE",
+      {current.status === "pending" && current.flow === "manual_code" ? (
+        <AsyncForm
+          submitLabel="Complete sign in"
+          onSubmit={async (d) => {
+            await send(`${base}/oauth/${encodeURIComponent(oauth.id)}/code`, {
+              code: d.get("code"),
             });
-            onClose();
-          } catch (e) {
-            setError(errorMessage(e));
-          }
-        }}
-      >
-        Cancel sign in
-      </button>
+            setRetry(retry + 1);
+          }}
+        >
+          <Field
+            label="Authorization code"
+            hint="Paste only the code from the provider’s sign-in page."
+          >
+            <input
+              name="code"
+              type="password"
+              required
+              maxLength={4096}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </Field>
+        </AsyncForm>
+      ) : null}
+      {active ? (
+        <button
+          className="text-button"
+          onClick={async () => {
+            try {
+              const result = await api<OAuth>(
+                `${base}/oauth/${encodeURIComponent(oauth.id)}`,
+                { method: "DELETE" },
+              );
+              if (result.status === "complete") {
+                setCurrent(result);
+                return;
+              }
+              onClose();
+            } catch (e) {
+              setError(errorMessage(e));
+            }
+          }}
+        >
+          Cancel sign in
+        </button>
+      ) : current.status === "complete" ? (
+        <button className="primary" onClick={onSaved}>
+          Done
+        </button>
+      ) : (
+        <button className="primary" onClick={onRetry}>
+          Start a new sign-in
+        </button>
+      )}
     </div>
   );
 }

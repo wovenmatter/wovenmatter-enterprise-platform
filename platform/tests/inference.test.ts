@@ -126,12 +126,21 @@ async function fixture() {
       groups[url.pathname.split("/").pop()!] = JSON.parse(String(init.body));
       return Response.json({ status: "ok" });
     }
-    if (url.pathname.endsWith("/oauth/auth-url"))
+    if (url.pathname.endsWith("/oauth/remote"))
       return Response.json({
+        status: "pending",
+        flow: "manual_code",
         url: "https://claude.ai/oauth/authorize?state=state-secret",
-        state: "state-secret",
-        user_code: "ABCD",
+        expires_at: new Date(Date.now() + 290_000).toISOString(),
+        interval: 0,
       });
+    if (url.pathname.includes("/oauth/remote/")) {
+      if (url.pathname.endsWith("/code"))
+        return Response.json({ status: "pending" });
+      if (init.method === "DELETE")
+        return Response.json({ status: "cancelled" });
+      return Response.json({ status: "complete" });
+    }
     if (url.pathname.endsWith("/oauth/status"))
       return Response.json({ status: "ok", access_token: "never-return" });
     if (url.pathname.endsWith("/credentials/refresh"))
@@ -348,7 +357,7 @@ test("failed upstream save remains needs_attention and exposes no upstream error
     await f.close();
   }
 });
-test("Claude sign-in requires acknowledgement and only the initiating org admin can submit its bound callback", async () => {
+test("Claude sign-in requires acknowledgement and remote status remains bound to the initiating organization admin", async () => {
   const f = await fixture();
   try {
     const base = `/enterprise/api/organizations/${f.orgId}/inference/oauth`;
@@ -368,30 +377,17 @@ test("Claude sign-in requires acknowledgement and only the initiating org admin 
     const id = start.json().id;
     assert.ok(id);
     assert.ok(!start.body.includes("management-one"));
-    const wrong = await f.app.inject({
-      method: "POST",
-      url: `${base}/${id}/callback`,
-      payload: {
-        redirectUrl: "http://localhost/callback?state=wrong&code=private-code",
-      },
-    });
-    assert.equal(wrong.statusCode, 400);
     const cross = await f.app.inject({
       url: `/enterprise/api/organizations/${f.otherOrg}/inference/oauth/${id}`,
       headers: { "x-test-user": "other" },
     });
     assert.equal(cross.statusCode, 404);
-    const right = await f.app.inject({
-      method: "POST",
-      url: `${base}/${id}/callback`,
-      payload: {
-        redirectUrl:
-          "http://localhost/callback?state=state-secret&code=private-code",
-      },
-    });
-    assert.deepEqual(right.json(), { status: "pending" });
-    const status = await f.app.inject(`${base}/${id}`);
-    assert.deepEqual(status.json(), { status: "complete" });
+    assert.equal(start.json().flow, "manual_code");
+    assert.ok(!start.body.includes('state-secret","state'));
+    const pending = await f.app.inject(base);
+    assert.ok(
+      pending.json().items.some((item: { id: string }) => item.id === id),
+    );
   } finally {
     await f.close();
   }

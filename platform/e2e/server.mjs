@@ -1,9 +1,10 @@
 // Explicit synthetic acceptance harness. Never imported by the production entrypoint.
-import { mkdtemp, mkdir, writeFile, rm, cp } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile, rm, cp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { buildApp } from "../dist/apps/api/src/app.js";
+import { ProxyClient } from "../dist/apps/api/src/inference/proxy-client.js";
 import { newSession } from "../dist/apps/api/src/auth/session.js";
 if (process.env.WME_E2E_FIXTURE !== "1")
   throw new Error("Synthetic acceptance requires WME_E2E_FIXTURE=1");
@@ -49,6 +50,76 @@ const system = await buildApp(
     hosts: [{ id: "local", name: "Initial host" }],
   },
   { runtime, jobs: false, webRoot },
+);
+// Deterministic management transport only; real Enterprise authorization and session lifecycle run unchanged.
+const remoteAttempts = new Map(),
+  connected = [];
+const fixtureEndpoint = async () => ({
+  baseUrl: "http://fixture.invalid",
+  managementKey: "fixture-management",
+  clientKey: "fixture-client",
+});
+system.inference.options.registry.resolve = fixtureEndpoint;
+system.inference.proxy = new ProxyClient(
+  fixtureEndpoint,
+  async (input, init = {}) => {
+    const path = new URL(String(input)).pathname;
+    if (path.endsWith("/credentials"))
+      return Response.json({ files: connected });
+    if (path.endsWith("/observability/usage/api-keys"))
+      return Response.json({});
+    if (path.endsWith("/oauth/remote")) {
+      const { id, provider } = JSON.parse(init.body);
+      const attempt = {
+        status: "pending",
+        provider,
+        flow: provider === "claude" ? "manual_code" : "device",
+        url:
+          provider === "claude"
+            ? "https://claude.ai/oauth/authorize?state=fixture"
+            : provider === "codex"
+              ? "https://auth.openai.com/codex/device"
+              : "https://accounts.x.ai/oauth2/device",
+        user_code: provider === "claude" ? undefined : "TEST-CODE",
+        interval: 5,
+        expires_at: new Date(Date.now() + 120000).toISOString(),
+      };
+      remoteAttempts.set(id, attempt);
+      return Response.json(attempt);
+    }
+    const [, id, operation] =
+      path.match(/\/remote\/([^/]+)(?:\/(\w+))?$/) ?? [];
+    const attempt = remoteAttempts.get(id);
+    if (!attempt) return Response.json({ status: "interrupted" });
+    if (init.method === "DELETE") {
+      attempt.status = "cancelled";
+      return Response.json(attempt);
+    }
+    if (operation === "code") {
+      attempt.status = "ready";
+      return Response.json(attempt);
+    }
+    if (operation === "commit") {
+      attempt.status = "complete";
+      connected.push({
+        name: `fixture-${id}.json`,
+        auth_index: id,
+        provider: attempt.provider,
+        status: "active",
+        email: "provider@example.test",
+      });
+      return Response.json(attempt);
+    }
+    const controls = JSON.parse(
+      await readFile(
+        `${process.env.WME_E2E_OUTPUT ?? "/tmp/wme-e2e-evidence"}/provider-control.json`,
+        "utf8",
+      ).catch(() => "{}"),
+    );
+    if (controls[id] && attempt.status === "pending")
+      attempt.status = controls[id];
+    return Response.json(attempt);
+  },
 );
 system.inference.models = async () => [
   { id: "gpt-test-fixture", name: "Synthetic test model", provider: "openai" },

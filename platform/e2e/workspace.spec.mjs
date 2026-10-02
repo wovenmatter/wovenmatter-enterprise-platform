@@ -465,13 +465,13 @@ test("project creation, ordinary files, organization sharing and revocation", as
   ).toHaveAttribute("aria-pressed", "true");
   await expect(
     page.getByRole("heading", {
-      name: "Reports",
+      name: "Assets",
       exact: true,
     }),
   ).toBeHidden();
   await views
     .getByRole("button", {
-      name: "Reports",
+      name: "Assets",
       exact: true,
     })
     .click();
@@ -483,7 +483,7 @@ test("project creation, ordinary files, organization sharing and revocation", as
   ).toBeHidden();
   await expect(
     page.getByRole("heading", {
-      name: "Reports",
+      name: "Assets",
       exact: true,
     }),
   ).toBeVisible();
@@ -545,7 +545,7 @@ test("project creation, ordinary files, organization sharing and revocation", as
   ).toBeVisible();
   await views
     .getByRole("button", {
-      name: "Reports",
+      name: "Assets",
       exact: true,
     })
     .click();
@@ -807,42 +807,23 @@ test("safe report publication is public without JavaScript and visibility change
   await page.goto(`/enterprise/organizations/${f.orgId}/library`);
   await page
     .getByRole("button", {
-      name: "Reports",
+      name: "Assets",
       exact: true,
     })
     .click();
+  await page.getByRole("button", { name: "New asset", exact: true }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Browser report");
+  await page.getByLabel("Belongs to").selectOption(f.projectId);
+  await page.getByRole("button", { name: "Create asset", exact: true }).click();
+  await page.getByLabel("Content", { exact: true }).selectOption("existing");
+  await page.getByLabel("Content file").selectOption(file.id);
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await page.getByLabel("Visibility", { exact: true }).selectOption("public");
   await page
-    .getByRole("button", {
-      name: "Publish report",
-      exact: true,
-    })
+    .getByRole("button", { name: "Publish asset", exact: true })
     .click();
-  await page
-    .getByLabel("Name", {
-      exact: true,
-    })
-    .fill("Browser report");
-  await page
-    .getByLabel("Project", {
-      exact: true,
-    })
-    .selectOption(f.projectId);
-  await page.getByLabel("Report file").selectOption(file.id);
-  await page
-    .getByLabel("Visibility", {
-      exact: true,
-    })
-    .selectOption("public");
-  await page
-    .getByRole("dialog")
-    .getByRole("button", {
-      name: "Publish report",
-      exact: true,
-    })
-    .click();
-  const link = page.getByRole("link", {
-    name: "Browser report",
-  });
+  const link = page.getByRole("link", { name: "Open published asset" });
   await expect(link).toBeVisible();
   const url = await link.getAttribute("href");
   expect(url).toMatch(/^\/enterprise\/reports\//);
@@ -893,25 +874,19 @@ test("safe report publication is public without JavaScript and visibility change
       path: `${evidence}/safe-report-mobile.png`,
       fullPage: true,
     });
+    await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page
-      .getByRole("button", {
-        name: "Change visibility",
-        exact: true,
-      })
-      .click();
-    await page
-      .getByLabel("Visibility", {
-        exact: true,
-      })
+      .getByLabel("Visibility", { exact: true })
       .selectOption("project");
     await page
-      .getByRole("dialog")
-      .getByRole("button", {
-        name: "Save",
-        exact: true,
-      })
+      .getByRole("button", { name: "Change visibility", exact: true })
       .click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByLabel("Visibility", { exact: true })).toHaveValue(
+      "project",
+    );
+    await page
+      .getByRole("button", { name: "Close dialog", exact: true })
+      .click();
     const authorizedView = await page.context().newPage();
     try {
       expect((await authorizedView.goto(url)).status()).toBe(200);
@@ -2049,4 +2024,265 @@ test("deleted-project administration recovers files and restores the original wo
       exact: true,
     }),
   ).toBeVisible();
+});
+
+test("organization assets start without projects from Files and Assets, remain private, and retain revisions", async ({
+  page,
+  browser,
+}) => {
+  const f = await ensureFixture(page),
+    session = await (await page.request.get("/enterprise/api/session")).json();
+  const headers = { origin: f.origin, "x-csrf-token": session.csrfToken };
+  const org = await (
+    await page.request.post("/enterprise/api/organizations", {
+      headers,
+      data: { name: "Asset-only organization" },
+    })
+  ).json();
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+  await page.goto(`/enterprise/organizations/${org.id}/library`);
+  await expect(
+    page.getByRole("heading", { name: "Library", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "New asset", exact: true }).click();
+  await page.getByLabel("Name", { exact: true }).fill("Organization overview");
+  await page
+    .getByLabel("Description", { exact: true })
+    .fill("Prepared without a project");
+  await expect(page.getByLabel("Belongs to")).toHaveValue("");
+  await page.getByRole("button", { name: "Create asset", exact: true }).click();
+  await page
+    .getByLabel("Text", { exact: true })
+    .fill("First version for review");
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  const preview = await page
+    .getByRole("link", { name: "Preview draft" })
+    .getAttribute("href");
+  const anonymous = await browser.newContext({
+    baseURL: f.origin,
+    storageState: { cookies: [], origins: [] },
+  });
+  expect((await anonymous.request.get(preview)).status()).toBe(401);
+  expect(
+    (await anonymous.request.get(preview.replace(/\/preview$/, ""))).status(),
+  ).toBe(404);
+  const draft = await page.context().newPage();
+  await draft.goto(preview);
+  await expect(draft.getByText("First version for review")).toBeVisible();
+  await draft.close();
+  await page.screenshot({
+    path: `${evidence}/asset-create-desktop.png`,
+    fullPage: true,
+  });
+  await page.getByLabel("Visibility").selectOption("public");
+  await page
+    .getByRole("button", { name: "Publish asset", exact: true })
+    .click();
+  const url = await page
+    .getByRole("link", { name: "Open published asset" })
+    .getAttribute("href");
+  expect((await anonymous.request.get(url)).status()).toBe(200);
+  await page.getByRole("button", { name: "Prepare", exact: true }).click();
+  await page
+    .getByLabel("Text", { exact: true })
+    .fill("Second draft kept private");
+  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect
+    .poll(async () =>
+      (await (await anonymous.request.get(url)).text()).includes(
+        "Second draft",
+      ),
+    )
+    .toBe(false);
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Publish new version", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Versions", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Restore version 1 to draft", exact: true })
+    .click();
+  await expect(page.getByLabel("Text", { exact: true })).toHaveValue(
+    "First version for review",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: `${evidence}/asset-edit-mobile.png`,
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "New asset", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "New asset", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await anonymous.close();
+  expect(errors).toEqual([]);
+});
+
+test("remote subscription screens resume without another grant and discriminate provider handoffs", async ({
+  page,
+}) => {
+  const f = await ensureFixture(page);
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+  for (const provider of ["openai", "anthropic", "xai"]) {
+    await page.goto(`/enterprise/organizations/${f.orgId}/connections`);
+    await expect(
+      page.getByRole("heading", { name: "Connections", exact: true }),
+    ).toBeVisible();
+    await page
+      .locator("header.page-header")
+      .getByRole("button", { name: "Add connection", exact: true })
+      .click();
+    await page.getByLabel("Connection type").selectOption("subscription");
+    await page.getByLabel("Provider", { exact: true }).selectOption(provider);
+    if (provider === "anthropic") await page.getByRole("checkbox").check();
+    const start = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/inference/oauth") && r.request().method() === "POST",
+    );
+    await page
+      .getByRole("button", { name: "Begin sign in", exact: true })
+      .click();
+    const attempt = await (await start).json();
+    await expect(
+      page.getByRole("link", { name: "Continue to provider" }),
+    ).toBeVisible();
+    expect(
+      await page
+        .getByRole("link", { name: "Continue to provider" })
+        .getAttribute("href"),
+    ).not.toContain("localhost");
+    if (provider === "anthropic") {
+      await expect(page.getByLabel("Authorization code")).toBeVisible();
+      await expect(page.getByText("Device code", { exact: true })).toHaveCount(
+        0,
+      );
+    } else {
+      await expect(page.getByText("TEST-CODE", { exact: true })).toBeVisible();
+      await expect(page.getByLabel("Authorization code")).toHaveCount(0);
+    }
+    await expect(page.getByLabel("Callback URL")).toHaveCount(0);
+    await page.screenshot({
+      path: `${evidence}/signin-${provider}-desktop.png`,
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: `${evidence}/signin-${provider}-mobile.png`,
+      fullPage: true,
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+      ),
+    ).toBe(true);
+    await page
+      .getByRole("button", { name: "Close dialog", exact: true })
+      .click();
+    await page.reload();
+    await page
+      .getByRole("button", { name: "View sign-in", exact: true })
+      .click();
+    const pending = await (
+      await page.request.get(
+        `/enterprise/api/organizations/${f.orgId}/inference/oauth`,
+      )
+    ).json();
+    expect(
+      pending.items
+        .filter((s) => s.provider === provider && s.status === "pending")
+        .map((s) => s.id),
+    ).toEqual([attempt.id]);
+    if (provider === "anthropic") {
+      await page
+        .getByLabel("Authorization code")
+        .fill("fixture-authorization-code");
+      await page
+        .getByRole("button", { name: "Complete sign in", exact: true })
+        .click();
+    } else
+      await writeFile(
+        `${evidence}/provider-control.json`,
+        JSON.stringify({ [attempt.id]: "ready" }),
+      );
+    await expect(
+      page.getByText("Connection saved.", { exact: true }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.setViewportSize({ width: 1536, height: 1024 });
+  }
+  expect(errors).toEqual([]);
+});
+
+test("denied, expired and unavailable remote sign-ins offer a fresh attempt without stale codes", async ({
+  page,
+}) => {
+  const f = await ensureFixture(page),
+    errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (m) => {
+    if (m.type() === "error") errors.push(m.text());
+  });
+  for (const state of ["denied", "expired", "error"]) {
+    await page.goto(`/enterprise/organizations/${f.orgId}/connections`);
+    await page
+      .locator("header.page-header")
+      .getByRole("button", { name: "Add connection", exact: true })
+      .click();
+    await page.getByLabel("Connection type").selectOption("subscription");
+    await page.getByLabel("Provider", { exact: true }).selectOption("openai");
+    const start = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/inference/oauth") && r.request().method() === "POST",
+    );
+    await page
+      .getByRole("button", { name: "Begin sign in", exact: true })
+      .click();
+    const attempt = await (await start).json();
+    await writeFile(
+      `${evidence}/provider-control.json`,
+      JSON.stringify({ [attempt.id]: state }),
+    );
+    await expect(
+      page.getByRole("button", { name: "Start a new sign-in", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "Continue to provider" }),
+    ).toHaveCount(0);
+    await expect(page.getByText("TEST-CODE", { exact: true })).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "Start a new sign-in", exact: true })
+      .click();
+    await page.getByLabel("Connection type").selectOption("subscription");
+    const retry = page.waitForResponse(
+      (r) =>
+        r.url().endsWith("/inference/oauth") && r.request().method() === "POST",
+    );
+    await page
+      .getByRole("button", { name: "Begin sign in", exact: true })
+      .click();
+    expect((await (await retry).json()).id).not.toBe(attempt.id);
+    await page
+      .getByRole("button", { name: "Cancel sign in", exact: true })
+      .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  }
+  expect(errors).toEqual([]);
 });

@@ -22,6 +22,7 @@ async function publish(
     {
       projectId: f.projectA,
       name: "Team report",
+      publish: true,
       document,
       ...(visibility
         ? {
@@ -292,7 +293,7 @@ test("safe contract rejects HTML, CSS, URL, scripts, executable live publishing 
         {},
       )
     ).statusCode,
-    404,
+    409, // The restored publication route requires an explicit current draft revision.
   );
 });
 test("report sources cannot cross projects/organizations; library share revocation and creator removal revoke current data", async (t) => {

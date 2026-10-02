@@ -42,6 +42,7 @@ test("delete immediately denies project/files/reports/network, retains recoverab
       projectId: f.projectA,
       name: "Report",
       visibility: "public",
+      publish: true,
       document: {
         version: 1,
         blocks: [

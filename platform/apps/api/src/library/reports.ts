@@ -1,5 +1,4 @@
-import { randomUUID } from "node:crypto";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyReply } from "fastify";
 import {
   AppError,
   mapUser,
@@ -14,7 +13,7 @@ type Column = {
   label: string;
   key: string;
 };
-type Block =
+export type Block =
   | {
       type: "heading";
       text: string;
@@ -52,10 +51,10 @@ export type Report = {
   blocks: Block[];
 };
 type Visibility = "project" | "organization" | "public";
-type Asset = {
+export type Asset = {
   id: string;
   org_id: string;
-  project_id: string;
+  project_id: string | null;
   creator_id: string;
   name: string;
   visibility: Visibility;
@@ -195,53 +194,7 @@ function scalar(value: unknown): string {
     );
   return String(value).slice(0, 4000);
 }
-function visibility(
-  value: unknown,
-  fallback: Visibility = "project",
-): Visibility {
-  if (value === undefined) return fallback;
-  if (!["project", "organization", "public"].includes(String(value)))
-    throw new AppError(
-      400,
-      "invalid_visibility",
-      "Choose project, organization, or public visibility.",
-    );
-  return value as Visibility;
-}
-const dto = (a: Asset) => ({
-  id: a.id,
-  orgId: a.org_id,
-  projectId: a.project_id,
-  createdBy: a.creator_id,
-  name: a.name,
-  visibility: a.visibility,
-  type: "report",
-  url: `/enterprise/reports/${a.id}`,
-  createdAt: a.created_at,
-  updatedAt: a.updated_at,
-});
-async function get(ctx: AppContext, id: string) {
-  const a = await ctx.db.get<Asset>(
-    "SELECT r.* FROM reports r JOIN projects p ON p.id=r.project_id WHERE r.id=? AND r.deleted_at IS NULL AND p.status NOT IN ('deleted','deleting','purged')",
-    [id],
-  );
-  if (!a) throw new AppError(404, "report_not_found", "Report not found.");
-  return a;
-}
-async function access(ctx: AppContext, a: Asset, user?: User) {
-  if (a.visibility === "public") return;
-  if (!user)
-    throw new AppError(401, "unauthorized", "Sign in to view this report.");
-  if (a.visibility === "organization")
-    await ctx.requireOrgMember(user, a.org_id);
-  else await ctx.requireProject(user, a.project_id);
-}
-async function manage(ctx: AppContext, a: Asset, user: User) {
-  await ctx.requireOrgMember(user, a.org_id);
-  if (user.id === a.creator_id) await ctx.requireProject(user, a.project_id);
-  else await ctx.requireOrgAdmin(user, a.org_id);
-}
-async function creator(ctx: AppContext, a: Asset) {
+export async function creator(ctx: AppContext, a: Asset) {
   const row = await ctx.db.get<any>(
     "SELECT * FROM users WHERE id=? AND enabled=1",
     [a.creator_id],
@@ -253,11 +206,22 @@ async function creator(ctx: AppContext, a: Asset) {
       "Report source access is unavailable.",
     );
   const user = mapUser(row);
-  await ctx.requireProject(user, a.project_id);
+  if (a.project_id) await ctx.requireProject(user, a.project_id ?? undefined);
+  else await ctx.requireOrgMember(user, a.org_id);
   return user;
 }
-async function source(ctx: AppContext, a: Asset, user: User, fileId: string) {
-  const auth = await authorizeFile(ctx, user, fileId, a.project_id);
+export async function source(
+  ctx: AppContext,
+  a: Asset,
+  user: User,
+  fileId: string,
+) {
+  const auth = await authorizeFile(
+    ctx,
+    user,
+    fileId,
+    a.project_id ?? undefined,
+  );
   if (
     auth.row.org_id !== a.org_id ||
     (auth.row.project_id && auth.row.project_id !== a.project_id)
@@ -268,11 +232,11 @@ async function source(ctx: AppContext, a: Asset, user: User, fileId: string) {
       "Report sources must belong to the report's project or its current library shares.",
     );
   return readCurrentFile(ctx, user, fileId, {
-    projectId: a.project_id,
+    projectId: a.project_id ?? undefined,
     maxBytes: 4 * 1024 * 1024,
   });
 }
-function imageType(bytes: Buffer) {
+export function imageType(bytes: Buffer) {
   if (
     bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
   )
@@ -358,7 +322,7 @@ export async function renderReport(ctx: AppContext, a: Asset) {
     // the same authorized snapshot during this render.
     const remaining = 8 * 1024 * 1024 - sourceBytes;
     if (remaining <= 0) throw limited();
-    const auth = await authorizeFile(ctx, user, id, a.project_id);
+    const auth = await authorizeFile(ctx, user, id, a.project_id ?? undefined);
     if (
       auth.row.org_id !== a.org_id ||
       (auth.row.project_id && auth.row.project_id !== a.project_id)
@@ -369,7 +333,7 @@ export async function renderReport(ctx: AppContext, a: Asset) {
         "Report sources must belong to this project or its current library shares.",
       );
     const bytes = await readCurrentFile(ctx, user, id, {
-      projectId: a.project_id,
+      projectId: a.project_id ?? undefined,
       maxBytes: Math.min(remaining, 4 * 1024 * 1024),
     });
     sourceBytes += bytes.length;
@@ -446,7 +410,7 @@ export async function renderReport(ctx: AppContext, a: Asset) {
   // Only this constant stylesheet is emitted. No author CSS, URL, HTML or attribute names.
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(a.name)}</title><style>body{font:17px system-ui;line-height:1.6;margin:2rem auto;padding:0 1rem;max-width:70rem;color:#172b24;background:#fff}p{white-space:pre-wrap}table{border-collapse:collapse;display:block;overflow:auto}th,td{padding:.5rem;border:1px solid #ccc;text-align:left}img,svg{max-width:100%;height:auto}summary{cursor:pointer}figure{margin:1rem 0}</style></head><body><main><h1>${escapeHtml(a.name)}</h1>${rendered.join("")}</main></body></html>`;
 }
-function headers(reply: FastifyReply) {
+export function headers(reply: FastifyReply) {
   reply
     .header("cache-control", "no-store")
     .header("referrer-policy", "no-referrer")
@@ -457,206 +421,4 @@ function headers(reply: FastifyReply) {
       "sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
     );
 }
-export async function registerReports(app: FastifyInstance, ctx: AppContext) {
-  await ctx.db.migrate(
-    "safe-reports-v1",
-    `CREATE TABLE reports(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),project_id TEXT NOT NULL REFERENCES projects(id),creator_id TEXT NOT NULL REFERENCES users(id),name TEXT NOT NULL,visibility TEXT NOT NULL DEFAULT 'project' CHECK(visibility IN ('project','organization','public')),document TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,deleted_at TEXT);CREATE INDEX reports_org ON reports(org_id);`,
-  );
-  app.get<{
-    Params: {
-      orgId: string;
-    };
-  }>("/enterprise/api/organizations/:orgId/assets", async (req) => {
-    const user = await ctx.requireUser(req);
-    await ctx.requireOrgMember(user, req.params.orgId);
-    const items = [];
-    for (const a of await ctx.db.all<Asset>(
-      "SELECT r.* FROM reports r JOIN projects p ON p.id=r.project_id WHERE r.org_id=? AND r.deleted_at IS NULL AND p.status NOT IN ('deleted','deleting','purged') ORDER BY r.updated_at DESC",
-      [req.params.orgId],
-    )) {
-      try {
-        await access(ctx, a, user);
-        items.push(dto(a));
-      } catch (e) {
-        if (!(e instanceof AppError)) throw e;
-      }
-    }
-    return {
-      items,
-    };
-  });
-  app.post<{
-    Params: {
-      orgId: string;
-    };
-  }>("/enterprise/api/organizations/:orgId/assets", async (req, reply) => {
-    const user = await ctx.requireUser(req),
-      body = objectBody(req.body),
-      project = await ctx.requireProject(
-        user,
-        stringValue(body.projectId, "project"),
-        "write",
-      );
-    if (project.orgId !== req.params.orgId)
-      throw new AppError(404, "not_found", "Project not found.");
-    let document = body.document;
-    if (body.sourceFileId !== undefined) {
-      if (document !== undefined) throw fail();
-      const bytes = await readCurrentFile(
-        ctx,
-        user,
-        stringValue(body.sourceFileId, "report file"),
-        {
-          projectId: project.id,
-          maxBytes: 256 * 1024,
-        },
-      );
-      try {
-        document = JSON.parse(bytes.toString("utf8"));
-      } catch {
-        throw fail();
-      }
-    }
-    const report = validateReport(document),
-      time = new Date().toISOString();
-    const a: Asset = {
-      id: randomUUID(),
-      org_id: project.orgId,
-      project_id: project.id,
-      creator_id: user.id,
-      name: stringValue(body.name, "name"),
-      visibility: visibility(body.visibility),
-      document: JSON.stringify(report),
-      created_at: time,
-      updated_at: time,
-    };
-    await renderReport(ctx, a);
-    await ctx.db.run(
-      "INSERT INTO reports(id,org_id,project_id,creator_id,name,visibility,document,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-      [
-        a.id,
-        a.org_id,
-        a.project_id,
-        a.creator_id,
-        a.name,
-        a.visibility,
-        a.document,
-        time,
-        time,
-      ],
-    );
-    await ctx.audit(user, a.org_id, "report.created", a.id, {
-      visibility: a.visibility,
-    });
-    reply.code(201);
-    return dto(a);
-  });
-  app.get<{
-    Params: {
-      assetId: string;
-    };
-  }>("/enterprise/api/assets/:assetId", async (req) => {
-    const user = await ctx.requireUser(req),
-      a = await get(ctx, req.params.assetId);
-    await access(ctx, a, user);
-    return dto(a);
-  });
-  app.patch<{
-    Params: {
-      assetId: string;
-    };
-  }>("/enterprise/api/assets/:assetId", async (req) => {
-    const user = await ctx.requireUser(req),
-      a = await get(ctx, req.params.assetId),
-      b = objectBody(req.body);
-    await manage(ctx, a, user);
-    const updated = {
-      ...a,
-      name: b.name === undefined ? a.name : stringValue(b.name, "name"),
-      visibility: visibility(b.visibility, a.visibility),
-      updated_at: new Date().toISOString(),
-    };
-    if (b.document !== undefined) {
-      await ctx.requireProject(user, a.project_id, "write");
-      updated.document = JSON.stringify(validateReport(b.document));
-      await renderReport(ctx, updated);
-    }
-    await ctx.db.run(
-      "UPDATE reports SET name=?,visibility=?,document=?,updated_at=? WHERE id=?",
-      [
-        updated.name,
-        updated.visibility,
-        updated.document,
-        updated.updated_at,
-        a.id,
-      ],
-    );
-    await ctx.audit(user, a.org_id, "report.updated", a.id, {
-      visibility: updated.visibility,
-    });
-    return dto(updated);
-  });
-  app.delete<{
-    Params: {
-      assetId: string;
-    };
-  }>("/enterprise/api/assets/:assetId", async (req) => {
-    const user = await ctx.requireUser(req),
-      a = await get(ctx, req.params.assetId);
-    await manage(ctx, a, user);
-    await ctx.db.run("UPDATE reports SET deleted_at=? WHERE id=?", [
-      new Date().toISOString(),
-      a.id,
-    ]);
-    return {
-      ok: true,
-    };
-  });
-  const route = {
-    config: {
-      safeReport: true,
-    },
-  };
-  app.get<{
-    Params: {
-      assetId: string;
-    };
-  }>("/enterprise/reports/:assetId", route, async (req, reply) => {
-    const a = await get(ctx, req.params.assetId);
-    await access(
-      ctx,
-      a,
-      a.visibility === "public" ? undefined : await ctx.requireUser(req),
-    );
-    const html = await renderReport(ctx, a);
-    headers(reply);
-    return reply.type("text/html; charset=utf-8").send(html);
-  });
-  app.get<{
-    Params: {
-      assetId: string;
-      index: string;
-    };
-  }>(
-    "/enterprise/reports/:assetId/images/:index",
-    route,
-    async (req, reply) => {
-      const a = await get(ctx, req.params.assetId);
-      await access(
-        ctx,
-        a,
-        a.visibility === "public" ? undefined : await ctx.requireUser(req),
-      );
-      if (!/^(?:0|[1-9][0-9]?)$/.test(req.params.index))
-        throw new AppError(404, "not_found", "Image not found.");
-      const block = validateReport(JSON.parse(a.document)).blocks[
-        Number(req.params.index)
-      ];
-      if (block?.type !== "image")
-        throw new AppError(404, "not_found", "Image not found.");
-      const bytes = await source(ctx, a, await creator(ctx, a), block.fileId);
-      headers(reply);
-      return reply.type(imageType(bytes)).send(bytes);
-    },
-  );
-}
+export { registerReports } from "./assets.js";

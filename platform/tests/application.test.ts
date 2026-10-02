@@ -134,6 +134,7 @@ test("assembled platform provisions a project, renders a safe report and immedia
       projectId: project.json().id,
       name: "Report",
       visibility: "public",
+      publish: true,
       document: {
         version: 1,
         blocks: [

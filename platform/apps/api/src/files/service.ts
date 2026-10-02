@@ -320,7 +320,7 @@ export async function readCurrentFile(
   ctx: AppContext,
   user: User,
   id: string,
-  options: { projectId: string; maxBytes: number },
+  options: { projectId?: string; maxBytes: number },
 ): Promise<Buffer> {
   return locked(ctx, async () => {
     const auth = await authorizeFile(ctx, user, id, options.projectId);
