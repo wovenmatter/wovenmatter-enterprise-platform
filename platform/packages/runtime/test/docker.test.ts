@@ -1,795 +1,491 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, watch, type FSWatcher } from "node:fs";
 import {
   mkdtemp,
   mkdir,
   writeFile,
   readFile,
   chmod,
-  symlink,
   rm,
-  realpath,
+  symlink,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  DockerRuntime,
-  containerArguments,
-  runNetwork,
-  type DockerRuntimeOptions,
-} from "../src/docker.ts";
-import { validateHostRequest } from "../src/validation.ts";
-import type { RuntimeRequest, RuntimeEvent } from "../src/types.ts";
-import { storageVolumeName, volumeMount } from "../src/volumes.ts";
-
-async function fixture() {
-  const root = await realpath(
-    await mkdtemp(join(tmpdir(), "wme-runtime-test-")),
-  );
-  const files = join(root, "files"),
+import { tmpdir } from "node:os";
+import { DockerRuntime, type DockerRuntimeOptions } from "../src/docker.js";
+import { validateHostRequest } from "../src/validation.js";
+import { volumeMount, storageVolumeName } from "../src/volumes.js";
+import type { RuntimeRequest } from "../src/types.js";
+async function fixture(t: any) {
+  const root = await mkdtemp(join(tmpdir(), "wme-project-driver-")),
+    files = join(root, "files"),
     sessions = join(root, "sessions"),
-    native = join(sessions, "conversation1");
-  await mkdir(files);
-  await mkdir(native, { recursive: true });
-  const log = join(root, "commands.jsonl"),
-    pid = join(root, "child.pid"),
-    binary = join(root, "docker-fixture");
+    journal = join(root, "journal"),
+    log = join(root, "commands.jsonl"),
+    binary = join(root, "docker.mjs");
+  for (const path of [
+    files,
+    sessions,
+    journal,
+    join(files, "projects/project1/files"),
+    join(sessions, "org1/project1/sessions/thread1/codex/read"),
+  ])
+    await mkdir(path, {
+      recursive: true,
+    });
   const program = `#!${process.execPath}
-import fs from 'node:fs';
-const a=process.argv.slice(2);fs.appendFileSync(${JSON.stringify(log)},JSON.stringify(a)+'\\n');
-const containerFile=${JSON.stringify(join(root, "container.json"))},networkFile=${JSON.stringify(join(root, "network.json"))};
-const labels=()=>Object.fromEntries(a.flatMap((x,i)=>x==='--label'?[a[i+1].split('=')]:[]));
-if(a[0]==='network' && a[1]==='create'){
- if(fs.existsSync(networkFile)){process.stderr.write('Error response from daemon: network with name '+a.at(-1)+' already exists');process.exit(1);}
- fs.writeFileSync(networkFile,JSON.stringify({Id:'d'.repeat(64),Name:a.at(-1),Internal:true,Labels:labels()}));
- if(fs.existsSync(${JSON.stringify(join(root, "uncertain-network"))})){process.stderr.write('Docker connection lost after request');process.exit(1);}
-}
-if(a[0]==='network' && a[1]==='inspect'){
- if(fs.existsSync(${JSON.stringify(join(root, "network-inspect-fails"))})){process.stderr.write('Daemon unavailable');process.exit(1);}
- if(!fs.existsSync(networkFile)){process.stderr.write('Error: No such network: '+a[2]);process.exit(1);}
- process.stdout.write('['+fs.readFileSync(networkFile,'utf8')+']');
-}
-if(a[0]==='container' && a[1]==='inspect'){
- if(!fs.existsSync(containerFile)){process.stderr.write('Error: No such container: '+a[2]);process.exit(1);}
- process.stdout.write('['+fs.readFileSync(containerFile,'utf8')+']');
-}
-if(a[0]==='network' && a[1]==='rm' && fs.existsSync(networkFile))fs.unlinkSync(networkFile);
-if(a[0]==='rm' && fs.existsSync(${JSON.stringify(join(root, "remove-fails-once"))})){fs.unlinkSync(${JSON.stringify(join(root, "remove-fails-once"))});process.stderr.write('Daemon unavailable during cleanup');process.exit(1);}
-if(a[0]==='rm' && fs.existsSync(containerFile))fs.unlinkSync(containerFile);
-
-if(a[0]==='volume' && a[1]==='inspect'){const roots=${JSON.stringify([files, sessions])};const crypto=await import('node:crypto');const root=roots.find(r=>'wme-storage-'+crypto.createHash('sha256').update(r).digest('hex').slice(0,32)===a[2]);process.stdout.write(JSON.stringify([{Driver:'local',Options:{type:'none',o:'bind',device:root}}]));}
-if(a[0]==='create' && fs.existsSync(${JSON.stringify(join(root, "block-create"))})) {
- await new Promise((resolve,reject)=>{
-  const release=${JSON.stringify(join(root, "release-create"))};
-  const check=()=>{if(fs.existsSync(release)){observer.close();resolve();}};
-  const observer=fs.watch(${JSON.stringify(root)},check);
-  observer.once('error',reject);
-  fs.writeFileSync(${JSON.stringify(join(root, "create-entered"))},'yes');
-  check();
- });
-}
-if(a[0]==='create')fs.writeFileSync(containerFile,JSON.stringify({Id:'c'.repeat(64),Name:'/'+a[a.indexOf('--name')+1],Config:{Labels:labels()}}));
-if(a[0]==='start'){
- fs.writeFileSync(${JSON.stringify(pid)},String(process.pid));let data='';for await(const c of process.stdin)data+=c;
- const r=JSON.parse(data);fs.writeFileSync(${JSON.stringify(join(root, "request.json"))},JSON.stringify(r));process.stdout.write(JSON.stringify({type:'started'})+'\\n');
- if(r.prompt==='wait'){await new Promise(r=>setTimeout(r,10000));}
- else if(r.prompt==='malformed'){process.stdout.write('not json\\n');await new Promise(r=>setTimeout(r,10000));}
- else {process.stdout.write(JSON.stringify({type:'assistant_delta',delta:'fixture result'})+'\\n');process.stdout.write(JSON.stringify({type:'completed'})+'\\n');}
-}
-if(a[0]==='rm' && fs.existsSync(${JSON.stringify(pid)})){try{process.kill(Number(fs.readFileSync(${JSON.stringify(pid)},'utf8')),'SIGTERM')}catch{};fs.unlinkSync(${JSON.stringify(pid)});}
+import fs from 'node:fs';import {createInterface} from 'node:readline';import crypto from 'node:crypto';
+const a=process.argv.slice(2),root=${JSON.stringify(root)},log=${JSON.stringify(log)},container=root+'/container.json',network=root+'/network.json';fs.appendFileSync(log,JSON.stringify(a)+'\\n');
+const labels=()=>Object.fromEntries(a.flatMap((v,i)=>v==='--label'?[a[i+1].split('=')]:[]));
+const load=file=>JSON.parse(fs.readFileSync(file,'utf8'));const save=(file,data)=>fs.writeFileSync(file,JSON.stringify(data));
+if(a[0]==='volume'&&a[1]==='inspect'){const roots=${JSON.stringify([files, sessions, journal])};const r=roots.find(r=>'wme-storage-'+crypto.createHash('sha256').update(r).digest('hex').slice(0,32)===a[2]);console.log(JSON.stringify([{Driver:'local',Options:{type:'none',o:'bind',device:r}}]));}
+if(a[0]==='network'&&a[1]==='ls'&&fs.existsSync(network))console.log('net1');
+if(a[0]==='network'&&a[1]==='create')save(network,{Id:'net1',Internal:true,Labels:labels(),Containers:{}});
+if(a[1]==='inspect'&&['container','network'].includes(a[0])){const file=a[0]==='container'?container:network;if(!fs.existsSync(file)){console.error(a[0]==='network'&&fs.existsSync(root+'/network-error')?fs.readFileSync(root+'/network-error','utf8'):'No such '+a[0]);process.exit(1);}console.log(JSON.stringify([load(file)]));}
+if(a[0]==='create')save(container,{Id:'container1',Config:{Labels:labels(),Image:'fixture:runtime'},State:{Running:false}});
+if(['start','stop'].includes(a[0])){const c=load(container);c.State.Running=a[0]==='start';save(container,c);}
+if(a[0]==='rm')fs.rmSync(container,{force:true});
+if(a[0]==='network'&&a[1]==='rm'){if(fs.existsSync(root+'/fail-network-remove')){fs.rmSync(root+'/fail-network-remove');process.exit(1);}fs.rmSync(network,{force:true});}
+if(a[0]==='exec')for await(const line of createInterface({input:process.stdin})){const r=JSON.parse(line);if(r.operation==='status'){console.log(JSON.stringify(fs.existsSync(root+'/status.json')?load(root+'/status.json'):{ready:true}));break;}if(r.operation==='policy'){console.log(JSON.stringify({ok:true}));break;}if(r.operation==='cancel'){console.log(JSON.stringify({ok:true}));break;}if(r.operation==='execute'){fs.writeFileSync(root+'/request-'+r.request.runId+'.json',JSON.stringify(r.request));console.log(JSON.stringify({ok:true}));break;}if(r.operation==='attach'){console.log(JSON.stringify({attachment:'synthetic-attachment'}));break;}if(r.operation==='poll'){console.log(JSON.stringify({events:['started','input_accepted','completed'].map((type,i)=>({type,sequence:i+1})).filter(e=>e.sequence>r.after),terminal:true}));break;}if(['acknowledge','stop-session'].includes(r.operation)){console.log(JSON.stringify({ok:true}));break;}}
+process.stdin.destroy();
 `;
   await writeFile(binary, program);
   await chmod(binary, 0o700);
+  t.after(() =>
+    rm(root, {
+      recursive: true,
+      force: true,
+    }),
+  );
   const options: DockerRuntimeOptions = {
-    image: "wme-runtime:fixture",
+    image: "fixture:runtime",
     network: "wme-runtime",
     networkPool: "10.252.0.0/24",
-    gatewayContainer: "wme-api",
+    gatewayContainer: "synthetic-gateway",
     storageRoots: [files],
     sessionRoot: sessions,
-    journalRoot: join(root, "journal"),
+    journalRoot: journal,
     gatewayOrigins: ["http://api:4100"],
     dockerBinary: binary,
     appArmorProfile: "wme-platform-agent",
-    timeoutMs: 5000,
-    pinMounts: async () => ({ evidence: [], async close() {} }),
   };
+  const runtime = new DockerRuntime(options),
+    spec = {
+      projectId: "project1",
+      organizationId: "org1",
+      hostId: "local",
+    };
   const request: RuntimeRequest = {
     runId: "run1",
     organizationId: "org1",
     projectId: "project1",
-    conversationId: "conversation1",
+    conversationId: "thread1",
     harness: "codex",
     model: "fixture-model",
-    prompt: "hello",
+    prompt: "Fixture",
     access: "read",
-    mounts: [{ source: files, target: "/workspace", access: "write" }],
-    sessionDirectory: native,
+    mounts: [
+      {
+        source: join(files, "projects/project1/files"),
+        target: "/workspace",
+        access: "read",
+      },
+    ],
+    sessionDirectory: join(
+      sessions,
+      "org1/project1/sessions/thread1/codex/read",
+    ),
     gateway: {
-      baseUrl: "http://api:4100/api/runtime/inference/project1",
-      token: "synthetic-scoped-token-only",
+      baseUrl: "http://api:4100/enterprise/api/runtime/inference/project1",
+      token: "synthetic-scoped-fixture-token",
     },
   };
   return {
     root,
+    files,
+    sessions,
+    journal,
+    runtime,
     options,
+    spec,
     request,
-    log,
-    async commands(): Promise<string[][]> {
-      return (await readFile(log, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-    },
-    async cleanup() {
-      await rm(root, { recursive: true, force: true });
+    commands: async () => {
+      try {
+        return (await readFile(log, "utf8"))
+          .trim()
+          .split("\n")
+          .map((s) => JSON.parse(s) as string[]);
+      } catch {
+        return [];
+      }
     },
   };
 }
-
-test("container policy limits every mount and exposes no platform secret or socket", async () => {
-  const f = await fixture();
-  try {
-    const args = containerArguments(f.request, f.options);
-    for (const required of [
-      "--read-only",
-      "--cap-drop",
-      "ALL",
-      "no-new-privileges:true",
-      "apparmor=wme-platform-agent",
-      "--pids-limit",
-      "--memory",
-      "--cpus",
-    ])
-      assert.ok(args.includes(required));
-    const workspace = args.find((a) => a.includes("dst=/workspace"))!;
-    assert.ok(workspace.endsWith(",readonly"));
-    assert.ok(!args.join(" ").includes(f.request.gateway.token));
-    assert.ok(!args.join(" ").includes("docker.sock"));
-    assert.notEqual(
-      runNetwork("run1", "wme-runtime"),
-      runNetwork("run2", "wme-runtime"),
-    );
-    assert.equal(args[0], "create");
-    assert.ok(workspace.includes("volume-subpath=."));
-    assert.ok(!workspace.includes("type=bind"));
-  } finally {
-    await f.cleanup();
-  }
-});
-test("subpath mounts anchor source to immutable storage volume and reject host escapes", () => {
-  const mount = volumeMount(
-    "/srv/workspaces/organizations/org1/files/shared.pdf",
-    "/workspace/Shared.pdf",
-    ["/srv/workspaces"],
+test("one persistent project survives multiple runs; process dispatch never tears down container or volumes", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.ensureProject(f.spec);
+  const events: string[] = [];
+  await f.runtime.execute(f.request, (e) => {
+    events.push(e.type);
+  });
+  await f.runtime.execute(
+    {
+      ...f.request,
+      runId: "run2",
+    },
+    () => {},
+  );
+  assert.deepEqual(events, [
+    "attached",
+    "started",
+    "input_accepted",
+    "completed",
+  ]);
+  const commands = await f.commands();
+  assert.equal(commands.filter((c) => c[0] === "create").length, 1);
+  assert.equal(commands.filter((c) => ["stop", "rm"].includes(c[0])).length, 0);
+  assert.equal(
+    JSON.parse(await readFile(join(f.root, "container.json"), "utf8")).State
+      .Running,
     true,
   );
-  assert.ok(mount.includes("src=" + storageVolumeName("/srv/workspaces")));
-  assert.ok(
-    mount.includes("volume-subpath=organizations/org1/files/shared.pdf"),
+  const c = commands.find((c) => c[0] === "create")!;
+  assert.ok(c.includes("unless-stopped"));
+  assert.ok(c.includes("apparmor=wme-project-supervisor"));
+  assert.ok(c.includes("no-new-privileges:true"));
+  assert.equal(c.includes("--privileged"), false);
+  await f.runtime.stopProject(f.spec);
+  assert.equal(
+    JSON.parse(await readFile(join(f.root, "container.json"), "utf8")).State
+      .Running,
+    false,
   );
-  assert.ok(mount.endsWith(",readonly"));
-  assert.throws(() =>
-    volumeMount("/etc/passwd", "/workspace/Escape", ["/srv/workspaces"], false),
+});
+test("delete before provisioning, repeated stop/restore, and interrupted purge are idempotent", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.stopProject(f.spec);
+  await f.runtime.stopProject(f.spec);
+  await assert.rejects(f.runtime.ensureProject(f.spec), {
+    code: "project_deleted",
+  });
+  await f.runtime.restoreProject(f.spec);
+  await f.runtime.restoreProject(f.spec);
+  assert.equal((await f.commands()).filter((c) => c[0] === "create").length, 1);
+  await f.runtime.stopProject(f.spec);
+  await writeFile(join(f.root, "fail-network-remove"), "yes");
+  await assert.rejects(f.runtime.purgeProject(f.spec));
+  await f.runtime.purgeProject(f.spec);
+  await f.runtime.purgeProject(f.spec);
+  await assert.rejects(f.runtime.restoreProject(f.spec), {
+    code: "project_purged",
+  });
+});
+test("purge recovers Docker Engine network-not-found without hiding permission or unrelated lookup failures", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.ensureProject(f.spec);
+  await f.runtime.stopProject(f.spec);
+  const network = (await f.commands())
+    .find((command) => command[0] === "network" && command[1] === "create")!
+    .at(-1)!;
+  await rm(join(f.root, "network.json"));
+  for (const message of [
+    "Error response from daemon: permission denied",
+    "Error response from daemon: network unrelated not found",
+  ]) {
+    await writeFile(join(f.root, "network-error"), message);
+    await assert.rejects(f.runtime.purgeProject(f.spec));
+  }
+  await writeFile(
+    join(f.root, "network-error"),
+    `Error response from daemon: network ${network} not found\n`,
   );
+  await f.runtime.purgeProject(f.spec);
+  await f.runtime.purgeProject(f.spec);
+  await assert.rejects(f.runtime.restoreProject(f.spec), {
+    code: "project_purged",
+  });
 });
-test("full access still respects a read-only organization share", async () => {
-  const f = await fixture();
-  try {
-    const request = {
-      ...f.request,
-      access: "write" as const,
-      mounts: [
-        ...f.request.mounts,
-        {
-          source: f.request.mounts[0].source,
-          target: "/workspace/Shared",
-          access: "read" as const,
-        },
-      ],
-    };
-    const args = containerArguments(request, f.options);
-    assert.ok(
-      !args.find((a) => a.includes("dst=/workspace,"))!.endsWith(",readonly"),
-    );
-    assert.ok(
-      args
-        .find((a) => a.includes("dst=/workspace/Shared"))!
-        .endsWith(",readonly"),
-    );
-  } finally {
-    await f.cleanup();
-  }
+test("concurrent provision and delete serialize; wrong host/org and foreign resources cannot be controlled", async (t) => {
+  const f = await fixture(t);
+  await Promise.all([
+    f.runtime.ensureProject(f.spec),
+    f.runtime.stopProject(f.spec),
+  ]);
+  assert.equal(
+    JSON.parse(await readFile(join(f.root, "container.json"), "utf8")).State
+      .Running,
+    false,
+  );
+  await assert.rejects(
+    f.runtime.restoreProject({
+      ...f.spec,
+      hostId: "elsewhere",
+    }),
+    {
+      code: "wrong_host",
+    },
+  );
+  await assert.rejects(
+    f.runtime.stopProject({
+      ...f.spec,
+      organizationId: "other",
+    }),
+    {
+      code: "placement_conflict",
+    },
+  );
+  const c = JSON.parse(await readFile(join(f.root, "container.json"), "utf8"));
+  c.Config.Labels["com.wovenmatter.enterprise.allocation"] = "foreign";
+  await writeFile(join(f.root, "container.json"), JSON.stringify(c));
+  await assert.rejects(f.runtime.purgeProject(f.spec), {
+    code: "resource_ownership",
+  });
+  assert.equal((await f.commands()).filter((c) => c[0] === "rm").length, 0);
 });
-test("source escape, symlink sources, control-plane session mount, and target traversal fail", async () => {
-  const f = await fixture();
-  try {
-    await symlink(f.request.mounts[0].source, join(f.root, "link"));
-    for (const source of ["/etc", join(f.root, "link")])
-      await assert.rejects(
-        validateHostRequest(
-          {
-            ...f.request,
-            mounts: [{ source, target: "/workspace", access: "read" }],
-          },
-          f.options.storageRoots,
-          f.options.sessionRoot,
-        ),
-      );
-    await assert.rejects(
-      validateHostRequest(
-        {
-          ...f.request,
-          mounts: [{ ...f.request.mounts[0], target: "/workspace/../../etc" }],
-        },
-        f.options.storageRoots,
-        f.options.sessionRoot,
-      ),
-      /target/,
-    );
-    await assert.rejects(
-      validateHostRequest(
-        { ...f.request, sessionDirectory: f.request.mounts[0].source },
-        f.options.storageRoots,
-        f.options.sessionRoot,
-      ),
-      /session storage/,
-    );
-  } finally {
-    await f.cleanup();
-  }
+test("runtime recovery restarts a stopped project and preserves durable native state without replaying runs", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.ensureProject(f.spec);
+  await writeFile(join(f.request.sessionDirectory, "history"), "saved");
+  const c = JSON.parse(await readFile(join(f.root, "container.json"), "utf8"));
+  c.State.Running = false;
+  await writeFile(join(f.root, "container.json"), JSON.stringify(c));
+  const next = new DockerRuntime(f.options);
+  await next.recover();
+  assert.equal(
+    await readFile(join(f.request.sessionDirectory, "history"), "utf8"),
+    "saved",
+  );
+  assert.equal(
+    (await f.commands()).filter(
+      (c) => c[0] === "exec" && c.includes("--interactive"),
+    ).length,
+    3,
+  );
+  assert.equal((await f.commands()).filter((c) => c[0] === "create").length, 1);
 });
-test("execution persists receipt, streams in order, cleans private network, and rejects replay", async () => {
-  const f = await fixture();
-  try {
-    const runtime = new DockerRuntime(f.options),
-      events: RuntimeEvent[] = [];
-    await runtime.execute(f.request, async (e) => {
-      if (e.type === "completed")
-        assert.ok((await f.commands()).some((c) => c[0] === "rm"));
-      events.push(e);
-    });
-    assert.deepEqual(
-      events.map((e) => e.type),
-      ["started", "assistant_delta", "completed"],
-    );
-    assert.equal(
-      JSON.parse(
-        await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-      ).status,
-      "completed",
-    );
-    await assert.rejects(
-      runtime.execute(f.request, () => {}),
-      /already been dispatched/,
-    );
-    const commands = await f.commands();
-    assert.equal(commands.filter((c) => c[0] === "start").length, 1);
-    assert.ok(
-      commands.some(
-        (c) =>
-          c[0] === "network" &&
-          c[1] === "create" &&
-          c.includes("--internal") &&
-          c.includes("--subnet") &&
-          /^10\.252\.0\.\d+\/28$/.test(c[c.indexOf("--subnet") + 1]),
-      ),
-    );
-    assert.ok(
-      commands.some((c) => c[0] === "network" && c[1] === "disconnect"),
-    );
-    assert.ok(commands.some((c) => c[0] === "network" && c[1] === "rm"));
-  } finally {
-    await f.cleanup();
-  }
-});
-test("egress requires supervisor allowlist and forwards only the credential-free origin", async () => {
-  const f = await fixture();
-  try {
-    const request = { ...f.request, egressProxyUrl: "http://api:4101" };
-    await assert.rejects(
-      new DockerRuntime(f.options).execute(request, () => {}),
-      /egress proxy is not allowed/,
-    );
-    await assert.rejects(
-      new DockerRuntime({
-        ...f.options,
-        egressProxyOrigins: ["http://api:4102"],
-      }).execute(request, () => {}),
-      /egress proxy is not allowed/,
-    );
-    await assert.rejects(readFile(f.log), { code: "ENOENT" });
-    const runtime = new DockerRuntime({
-      ...f.options,
-      egressProxyOrigins: ["http://api:4101"],
-    });
-    await runtime.execute(request, () => {});
-    const payload = JSON.parse(
-      await readFile(join(f.root, "request.json"), "utf8"),
-    );
-    assert.equal(payload.egressProxyUrl, "http://api:4101");
-    assert.ok(!payload.egressProxyUrl.includes(request.gateway.token));
-    assert.ok(
-      (await f.commands()).some(
-        (command) =>
-          command[0] === "network" &&
-          command[1] === "create" &&
-          command.includes("--internal"),
-      ),
-    );
-  } finally {
-    await f.cleanup();
-  }
-});
-test("cancellation during container creation never launches agent work", async () => {
-  const f = await fixture(),
-    abort = new AbortController();
-  let observer: FSWatcher | undefined;
-  let active: Promise<void> | undefined;
-  const release = () => writeFile(join(f.root, "release-create"), "yes");
-  try {
-    await writeFile(join(f.root, "block-create"), "yes");
-    const createEntered = new Promise<void>((resolve, reject) => {
-      observer = watch(f.root, () => {
-        if (existsSync(join(f.root, "create-entered"))) {
-          observer?.close();
-          resolve();
-        }
-      });
-      observer.once("error", reject);
-    });
-    const runtime = new DockerRuntime(f.options),
-      events: RuntimeEvent[] = [];
-    active = runtime.execute(
-      f.request,
-      (event) => {
-        events.push(event);
-      },
-      abort.signal,
-    );
-    // The fake Docker command is held inside create until cancellation is issued.
-    // Register the watcher before dispatch so neither process scheduling nor slow
-    // preflight can move the cancellation into an earlier phase of execution.
-    await Promise.race([
-      createEntered,
-      active.then(() => {
-        throw new Error("Runtime finished before entering container creation");
-      }),
-    ]);
-    assert.ok((await f.commands()).some((command) => command[0] === "create"));
-    abort.abort();
-    await release();
-    await active;
-    assert.deepEqual(events, [{ type: "cancelled" }]);
-    const commands = await f.commands();
-    assert.ok(!commands.some((command) => command[0] === "start"));
-    assert.ok(commands.some((command) => command[0] === "rm"));
-    assert.ok(
-      commands.some(
-        (command) => command[0] === "network" && command[1] === "rm",
-      ),
-    );
-  } finally {
-    observer?.close();
-    abort.abort();
-    await release();
-    await active?.catch(() => {});
-    await f.cleanup();
-  }
-});
-
-test("cancel stops a running process and marks its single-use receipt", async () => {
-  const f = await fixture();
-  try {
-    const runtime = new DockerRuntime(f.options),
-      events: RuntimeEvent[] = [],
-      abort = new AbortController();
-    await runtime.execute(
-      { ...f.request, prompt: "wait" },
-      (e) => {
-        events.push(e);
-        if (e.type === "started") abort.abort();
-      },
-      abort.signal,
-    );
-    assert.equal(events.at(-1)?.type, "cancelled");
-    assert.equal(
-      JSON.parse(
-        await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-      ).status,
-      "cancelled",
-    );
-  } finally {
-    await f.cleanup();
-  }
-});
-test("malformed output force-stops the agent before emitting failure", async () => {
-  const f = await fixture();
-  try {
-    const runtime = new DockerRuntime(f.options),
-      events: RuntimeEvent[] = [];
-    await runtime.execute({ ...f.request, prompt: "malformed" }, async (e) => {
-      if (e.type === "failed")
-        assert.ok((await f.commands()).some((c) => c[0] === "rm"));
-      events.push(e);
-    });
-    assert.equal(events.at(-1)?.type, "failed");
-    assert.ok(!events.some((e) => e.type === "completed"));
-  } finally {
-    await f.cleanup();
-  }
-});
-test("recovery terminates uncertain work and never resubmits a prompt", async () => {
-  const f = await fixture();
-  try {
-    await mkdir(f.options.journalRoot);
-    await writeFile(
-      join(f.options.journalRoot, "run1.json"),
-      JSON.stringify({
-        runId: "run1",
-        allocationId: "recovery-fixture",
-        conversationId: "conversation1",
-        status: "dispatching",
-        updatedAt: new Date().toISOString(),
-      }),
-    );
-    const labels = {
-      "com.wovenmatter.enterprise.runtime": "true",
-      "com.wovenmatter.enterprise.run": "run1",
-      "com.wovenmatter.enterprise.allocation": "recovery-fixture",
-    };
-    await writeFile(
-      join(f.root, "container.json"),
-      JSON.stringify({
-        Id: "c".repeat(64),
-        Name: "/wme-run-run1",
-        Config: { Labels: labels },
-      }),
-    );
-    await writeFile(
-      join(f.root, "network.json"),
-      JSON.stringify({
-        Id: "d".repeat(64),
-        Name: runNetwork("run1", f.options.network),
-        Internal: true,
-        Labels: labels,
-      }),
-    );
-    const runtime = new DockerRuntime(f.options);
-    assert.deepEqual(await runtime.recover(), ["run1"]);
-    assert.deepEqual(await runtime.recover(), []);
-    assert.ok(
-      !(await f.commands()).some((c) => ["create", "start"].includes(c[0])),
-    );
-    assert.equal(
-      JSON.parse(
-        await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-      ).status,
-      "interrupted",
-    );
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("runtime requires an explicit valid network pool before Docker operations", async () => {
-  const f = await fixture();
-  try {
-    for (const networkPool of [undefined, "", "8.8.0.0/16", "10.252.0.1/24"])
-      assert.throws(
-        () =>
-          new DockerRuntime({
-            ...f.options,
-            networkPool: networkPool as string,
-          }),
-        /network pool/,
-      );
-    await assert.rejects(readFile(f.log), { code: "ENOENT" });
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("ambiguous network creation is cleaned by its durable allocation labels", async () => {
-  const f = await fixture();
-  try {
-    await writeFile(join(f.root, "uncertain-network"), "yes");
-    const runtime = new DockerRuntime(f.options),
-      events: RuntimeEvent[] = [];
-    await runtime.execute(f.request, (event) => {
-      events.push(event);
-    });
-    assert.equal(events.at(-1)?.type, "failed");
-    const receipt = JSON.parse(
-      await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-    );
-    assert.equal(typeof receipt.allocationId, "string");
-    assert.equal(receipt.status, "failed");
-    const commands = await f.commands();
-    assert.ok(
-      commands.some(
-        (args) =>
-          args[0] === "network" &&
-          args[1] === "rm" &&
-          args[2] === "d".repeat(64),
-      ),
-    );
-    assert.ok(
-      !commands.some((args) => args[0] === "create" || args[0] === "start"),
-    );
-    await assert.rejects(readFile(join(f.root, "network.json")), {
-      code: "ENOENT",
-    });
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("uncertain cleanup retains its receipt and recovery removes only that allocation", async () => {
-  const f = await fixture();
-  try {
-    await writeFile(join(f.root, "uncertain-network"), "yes");
-    await writeFile(join(f.root, "network-inspect-fails"), "yes");
-    const runtime = new DockerRuntime(f.options);
-    await assert.rejects(runtime.execute(f.request, () => {}));
-    const receipt = JSON.parse(
-      await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-    );
-    assert.equal(receipt.status, "dispatching");
-    await rm(join(f.root, "network-inspect-fails"));
-    assert.deepEqual(await runtime.recover(), ["run1"]);
-    await assert.rejects(readFile(join(f.root, "network.json")), {
-      code: "ENOENT",
-    });
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("creation collisions and later recovery never delete a preexisting foreign network", async () => {
-  const f = await fixture();
-  try {
-    const foreign = {
-      Id: "e".repeat(64),
-      Name: runNetwork("run1", f.options.network),
-      Internal: true,
-      Labels: {
-        "com.wovenmatter.enterprise.runtime": "true",
-        "com.wovenmatter.enterprise.run": "run1",
-        "com.wovenmatter.enterprise.allocation": "someone-elses-allocation",
-      },
-    };
-    await writeFile(join(f.root, "network.json"), JSON.stringify(foreign));
-    const runtime = new DockerRuntime(f.options);
-    await assert.rejects(
-      runtime.execute(f.request, () => {}),
-      /ownership/,
-    );
-    await assert.rejects(runtime.recover(), /ownership/);
-    assert.deepEqual(
-      JSON.parse(await readFile(join(f.root, "network.json"), "utf8")),
-      foreign,
-    );
-    assert.ok(
-      !(await f.commands()).some(
-        (args) =>
-          args[0] === "rm" ||
-          (args[0] === "network" && ["rm", "disconnect"].includes(args[1])),
-      ),
-    );
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("recovery refuses foreign containers and legacy allocations before any deletion", async () => {
-  for (const legacy of [false, true]) {
-    const f = await fixture();
-    try {
-      await mkdir(f.options.journalRoot);
-      await writeFile(
-        join(f.options.journalRoot, "run1.json"),
-        JSON.stringify({
-          runId: "run1",
-          conversationId: "conversation1",
-          status: "dispatching",
-          ...(legacy ? {} : { allocationId: "expected-attempt" }),
-          updatedAt: new Date().toISOString(),
-        }),
-      );
-      const container = {
-        Id: "f".repeat(64),
-        Name: "/wme-run-run1",
-        Config: {
-          Labels: {
-            "com.wovenmatter.enterprise.runtime": "true",
-            "com.wovenmatter.enterprise.run": "run1",
-            ...(legacy
-              ? {}
-              : { "com.wovenmatter.enterprise.allocation": "foreign-attempt" }),
-          },
-        },
-      };
-      await writeFile(
-        join(f.root, "container.json"),
-        JSON.stringify(container),
-      );
-      await assert.rejects(new DockerRuntime(f.options).recover(), /ownership/);
-      assert.deepEqual(
-        JSON.parse(await readFile(join(f.root, "container.json"), "utf8")),
-        container,
-      );
-      assert.ok(
-        !(await f.commands()).some(
-          (args) =>
-            args[0] === "rm" ||
-            (args[0] === "network" && ["rm", "disconnect"].includes(args[1])),
-        ),
-      );
-      assert.equal(
-        JSON.parse(
-          await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-        ).status,
-        "dispatching",
-      );
-    } finally {
-      await f.cleanup();
-    }
-  }
-});
-
-test("legacy interrupted receipts without remaining Docker resources can complete recovery", async () => {
-  const f = await fixture();
-  try {
-    await mkdir(f.options.journalRoot);
-    await writeFile(
-      join(f.options.journalRoot, "run1.json"),
-      JSON.stringify({
-        runId: "run1",
-        conversationId: "conversation1",
-        status: "dispatching",
-        updatedAt: new Date().toISOString(),
-      }),
-    );
-    assert.deepEqual(await new DockerRuntime(f.options).recover(), ["run1"]);
-    assert.ok(
-      !(await f.commands()).some(
-        (args) =>
-          args[0] === "rm" ||
-          (args[0] === "network" && ["rm", "disconnect"].includes(args[1])),
-      ),
-    );
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("cancel reloads durable ownership after execute cleanup fails and clears active state", async () => {
-  const f = await fixture();
-  try {
-    await writeFile(join(f.root, "remove-fails-once"), "yes");
-    const runtime = new DockerRuntime(f.options),
-      events: RuntimeEvent[] = [];
-    await assert.rejects(
-      runtime.execute(f.request, (event) => {
-        events.push(event);
-      }),
-    );
-    assert.ok(
-      !events.some((event) =>
-        ["completed", "cancelled", "failed"].includes(event.type),
-      ),
-    );
-    const receipt = JSON.parse(
-      await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-    );
-    assert.equal(receipt.status, "dispatching");
-    const retained = JSON.parse(
-      await readFile(join(f.root, "container.json"), "utf8"),
-    );
-    assert.equal(
-      retained.Config.Labels["com.wovenmatter.enterprise.allocation"],
-      receipt.allocationId,
-    );
-    const before = (await f.commands()).length;
-    await runtime.cancel("run1");
-    const retryCommands = (await f.commands()).slice(before);
-    assert.ok(
-      retryCommands.some(
-        (args) => args[0] === "container" && args[1] === "inspect",
-      ),
-    );
-    assert.ok(
-      retryCommands.some((args) => args[0] === "rm" && args[2] === retained.Id),
-    );
-    await assert.rejects(readFile(join(f.root, "container.json")), {
-      code: "ENOENT",
-    });
-    assert.equal(
-      JSON.parse(
-        await readFile(join(f.options.journalRoot, "run1.json"), "utf8"),
-      ).status,
-      "dispatching",
-    );
-    assert.deepEqual(await runtime.recover(), ["run1"]);
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("cancel without active state fails closed on absent or invalid durable ownership", async () => {
-  const f = await fixture();
-  try {
-    const container = {
-      Id: "f".repeat(64),
-      Name: "/wme-run-run1",
-      Config: {
-        Labels: {
-          "com.wovenmatter.enterprise.runtime": "true",
-          "com.wovenmatter.enterprise.run": "run1",
-          "com.wovenmatter.enterprise.allocation": "unknown-owner",
-        },
-      },
-    };
-    await writeFile(join(f.root, "container.json"), JSON.stringify(container));
-    const runtime = new DockerRuntime(f.options);
-    await assert.rejects(runtime.cancel("run1"), /ownership/);
-    await mkdir(f.options.journalRoot);
-    for (const receipt of [
-      { runId: "run1", status: "dispatching" },
-      {
-        runId: "wrong-run",
-        status: "dispatching",
-        allocationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      },
-      { runId: "run1", status: "dispatching", allocationId: "not-a-uuid" },
-      {
-        runId: "run1",
-        status: "completed",
-        allocationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      },
-    ]) {
-      await writeFile(
-        join(f.options.journalRoot, "run1.json"),
-        JSON.stringify(receipt),
-      );
-      await assert.rejects(runtime.cancel("run1"), /ownership|receipt/);
-    }
-    assert.deepEqual(
-      JSON.parse(await readFile(join(f.root, "container.json"), "utf8")),
-      container,
-    );
-    assert.ok(!(await f.commands()).some((args) => args[0] === "rm"));
-    await rm(join(f.root, "container.json"));
-    await runtime.cancel("run1"); // A finalized receipt plus confirmed absence can acknowledge.
-    await rm(join(f.options.journalRoot, "run1.json"));
-    await runtime.cancel("run1"); // Missing receipt also requires a real Docker absence check.
-  } finally {
-    await f.cleanup();
-  }
-});
-
-test("ordinary Unicode and punctuation in shared names remain valid runtime mounts", async () => {
-  const f = await fixture();
-  try {
-    const name = 'Résumé, "Q4" (2026).txt';
-    const source = join(f.request.mounts[0].source, name);
-    const target = `/workspace/${name}`;
-    await writeFile(source, "shared document");
-    await validateHostRequest(
+test("dispatch validates project/session identity, share scope, symlink sources and network capabilities", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.ensureProject(f.spec);
+  await assert.rejects(
+    f.runtime.execute(
       {
         ...f.request,
-        mounts: [...f.request.mounts, { source, target, access: "read" }],
+        sessionDirectory: f.sessions,
       },
-      f.options.storageRoots,
-      f.options.sessionRoot,
+      () => {},
+    ),
+    {
+      code: "invalid_session",
+    },
+  );
+  await mkdir(join(f.files, "projects/other/files"), {
+    recursive: true,
+  });
+  await assert.rejects(
+    f.runtime.execute(
+      {
+        ...f.request,
+        mounts: [
+          {
+            source: join(f.files, "projects/other/files"),
+            target: "/workspace",
+            access: "read",
+          },
+        ],
+      },
+      () => {},
+    ),
+    {
+      code: "invalid_mount",
+    },
+  );
+  await assert.rejects(
+    f.runtime.execute(
+      {
+        ...f.request,
+        gateway: {
+          baseUrl: "http://private.invalid",
+          token: "x",
+        },
+      },
+      () => {},
+    ),
+    {
+      code: "invalid_gateway",
+    },
+  );
+  await assert.rejects(
+    f.runtime.execute(
+      {
+        ...f.request,
+        egressProxyUrl: "http://api:4101",
+      },
+      () => {},
+    ),
+    {
+      code: "invalid_gateway",
+    },
+  );
+  await symlink(f.request.mounts[0].source, join(f.files, "alias"));
+  await assert.rejects(
+    validateHostRequest(
+      {
+        ...f.request,
+        mounts: [
+          {
+            source: join(f.files, "alias"),
+            target: "/workspace",
+            access: "read",
+          },
+        ],
+      },
+      [f.files],
+      f.sessions,
+    ),
+    {
+      code: "invalid_mount",
+    },
+  );
+  assert.throws(() =>
+    volumeMount("/unmanaged", "/workspace", [f.files], false),
+  );
+  assert.match(storageVolumeName(f.files), /^wme-storage-/);
+});
+test("runtime image changes require an explicit backed-up operator update", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.ensureProject(f.spec);
+  const newer = new DockerRuntime({
+    ...f.options,
+    image: "fixture:next-runtime",
+  });
+  await assert.rejects(newer.ensureProject(f.spec), {
+    code: "runtime_upgrade_required",
+  });
+  assert.equal((await f.commands()).filter((c) => c[0] === "create").length, 1);
+  assert.equal(
+    JSON.parse(await readFile(join(f.root, "container.json"), "utf8")).State
+      .Running,
+    true,
+  );
+});
+
+test("asset compute releases only an idle matching lease and reopens durable workspace without creating project storage", async (t) => {
+  const f = await fixture(t),
+    assetId = "asset1",
+    projectId = "asset-" + assetId;
+  const spec = {
+    projectId,
+    organizationId: "org1",
+    hostId: "local",
+    owner: { kind: "asset" as const, assetId },
+    workspaceLease: 1,
+    scheduleEnabled: false,
+    scheduleMounts: [],
+  };
+  const root = join(f.files, "assets", assetId, "files"),
+    sessionDirectory = join(
+      f.sessions,
+      "org1",
+      projectId,
+      "sessions/thread1/codex/write",
     );
-    const mount = volumeMount(source, target, f.options.storageRoots, true);
-    assert.ok(mount.includes('"dst=/workspace/Résumé, ""Q4"" (2026).txt"'));
-    assert.ok(mount.includes('"volume-subpath=Résumé, ""Q4"" (2026).txt"'));
-    assert.ok(mount.endsWith(",readonly"));
-  } finally {
-    await f.cleanup();
-  }
+  await mkdir(root, { recursive: true });
+  await mkdir(sessionDirectory, { recursive: true });
+  await writeFile(join(root, "retained.txt"), "durable asset");
+  const request = {
+    ...f.request,
+    projectId,
+    assetId,
+    workspaceLease: 1,
+    access: "write" as const,
+    sessionDirectory,
+    mounts: [{ source: root, target: "/workspace", access: "write" as const }],
+    gateway: {
+      ...f.request.gateway,
+      baseUrl: "http://api:4100/enterprise/api/runtime/inference/" + projectId,
+    },
+  };
+  await f.runtime.ensureProject(spec);
+  await f.runtime.execute(request, () => {});
+  assert.ok((await f.commands()).find((c) => c.includes("wme-asset-asset1")));
+  assert.ok(
+    (await f.commands()).some((c) =>
+      c.includes("com.wovenmatter.enterprise.asset=asset1"),
+    ),
+  );
+  await writeFile(
+    join(f.root, "status.json"),
+    JSON.stringify({ ready: true, runIds: ["active-run"], sessions: [] }),
+  );
+  await assert.rejects(f.runtime.releaseAsset(spec), {
+    code: "workspace_busy",
+  });
+  assert.equal((await f.commands()).filter((c) => c[0] === "stop").length, 0);
+  await writeFile(
+    join(f.root, "status.json"),
+    JSON.stringify({
+      ready: true,
+      runIds: [],
+      sessions: [{ activeRun: "active-turn" }],
+    }),
+  );
+  await assert.rejects(f.runtime.releaseAsset(spec), {
+    code: "workspace_busy",
+  });
+  await writeFile(
+    join(f.root, "status.json"),
+    JSON.stringify({ ready: true, runIds: [], sessions: [] }),
+  );
+  await f.runtime.releaseAsset(spec);
+  assert.equal(
+    await readFile(join(root, "retained.txt"), "utf8"),
+    "durable asset",
+  );
+  await assert.rejects(f.runtime.ensureProject(spec), {
+    code: "stale_workspace_lease",
+  });
+  await f.runtime.ensureProject({ ...spec, workspaceLease: 2 });
+  const stops = (await f.commands()).filter((c) => c[0] === "stop").length;
+  await f.runtime.releaseAsset(spec);
+  assert.equal(
+    (await f.commands()).filter((c) => c[0] === "stop").length,
+    stops,
+    "stale release cannot stop newer lease",
+  );
+  await assert.rejects(
+    f.runtime.execute({ ...request, runId: "stale-admission" }, () => {}),
+    { code: "stale_workspace_lease" },
+  );
+  await f.runtime.execute(
+    { ...request, runId: "next-admission", workspaceLease: 2 },
+    () => {},
+  );
+  const restarted = new DockerRuntime(f.options);
+  await restarted.recover();
+  assert.equal(
+    (await f.commands()).filter((c) => c[0] === "create").length,
+    2,
+    "recovery cannot start idle asset compute",
+  );
+  await assert.rejects(f.runtime.releaseAsset(f.spec), { code: "asset_only" });
+});
+
+test("Stop before provisioning and while compute is absent durably fences delayed dispatch across supervisor restart", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.stopSession(f.spec.projectId, f.request.conversationId, 1);
+  assert.equal((await f.commands()).filter((c) => c[0] === "create").length, 0);
+  await f.runtime.ensureProject(f.spec);
+  const restarted = new DockerRuntime(f.options);
+  await assert.rejects(
+    restarted.execute(f.request, () => {}),
+    { code: "authority_revoked" },
+  );
+  await restarted.execute(
+    { ...f.request, runId: "current", generation: 1 },
+    () => {},
+  );
+  await restarted.stopSession(f.spec.projectId, f.request.conversationId, 0);
+  await assert.rejects(
+    restarted.execute({ ...f.request, runId: "late" }, () => {}),
+    { code: "authority_revoked" },
+  );
 });

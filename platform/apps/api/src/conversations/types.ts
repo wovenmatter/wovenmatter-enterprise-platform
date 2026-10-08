@@ -3,9 +3,11 @@ import type { AppContext, User } from "../context.js";
 export type Harness = "codex" | "claude" | "grok" | "pi";
 export type Mode = "read" | "write";
 export interface ConversationRow {
+  runtime_generation?: number;
   id: string;
   org_id: string;
-  project_id: string;
+  project_id: string | null;
+  asset_id?: string | null;
   creator_id: string;
   title: string;
   mode: Mode;
@@ -17,10 +19,12 @@ export interface ConversationRow {
   deleted_at: string | null;
 }
 export interface RunRow {
+  runtime_generation?: number;
   id: string;
   conversation_id: string;
   org_id: string;
-  project_id: string;
+  project_id: string | null;
+  asset_id?: string | null;
   user_id: string;
   request_id: string;
   user_message_id: string;
@@ -42,6 +46,10 @@ export interface MessageRow {
   conversation_id: string;
   run_id: string;
   role: "user" | "assistant";
+  kind?: string;
+  delivery?: string;
+  sequence?: number;
+  error?: string | null;
   author_id: string | null;
   author_name?: string | null;
   content: string;
@@ -57,6 +65,7 @@ export interface EventRow {
   created_at: string;
 }
 export interface ConversationDependencies {
+  assets?: import("../assets/service.js").AssetAgentService;
   runtime: Runtime;
   files: {
     resolveProjectMounts(
@@ -79,6 +88,7 @@ export interface ConversationDependencies {
     issueGateway(input: {
       orgId: string;
       projectId: string;
+      assetId?: string;
       userId: string;
       runId: string;
       model?: string;
@@ -103,6 +113,7 @@ export function conversationView(c: ConversationRow) {
     id: c.id,
     orgId: c.org_id,
     projectId: c.project_id,
+    assetId: c.asset_id ?? null,
     createdBy: c.creator_id,
     title: c.title,
     mode: c.mode,
@@ -140,6 +151,10 @@ export function messageView(m: MessageRow) {
     conversationId: m.conversation_id,
     runId: m.run_id,
     role: m.role,
+    kind: m.kind ?? "message",
+    delivery: m.delivery,
+    sequence: m.sequence,
+    error: m.error,
     authorId: m.author_id,
     authorName: m.author_name ?? null,
     content: m.content,

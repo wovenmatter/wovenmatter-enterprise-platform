@@ -42,16 +42,19 @@ import {
   Success,
 } from "../components/ui";
 const FilesPage = lazy(() =>
-  import("./files").then((m) => ({ default: m.FilesPage })),
+  import("./files").then((m) => ({
+    default: m.FilesPage,
+  })),
 );
 const ConversationsPage = lazy(() =>
-  import("./conversations").then((m) => ({ default: m.ConversationsPage })),
+  import("./conversations").then((m) => ({
+    default: m.ConversationsPage,
+  })),
 );
-
 export function ProjectsPage() {
   const { org, isAdmin, orgBase } = useWorkspace();
   const projects = useResource<List<Project>>(
-    `/api/organizations/${org.id}/projects`,
+    `/enterprise/api/organizations/${org.id}/projects`,
   );
   const [creating, setCreating] = useState(false);
   const navigate = useNavigate();
@@ -85,22 +88,29 @@ export function ProjectsPage() {
               </thead>
               <tbody>
                 {projects.data.items.map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <Link className="item-link" to={`${orgBase}/projects/${p.id}`}>
-                      <Folder size={20} />
-                      <div>
-                        <strong>{p.name}</strong>
-                        {p.description ? <small>{p.description}</small> : null}
-                      </div>
-                    </Link>
-                  </td>
-                  <td>{p.access === "write" ? "Read & write" : "Read only"}</td>
-                  <td>
-                    <Status value={p.status} />
-                  </td>
-                  <td>{date(p.createdAt)}</td>
-                </tr>
+                  <tr key={p.id}>
+                    <td>
+                      <Link
+                        className="item-link"
+                        to={`${orgBase}/projects/${p.id}`}
+                      >
+                        <Folder size={20} />
+                        <div>
+                          <strong>{p.name}</strong>
+                          {p.description ? (
+                            <small>{p.description}</small>
+                          ) : null}
+                        </div>
+                      </Link>
+                    </td>
+                    <td>
+                      {p.access === "write" ? "Full access" : "Read-only"}
+                    </td>
+                    <td>
+                      <Status value={p.status} />
+                    </td>
+                    <td>{date(p.createdAt)}</td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -128,7 +138,7 @@ export function ProjectsPage() {
             onCancel={() => setCreating(false)}
             onSave={async (body) => {
               const p = await send<Project>(
-                `/api/organizations/${org.id}/projects`,
+                `/enterprise/api/organizations/${org.id}/projects`,
                 body,
               );
               setCreating(false);
@@ -150,6 +160,13 @@ function ProjectForm({
   onSave: (body: unknown) => Promise<void>;
   onCancel: () => void;
 }) {
+  const { user, org } = useWorkspace();
+  const hosts = useResource<
+    List<{
+      id: string;
+      name: string;
+    }>
+  >(user.role === "owner" ? "/enterprise/api/hosts" : null);
   return (
     <AsyncForm
       submitLabel={project ? "Save changes" : "Create project"}
@@ -159,9 +176,47 @@ function ProjectForm({
           name: data.get("name"),
           description: data.get("description"),
           access: data.get("access"),
+          ...(user.role === "owner" && !project && data.get("hostId")
+            ? {
+                hostId: data.get("hostId"),
+              }
+            : {}),
         })
       }
     >
+      {user.role === "owner" ? (
+        <>
+          <ErrorNotice message={hosts.error} />
+          <Field
+            label="Workspace host"
+            hint={
+              project
+                ? "Stored projects retain their assigned host."
+                : "Choose an override or use the organization default."
+            }
+          >
+            <select
+              name="hostId"
+              disabled={Boolean(project) || hosts.loading}
+              defaultValue={project?.hostId ?? ""}
+            >
+              {!project ? (
+                <option value="">
+                  Organization default (
+                  {hosts.data?.items.find((h) => h.id === org.defaultHostId)
+                    ?.name ?? org.defaultHostId}
+                  )
+                </option>
+              ) : null}
+              {hosts.data?.items.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {h.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </>
+      ) : null}
       <Field label="Project name">
         <input
           autoFocus
@@ -184,8 +239,8 @@ function ProjectForm({
         hint="Individual members may have more limited permissions."
       >
         <select name="access" defaultValue={project?.access ?? "write"}>
-          <option value="write">Read & write</option>
-          <option value="read">Read only</option>
+          <option value="write">Full access</option>
+          <option value="read">Read-only</option>
         </select>
       </Field>
     </AsyncForm>
@@ -195,7 +250,7 @@ export function ProjectPage() {
   const { projectId } = useParams();
   const { isAdmin, org, orgBase, selectOrganization } = useWorkspace();
   const project = useResource<Project>(
-    projectId ? `/api/projects/${projectId}` : null,
+    projectId ? `/enterprise/api/projects/${projectId}` : null,
   );
   const [editing, setEditing] = useState(false);
   const [setupError, setSetupError] = useState("");
@@ -252,7 +307,7 @@ export function ProjectPage() {
               className="secondary"
               onClick={async () => {
                 try {
-                  await send(`/api/projects/${p.id}/retry`, {});
+                  await send(`/enterprise/api/projects/${p.id}/retry`, {});
                   setSetupError("");
                   project.reload();
                 } catch (e) {
@@ -286,7 +341,7 @@ export function ProjectPage() {
             project={p}
             onCancel={() => setEditing(false)}
             onSave={async (body) => {
-              await send(`/api/projects/${p.id}`, body, "PATCH");
+              await send(`/enterprise/api/projects/${p.id}`, body, "PATCH");
               setEditing(false);
               project.reload();
             }}
@@ -298,7 +353,9 @@ export function ProjectPage() {
           title="Delete project?"
           onClose={() => setDeleting(false)}
           onConfirm={async () => {
-            await api(`/api/projects/${p.id}`, { method: "DELETE" });
+            await api(`/enterprise/api/projects/${p.id}`, {
+              method: "DELETE",
+            });
             navigate(`${orgBase}/projects`);
           }}
         >
@@ -309,14 +366,17 @@ export function ProjectPage() {
     </section>
   );
 }
-type Member = User & { access: "read" | "write"; createdAt: string };
+type Member = User & {
+  access: "read" | "write";
+  createdAt: string;
+};
 export function ProjectMembers({ project }: { project: Project }) {
   const { org, isAdmin } = useWorkspace();
   const members = useResource<List<Member>>(
-    `/api/projects/${project.id}/members`,
+    `/enterprise/api/projects/${project.id}/members`,
   );
   const people = useResource<List<User>>(
-    isAdmin ? `/api/organizations/${org.id}/members` : null,
+    isAdmin ? `/enterprise/api/organizations/${org.id}/members` : null,
   );
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Member>();
@@ -355,48 +415,50 @@ export function ProjectMembers({ project }: { project: Project }) {
               </thead>
               <tbody>
                 {members.data.items.map((m) => (
-                <tr key={m.id}>
-                  <td>{m.name}</td>
-                  <td>{m.email}</td>
-                  <td>
-                    {isAdmin ? (
-                      <select
-                        aria-label={`Access for ${m.name}`}
-                        value={m.access}
-                        onChange={async (e) => {
-                          setError("");
-                          try {
-                            await send(
-                              `/api/projects/${project.id}/members/${m.id}`,
-                              { access: e.target.value },
-                              "PATCH",
-                            );
-                            members.reload();
-                          } catch (e) {
-                            setError((e as Error).message);
-                          }
-                        }}
-                      >
-                        <option value="read">Read only</option>
-                        <option value="write">Read & write</option>
-                      </select>
-                    ) : m.access === "write" ? (
-                      "Read & write"
-                    ) : (
-                      "Read only"
-                    )}
-                  </td>
-                  {isAdmin ? (
+                  <tr key={m.id}>
+                    <td>{m.name}</td>
+                    <td>{m.email}</td>
                     <td>
-                      <button
-                        className="text-button danger"
-                        onClick={() => setRemoving(m)}
-                      >
-                        Remove
-                      </button>
+                      {isAdmin ? (
+                        <select
+                          aria-label={`Access for ${m.name}`}
+                          value={m.access}
+                          onChange={async (e) => {
+                            setError("");
+                            try {
+                              await send(
+                                `/enterprise/api/projects/${project.id}/members/${m.id}`,
+                                {
+                                  access: e.target.value,
+                                },
+                                "PATCH",
+                              );
+                              members.reload();
+                            } catch (e) {
+                              setError((e as Error).message);
+                            }
+                          }}
+                        >
+                          <option value="read">Read-only</option>
+                          <option value="write">Full access</option>
+                        </select>
+                      ) : m.access === "write" ? (
+                        "Full access"
+                      ) : (
+                        "Read-only"
+                      )}
                     </td>
-                  ) : null}
-                </tr>
+                    {isAdmin ? (
+                      <td>
+                        <button
+                          className="text-button danger"
+                          onClick={() => setRemoving(m)}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    ) : null}
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -413,7 +475,7 @@ export function ProjectMembers({ project }: { project: Project }) {
             submitLabel="Add member"
             onCancel={() => setAdding(false)}
             onSubmit={async (d) => {
-              await send(`/api/projects/${project.id}/members`, {
+              await send(`/enterprise/api/projects/${project.id}/members`, {
                 userId: d.get("userId"),
                 access: d.get("access"),
               });
@@ -441,8 +503,8 @@ export function ProjectMembers({ project }: { project: Project }) {
             </Field>
             <Field label="Access">
               <select name="access">
-                <option value="read">Read only</option>
-                <option value="write">Read & write</option>
+                <option value="read">Read-only</option>
+                <option value="write">Full access</option>
               </select>
             </Field>
             <ErrorNotice message={people.error} />
@@ -455,9 +517,12 @@ export function ProjectMembers({ project }: { project: Project }) {
           label="Remove member"
           onClose={() => setRemoving(undefined)}
           onConfirm={async () => {
-            await api(`/api/projects/${project.id}/members/${removing.id}`, {
-              method: "DELETE",
-            });
+            await api(
+              `/enterprise/api/projects/${project.id}/members/${removing.id}`,
+              {
+                method: "DELETE",
+              },
+            );
             members.reload();
             setRemoving(undefined);
           }}
@@ -472,7 +537,7 @@ export function ProjectMembers({ project }: { project: Project }) {
 export function MembersPage({ nested = false }: { nested?: boolean }) {
   const { org, user, orgBase } = useWorkspace();
   const members = useResource<List<Member>>(
-    `/api/organizations/${org.id}/members`,
+    `/enterprise/api/organizations/${org.id}/members`,
   );
   const [invite, setInvite] = useState(false);
   const [edit, setEdit] = useState<Member>();
@@ -486,8 +551,10 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
     setError("");
     setResetting(member.id);
     try {
-      const result = await send<{ message: string }>(
-        `/api/organizations/${org.id}/members/${member.id}/password-reset`,
+      const result = await send<{
+        message: string;
+      }>(
+        `/enterprise/api/organizations/${org.id}/members/${member.id}/password-reset`,
         {},
       );
       setSuccess(result.message);
@@ -555,47 +622,53 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
               </thead>
               <tbody>
                 {members.data.items.map((m) => (
-                <tr key={m.id}>
-                  <td>{m.name || "Invited member"}</td>
-                  <td>{m.email}</td>
-                  <td>{m.role}</td>
-                  <td>
-                    <Status
-                      value={
-                        m.invitationPending
-                          ? "invited"
-                          : !m.enabled
-                            ? "disabled"
-                            : "active"
-                      }
-                    />
-                  </td>
-                  <td>
-                    <div className="row-actions">
-                      <button
-                        className="text-button"
-                        onClick={() => setEdit(m)}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="text-button"
-                        disabled={!m.enabled || m.invitationPending || resetting === m.id}
-                        onClick={() => void sendReset(m)}
-                      >
-                        {resetting === m.id ? "Sending…" : "Send password reset"}
-                      </button>
-                      {m.id !== user.id ? (
+                  <tr key={m.id}>
+                    <td>{m.name || "Invited member"}</td>
+                    <td>{m.email}</td>
+                    <td>{m.role}</td>
+                    <td>
+                      <Status
+                        value={
+                          m.invitationPending
+                            ? "invited"
+                            : !m.enabled
+                              ? "disabled"
+                              : "active"
+                        }
+                      />
+                    </td>
+                    <td>
+                      <div className="row-actions">
                         <button
-                          className="text-button danger"
-                          onClick={() => setRemove(m)}
+                          className="text-button"
+                          onClick={() => setEdit(m)}
                         >
-                          Remove
+                          Edit
                         </button>
-                      ) : null}
-                    </div>
-                  </td>
-                </tr>
+                        <button
+                          className="text-button"
+                          disabled={
+                            !m.enabled ||
+                            m.invitationPending ||
+                            resetting === m.id
+                          }
+                          onClick={() => void sendReset(m)}
+                        >
+                          {resetting === m.id
+                            ? "Sending…"
+                            : "Send password reset"}
+                        </button>
+                        {m.id !== user.id ? (
+                          <button
+                            className="text-button danger"
+                            onClick={() => setRemove(m)}
+                          >
+                            Remove
+                          </button>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -614,17 +687,22 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
             onSubmit={async (d) => {
               const result = await send<{
                 activationUrl?: string;
-                invitation: { expiresAt: string };
-              }>(`/api/organizations/${org.id}/invitations`, {
+                invitation?: {
+                  expiresAt: string;
+                };
+              }>(`/enterprise/api/organizations/${org.id}/invitations`, {
                 email: d.get("email"),
                 name: d.get("name"),
                 role: d.get("role"),
+                libraryAccess: d.get("libraryAccess"),
               });
               members.reload();
               setInvite(false);
               setActivationUrl(result.activationUrl ?? "");
               setSuccess(
-                `Invitation created. Expires ${date(result.invitation.expiresAt)}. Email delivery runs separately when configured.`,
+                result.invitation
+                  ? `Invitation created. Expires ${date(result.invitation.expiresAt)}. Email delivery runs separately when configured.`
+                  : "Member added to this organization.",
               );
             }}
           >
@@ -633,6 +711,12 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
             </Field>
             <Field label="Email">
               <input name="email" type="email" required />
+            </Field>
+            <Field label="Library access">
+              <select name="libraryAccess" defaultValue="read">
+                <option value="read">Read-only</option>
+                <option value="write">Full access</option>
+              </select>
             </Field>
             <Field label="Role">
               <select name="role">
@@ -649,10 +733,10 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
             onCancel={() => setEdit(undefined)}
             onSubmit={async (d) => {
               await send(
-                `/api/organizations/${org.id}/members/${edit.id}`,
+                `/enterprise/api/organizations/${org.id}/members/${edit.id}`,
                 {
-                  name: d.get("name"),
                   role: d.get("role"),
+                  libraryAccess: d.get("libraryAccess"),
                   enabled: d.get("enabled") === "on",
                 },
                 "PATCH",
@@ -662,12 +746,21 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
             }}
           >
             <Field label="Name">
-              <input name="name" defaultValue={edit.name} required />
+              <input value={edit.name} readOnly />
             </Field>
             <Field label="Role">
               <select name="role" defaultValue={edit.role}>
                 <option value="member">Member</option>
                 <option value="admin">Administrator</option>
+              </select>
+            </Field>
+            <Field label="Library access">
+              <select
+                name="libraryAccess"
+                defaultValue={edit.libraryAccess ?? "read"}
+              >
+                <option value="read">Read-only</option>
+                <option value="write">Full access</option>
               </select>
             </Field>
             <label className="checkbox">
@@ -676,7 +769,7 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
                 name="enabled"
                 defaultChecked={edit.enabled}
               />
-              Account enabled
+              Organization membership enabled
             </label>
           </AsyncForm>
         </Modal>
@@ -687,21 +780,31 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
           label="Remove member"
           onClose={() => setRemove(undefined)}
           onConfirm={async () => {
-            await api(`/api/organizations/${org.id}/members/${remove.id}`, {
-              method: "DELETE",
-            });
+            await api(
+              `/enterprise/api/organizations/${org.id}/members/${remove.id}`,
+              {
+                method: "DELETE",
+              },
+            );
             members.reload();
             setRemove(undefined);
           }}
         >
-          This disables {remove.email} and revokes their organization access.
+          This removes {remove.email} from this organization and its projects.
+          Their account and other organization memberships remain available.
         </Confirm>
       ) : null}
     </section>
   );
 }
 export function SettingsPage() {
-  const { org, refreshOrganizations, orgBase } = useWorkspace();
+  const { user, org, refreshOrganizations, orgBase } = useWorkspace();
+  const hosts = useResource<
+    List<{
+      id: string;
+      name: string;
+    }>
+  >(user.role === "owner" ? "/enterprise/api/hosts" : null);
   const [saved, setSaved] = useState(false);
   return (
     <section className="organization-settings">
@@ -711,14 +814,43 @@ export function SettingsPage() {
           key={org.id}
           onSubmit={async (d) => {
             await send(
-              `/api/organizations/${org.id}`,
-              { name: d.get("name") },
+              `/enterprise/api/organizations/${org.id}`,
+              {
+                name: d.get("name"),
+                ...(user.role === "owner" && d.has("defaultHostId")
+                  ? {
+                      defaultHostId: d.get("defaultHostId"),
+                    }
+                  : {}),
+              },
               "PATCH",
             );
             refreshOrganizations();
             setSaved(true);
           }}
         >
+          {user.role === "owner" ? (
+            <>
+              <ErrorNotice message={hosts.error} />
+              <Field
+                label="Default workspace host"
+                hint="Applies to new projects. Existing projects retain their host."
+              >
+                <select
+                  name="defaultHostId"
+                  defaultValue={org.defaultHostId}
+                  disabled={hosts.loading}
+                  required
+                >
+                  {hosts.data?.items.map((h) => (
+                    <option key={h.id} value={h.id}>
+                      {h.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </>
+          ) : null}
           <Field label="Organization name">
             <input
               name="name"
@@ -733,19 +865,38 @@ export function SettingsPage() {
       <section className="section-block">
         <h2>Management</h2>
         <div className="settings-list">
-          <Link className="setting-row setting-link" to={`${orgBase}/settings/members`}>
+          <Link
+            className="setting-row setting-link"
+            to={`${orgBase}/settings/deleted-projects`}
+          >
+            <div>
+              <strong>Deleted projects</strong>
+              <small>Restore projects or recover files within 30 days.</small>
+            </div>
+          </Link>
+          <Link
+            className="setting-row setting-link"
+            to={`${orgBase}/settings/members`}
+          >
             <Users size={16} />
             <div>
               <strong>Members</strong>
-              <small>Invite people, update roles, and send password resets.</small>
+              <small>
+                Invite people, update roles, and send password resets.
+              </small>
             </div>
             <ChevronRight size={11} className="destination-chevron" />
           </Link>
-          <Link className="setting-row setting-link" to={`${orgBase}/settings/connections`}>
+          <Link
+            className="setting-row setting-link"
+            to={`${orgBase}/settings/connections`}
+          >
             <Cable size={16} />
             <div>
               <strong>Connections</strong>
-              <small>Manage inference accounts available to the organization.</small>
+              <small>
+                Manage inference accounts available to the organization.
+              </small>
             </div>
             <ChevronRight size={11} className="destination-chevron" />
           </Link>

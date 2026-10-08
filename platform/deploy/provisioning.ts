@@ -11,6 +11,8 @@ import {
   lstat,
 } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { isIPv4 } from "node:net";
+import { validateNetworkPool } from "../packages/runtime/src/networks.js";
 
 export const CLI_PROXY_REVISION = "acdace936fa7df2905500c7f5e0a97d683138dea";
 export const ORGANIZATION_ID =
@@ -24,6 +26,8 @@ export interface ProvisionerOptions {
   root: string;
   image: string;
   network: string;
+  /** Must match the operator-owned bridge and its scoped firewall rules. */
+  networkSubnet?: string;
   docker?: (args: string[]) => Promise<string>;
   /** Production supervisor owns Docker/root; tests deliberately avoid chown. */
   credentialUid?: number;
@@ -98,8 +102,15 @@ export class OrganizationProxyProvisioner {
   private readonly pending = new Map<string, Promise<ProxyEndpoint>>();
   private readonly ready = new Map<string, number>();
   private readonly run: (args: string[]) => Promise<string>;
+  private readonly addressPrefix: string;
   constructor(private readonly options: ProvisionerOptions) {
     this.run = options.docker ?? docker;
+    const subnet = validateNetworkPool(
+      options.networkSubnet ?? "172.31.251.0/24",
+    );
+    if (!subnet.endsWith("/24"))
+      throw new Error("Inference requires a canonical RFC1918 IPv4 /24 subnet");
+    this.addressPrefix = subnet.slice(0, -4);
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(options.network))
       throw new Error("Invalid control network");
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_./:@-]+$/.test(options.image))
@@ -290,10 +301,12 @@ export class OrganizationProxyProvisioner {
           name,
         ])
       ).trim();
+      const lastOctet = Number(address.split(".").at(-1));
       if (
-        !/^172\.31\.251\.(?:[3-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])$/.test(
-          address,
-        )
+        !isIPv4(address) ||
+        !address.startsWith(this.addressPrefix) ||
+        lastOctet < 3 ||
+        lastOctet > 254
       )
         throw new Error("Inference container has an invalid network address");
       let ready = false;

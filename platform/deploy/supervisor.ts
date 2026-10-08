@@ -2,22 +2,28 @@ import { chmod, chown, readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { listenSupervisor } from "./supervisor-listener.js";
 import { DockerRuntime } from "../packages/runtime/src/index.js";
-import { DockerLibraryRuntime } from "../apps/api/src/library/runtime.js";
 import { OrganizationProxyProvisioner } from "./provisioning.js";
-import { createSupervisorServer } from "./supervisor-server.js";
+import {
+  createSupervisorServer,
+  createTlsSupervisorServer,
+} from "./supervisor-server.js";
 import {
   collectNetworkBoundary,
   createNetworkBoundaryReader,
   configuredBoundary,
 } from "./network-boundary.js";
-
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required`);
   return value;
 }
 const stateDir = resolve(required("WME_STATE_DIR"));
-const socketPath = resolve(required("WME_SUPERVISOR_SOCKET"));
+const socketPath = process.env.WME_SUPERVISOR_SOCKET
+  ? resolve(process.env.WME_SUPERVISOR_SOCKET)
+  : undefined;
+const tlsHost = process.env.WME_SUPERVISOR_TLS_HOST;
+if (Boolean(socketPath) === Boolean(tlsHost))
+  throw new Error("Choose exactly one Unix or mutual TLS listener");
 const token = (
   await readFile(required("WME_SUPERVISOR_TOKEN_FILE"), "utf8")
 ).trim();
@@ -50,6 +56,9 @@ if (process.env.WME_EGRESS_ENABLED === "true") {
 }
 const runtime = new DockerRuntime({
   image: required("WME_RUNNER_IMAGE"),
+  hostId: process.env.WME_HOST_ID ?? "local",
+  supervisorAppArmorProfile:
+    process.env.WME_PROJECT_APPARMOR_PROFILE ?? "wme-project-supervisor",
   network: required("WME_RUNNER_NETWORK"),
   networkPool,
   storageRoots,
@@ -66,36 +75,59 @@ const registry = new OrganizationProxyProvisioner({
   root: resolve(required("WME_INFERENCE_ROOT")),
   image: required("WME_INFERENCE_IMAGE"),
   network: required("WME_INFERENCE_NETWORK"),
+  networkSubnet: process.env.WME_INFERENCE_SUBNET,
   credentialUid: 10002,
   firewallAttestation,
 });
-const library = new DockerLibraryRuntime({
-  stateDir,
-  dataRoots: storageRoots,
-  image: required("WME_LIBRARY_IMAGE"),
-  networkPool,
-});
 const recoveredRunIds: string[] = [];
 let ready = false;
-const server = createSupervisorServer({
+const dependencies = {
   token,
+  storageRoot: stateDir,
+  hostId: process.env.WME_HOST_ID ?? "local",
   runtime,
   registry,
-  library,
   recoveredRunIds,
   ready: () => ready,
   networkBoundary,
-});
-await listenSupervisor(server, socketPath, async () => {
-  await chmod(socketPath, 0o660);
-  if (process.getuid?.() === 0) {
-    await chown(dirname(socketPath), 0, 10001);
-    await chown(socketPath, 0, 10001);
-  }
-  // Only the process that owns the listening socket may recover old runs.
+};
+const server = socketPath
+  ? createSupervisorServer(dependencies)
+  : createTlsSupervisorServer(dependencies, {
+      key: await readFile(required("WME_SUPERVISOR_TLS_KEY_FILE")),
+      cert: await readFile(required("WME_SUPERVISOR_TLS_CERT_FILE")),
+      ca: await readFile(required("WME_SUPERVISOR_TLS_CA_FILE")),
+    });
+async function recover() {
   recoveredRunIds.push(...(await runtime.recover()));
   ready = true;
-});
+}
+if (socketPath)
+  await listenSupervisor(server, socketPath, async () => {
+    await chmod(socketPath, 0o660);
+    if (process.getuid?.() === 0) {
+      await chown(dirname(socketPath), 0, 10001);
+      await chown(socketPath, 0, 10001);
+    }
+    // Only the process that owns the listening socket may recover old runs.
+    await recover();
+  });
+else {
+  const port = Number(required("WME_SUPERVISOR_TLS_PORT"));
+  if (
+    !Number.isSafeInteger(port) ||
+    port < 1024 ||
+    port > 65535 ||
+    tlsHost === "0.0.0.0" ||
+    tlsHost === "::"
+  )
+    throw new Error("Use an explicit private TLS listener address and port");
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, tlsHost, resolve);
+  });
+  await recover();
+}
 console.info("WovenMatter Enterprise Platform supervisor ready.");
 let stopping = false;
 for (const signal of ["SIGINT", "SIGTERM"] as const)

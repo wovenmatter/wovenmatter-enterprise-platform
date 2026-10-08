@@ -52,8 +52,9 @@ export async function registerInferenceRoutes(
   app.addHook("preClose", async () => {
     closing = true;
     for (const controller of activeRequests) controller.abort();
+    await service.closeOAuth();
   });
-  const base = "/api/organizations/:orgId/inference";
+  const base = "/enterprise/api/organizations/:orgId/inference";
   async function admin(request: FastifyRequest) {
     const user = await ctx.requireUser(request);
     const { orgId } = request.params as OrgParams;
@@ -173,8 +174,15 @@ export async function registerInferenceRoutes(
         (request.params as OrgParams).orgId,
         input.provider,
         input.acceptedRisk === true,
+        (await ctx.getSessionId(request)) ?? undefined,
       );
     },
+  );
+  app.get(`${base}/oauth`, async (request) =>
+    service.oauthSessions(
+      await admin(request),
+      (request.params as OrgParams).orgId,
+    ),
   );
   app.get(`${base}/oauth/:sessionId`, async (request) => {
     const user = await admin(request);
@@ -182,15 +190,15 @@ export async function registerInferenceRoutes(
     return service.oauthStatus(user, orgId, sessionId!);
   });
   app.post(
-    `${base}/oauth/:sessionId/callback`,
+    `${base}/oauth/:sessionId/code`,
     {
       schema: {
         body: {
           type: "object",
           additionalProperties: false,
-          required: ["redirectUrl"],
+          required: ["code"],
           properties: {
-            redirectUrl: { type: "string", minLength: 1, maxLength: 16384 },
+            code: { type: "string", minLength: 1, maxLength: 4096 },
           },
         },
       },
@@ -198,11 +206,11 @@ export async function registerInferenceRoutes(
     async (request) => {
       const user = await admin(request);
       const { orgId, sessionId } = request.params as OrgParams;
-      return service.oauthCallback(
+      return service.oauthCode(
         user,
         orgId,
         sessionId!,
-        (request.body as { redirectUrl: string }).redirectUrl,
+        (request.body as { code: string }).code,
       );
     },
   );
@@ -222,7 +230,7 @@ export async function registerInferenceRoutes(
     return service.usage((request.params as OrgParams).orgId);
   });
 
-  const gateway = "/api/runtime/inference/:projectId";
+  const gateway = "/enterprise/api/runtime/inference/:projectId";
   // The foundation excludes ONLY this bearer-authenticated prefix from browser CSRF.
   // Nothing under this prefix forwards management requests or browser cookies.
   for (const path of [

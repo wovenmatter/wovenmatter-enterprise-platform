@@ -26,11 +26,9 @@ function seed(filename: string) {
     now = new Date().toISOString(),
     token = `wme_run_${randomBytes(32).toString("base64url")}`;
   try {
-    db.prepare("INSERT INTO organizations VALUES(?,?,?)").run(
-      org,
-      "Synthetic egress acceptance",
-      now,
-    );
+    db.prepare(
+      "INSERT INTO organizations(id,name,created_at) VALUES(?,?,?)",
+    ).run(org, "Synthetic egress acceptance", now);
     db.prepare(
       "INSERT INTO users(id,org_id,email,name,role,enabled,created_at) VALUES(?,?,?,'Synthetic admin','admin',1,?)",
     ).run(user, org, `${user}@acceptance.invalid`, now);
@@ -88,7 +86,14 @@ function seed(filename: string) {
   } finally {
     db.close();
   }
-  return { org, user, project, conversation, run, token };
+  return {
+    org,
+    user,
+    project,
+    conversation,
+    run,
+    token,
+  };
 }
 function connectPrivate(
   port: number,
@@ -163,7 +168,10 @@ async function fixture(t: test.TestContext, maintenance = false) {
   );
   t.after(async () => {
     await system.app.close();
-    await rm(stateDir, { recursive: true, force: true });
+    await rm(stateDir, {
+      recursive: true,
+      force: true,
+    });
   });
   if (maintenance) await system.conversations.start();
   const data = seed(join(stateDir, "control", "platform.sqlite"));
@@ -192,7 +200,6 @@ async function fixture(t: test.TestContext, maintenance = false) {
     authorizationCalls: () => authorizationCalls,
   };
 }
-
 test("real SQLite and inference authorization accept seeded and issued run tokens through CONNECT before denying a private destination", async (t) => {
   const f = await fixture(t);
   assert.equal(
@@ -229,7 +236,6 @@ test("real SQLite and inference authorization accept seeded and issued run token
   assert.equal(await connectPrivate(f.port, f.project, f.token), 407);
   assert.equal(await connectPrivate(f.port, f.project, issued.token), 407);
 });
-
 test("real run permission checks reject a disabled user, removed thread access, and terminal run", async (t) => {
   const f = await fixture(t);
   await f.ctx.db.run("UPDATE users SET enabled=0 WHERE id=?", [f.user]);
@@ -250,11 +256,15 @@ test("real run permission checks reject a disabled user, removed thread access, 
   );
   assert.equal(await connectPrivate(f.port, f.project, f.token), 407);
 });
-
 test("live maintenance revokes manually seeded running rows that have no owned execution", async (t) => {
   const f = await fixture(t, true);
   assert.equal(await connectPrivate(f.port, f.project, f.token), 403);
-  let row: { status: string; error_code: string } | undefined;
+  let row:
+    | {
+        status: string;
+        error_code: string;
+      }
+    | undefined;
   for (let i = 0; i < 150; i++) {
     row = await f.ctx.db.get(
       "SELECT status,error_code FROM conversation_runs WHERE id=?",
@@ -266,14 +276,12 @@ test("live maintenance revokes manually seeded running rows that have no owned e
   assert.equal(row?.status, "interrupted");
   assert.equal(row?.error_code, "execution_state_lost");
   assert.ok(f.cancelled.includes(f.run));
-  const tokenState = await f.ctx.db.get<{ revoked: number }>(
-    "SELECT revoked FROM inference_gateway_tokens WHERE run_id=?",
-    [f.run],
-  );
+  const tokenState = await f.ctx.db.get<{
+    revoked: number;
+  }>("SELECT revoked FROM inference_gateway_tokens WHERE run_id=?", [f.run]);
   assert.equal(tokenState?.revoked, 1);
   assert.equal(await connectPrivate(f.port, f.project, f.token), 407);
 });
-
 test("an admitted holding run keeps its real gateway grant across maintenance and explicit revocation removes access", async (t) => {
   const f = await createEgressControlFixture({
     networkBoundary: async () => ({
@@ -285,26 +293,35 @@ test("an admitted holding run keeps its real gateway grant across maintenance an
   const { port, project, run, token } = f.ready;
   assert.equal(await connectPrivate(port, project, token), 403);
   await new Promise((resolve) => setTimeout(resolve, 1250));
-  const state = await f.system.ctx.db.get<{ status: string; revoked: number }>(
+  const state = await f.system.ctx.db.get<{
+    status: string;
+    revoked: number;
+  }>(
     "SELECT r.status,t.revoked FROM conversation_runs r JOIN inference_gateway_tokens t ON t.run_id=r.id WHERE r.id=?",
     [run],
   );
-  assert.deepEqual({ ...state }, { status: "running", revoked: 0 });
+  assert.deepEqual(
+    {
+      ...state,
+    },
+    {
+      status: "running",
+      revoked: 0,
+    },
+  );
   assert.equal(await connectPrivate(port, project, token), 403);
   assert.equal(await connectPrivate(port, randomUUID(), token), 407);
   await f.revoke();
   assert.equal(await connectPrivate(port, project, token), 407);
   assert.equal(
     (
-      await f.system.ctx.db.get<{ revoked: number }>(
-        "SELECT revoked FROM inference_gateway_tokens WHERE run_id=?",
-        [run],
-      )
+      await f.system.ctx.db.get<{
+        revoked: number;
+      }>("SELECT revoked FROM inference_gateway_tokens WHERE run_id=?", [run])
     )?.revoked,
     1,
   );
 });
-
 test("an admitted employee run loses real proxy access when project membership is removed", async (t) => {
   const f = await createEgressControlFixture({
     networkBoundary: async () => ({

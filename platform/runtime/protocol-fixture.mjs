@@ -5,6 +5,7 @@ const proxyProofs = new Set();
 const gatewayProofs = new Set();
 const toolRequests = new Set();
 const toolNames = new Map();
+const assetProtocolShapes = [];
 const proxyAuthorization =
   "Basic " +
   Buffer.from("synthetic_project:synthetic-scoped-fixture-key").toString(
@@ -15,10 +16,26 @@ function proxyResponse(target, authorization) {
     /^http:\/\/native-proxy-fixture\.invalid\/(codex|grok|claude|pi)$/.exec(
       target,
     );
-  if (!match || authorization !== proxyAuthorization)
-    return { status: 407, body: "synthetic proxy denied" };
+  const fixtureCredentials = Buffer.from(
+    (authorization ?? "").replace(/^Basic /, ""),
+    "base64",
+  ).toString();
+  if (
+    !match ||
+    (authorization !== proxyAuthorization &&
+      !/^acceptance-[a-f0-9-]+:(?:synthetic-scoped-fixture-key|wme_schedule_s{43})$/.test(
+        fixtureCredentials,
+      ))
+  )
+    return {
+      status: 407,
+      body: "synthetic proxy denied",
+    };
   proxyProofs.add(match[1]);
-  return { status: 200, body: "synthetic-proxy-ok" };
+  return {
+    status: 200,
+    body: "synthetic-proxy-ok",
+  };
 }
 const proxy = http.createServer((request, response) => {
   const result = proxyResponse(
@@ -33,7 +50,13 @@ const proxy = http.createServer((request, response) => {
 proxy.on("connect", (request, socket) => {
   if (
     request.url !== "native-proxy-fixture.invalid:80" ||
-    request.headers["proxy-authorization"] !== proxyAuthorization
+    (!/^acceptance-[a-f0-9-]+:(?:synthetic-scoped-fixture-key|wme_schedule_s{43})$/.test(
+      Buffer.from(
+        (request.headers["proxy-authorization"] ?? "").replace(/^Basic /, ""),
+        "base64",
+      ).toString(),
+    ) &&
+      request.headers["proxy-authorization"] !== proxyAuthorization)
   ) {
     socket.end(
       "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\n\r\n",
@@ -52,13 +75,64 @@ proxy.on("connect", (request, socket) => {
     );
   });
 });
-proxy.listen(4101, "0.0.0.0");
-function nativeTool(input, raw) {
+if (require.main === module) proxy.listen(4101, "0.0.0.0");
+function nativeTool(input, raw, gatewayPath, token) {
+  const asset = /^synthetic-asset-(codex|claude|grok|pi)$/.exec(
+    input.model,
+  )?.[1];
+  if (asset) {
+    const frames = input.input ?? input.messages ?? [];
+    const shape = {
+      model: input.model,
+      frames: frames.slice(-3).map((f) => ({
+        type: f.type,
+        role: f.role,
+        contentTypes: Array.isArray(f.content)
+          ? f.content.map((c) => c.type)
+          : typeof f.content,
+      })),
+    };
+    if (assetProtocolShapes.length < 24) {
+      assetProtocolShapes.push(shape);
+      module.exports.onAssetShape?.(shape);
+    }
+    // Claude may append system frames after a tool result. Match
+    // actual tool results after the latest Enterprise-authored turn, not simply
+    // the final frame; never report success from the issued command itself.
+    const latestPrompt = frames.findLastIndex(
+      (f) =>
+        f.role === "user" &&
+        JSON.stringify(f).includes(
+          "You are preparing the private draft of asset",
+        ),
+    );
+    const results = frames
+      .slice(latestPrompt + 1)
+      .filter(
+        (f) =>
+          f.type === "function_call_output" ||
+          f.role === "tool" ||
+          f.content?.some?.((c) => c.type === "tool_result"),
+      );
+    if (results.length)
+      return {
+        answer: JSON.stringify(results.at(-1)).includes("ASSET_FIXTURE_SAVED:")
+          ? "Asset draft saved."
+          : "Asset tool failed; draft was not confirmed.",
+      };
+  }
+  const hold = /^synthetic-hold-(a|b)$/.exec(input.model)?.[1];
+  const background = /^synthetic-background-(codex|grok|claude|pi)$/.exec(
+    input.model,
+  )?.[1];
   const harness = /^synthetic-proxy-(codex|grok|claude|pi)$/.exec(
     input.model,
   )?.[1];
-  if (!harness) return {};
-  if (toolRequests.has(harness))
+  if (!harness && !hold && !background && !asset) return {};
+  const keyId = background ? "background-" + background : harness;
+  if (background && toolRequests.has(keyId))
+    return { answer: "BACKGROUND_WORK_STARTED" };
+  if (!hold && !asset && toolRequests.has(harness))
     return {
       answer:
         proxyProofs.has(harness) &&
@@ -95,357 +169,440 @@ function nativeTool(input, raw) {
     throw new Error(
       "Synthetic shell tool command parameter unavailable: " + selected.name,
     );
-  const program = `const assert=require("node:assert/strict");for(const key of ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","NODE_USE_ENV_PROXY"])assert.ok(process.env[key],"Scoped proxy environment missing");Promise.all([fetch("http://native-proxy-fixture.invalid/${harness}").then(r=>r.text()),fetch("http://api:4100/native-gateway-proof/${harness}").then(r=>r.text())]).then(([proxy,gateway])=>{assert.equal(proxy,"synthetic-proxy-ok");assert.equal(gateway,"synthetic-gateway-ok");console.log("PROXY_TOOL_OK")}).catch(()=>{console.error("PROXY_TOOL_FAILED");process.exit(1)})`;
-  const command = "node -e '" + program + "'";
+  const program = hold
+    ? `const fs=require("node:fs"),{spawn}=require("node:child_process");const child=spawn(process.execPath,["-e",${JSON.stringify(`setInterval(()=>require("node:fs").writeFileSync("/workspace/descendant-${hold}",String(Date.now())),100)`)}],{detached:true,stdio:"ignore"});child.unref();setInterval(()=>fs.writeFileSync("/workspace/parent-${hold}",String(Date.now())),100)`
+    : `const assert=require("node:assert/strict");for(const key of ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","NODE_USE_ENV_PROXY"])assert.ok(process.env[key],"Scoped proxy environment missing");Promise.all([fetch("http://native-proxy-fixture.invalid/${harness}").then(r=>r.text()),fetch(${JSON.stringify("http://127.0.0.1:4101/inference/native-gateway-proof/" + harness)},{headers:{authorization:"Bearer "+decodeURIComponent(new URL(process.env.HTTP_PROXY).password)}}).then(r=>r.text()),fetch("http://127.0.0.1:4101/another-project",{headers:{authorization:"Bearer "+decodeURIComponent(new URL(process.env.HTTP_PROXY).password)}}).then(r=>r.status)]).then(([proxy,gateway,denied])=>{assert.equal(proxy,"synthetic-proxy-ok");assert.equal(gateway,"synthetic-gateway-ok");assert.equal(denied,403);console.log("PROXY_TOOL_OK")}).catch(()=>{console.error("PROXY_TOOL_FAILED");process.exit(1)})`;
+  const assetProgram = `const fs=require("node:fs"),{execFileSync}=require("node:child_process");const context=JSON.parse(execFileSync("wme-asset",["context"],{encoding:"utf8"}));const stem="asset-"+context.assetId;const countFile="/workspace/"+stem+"-turn.txt";const dataFile=stem+"-data.json";let sourceText="";for(const source of context.sources.filter(s=>s.path.startsWith("Source-"))){const rows=JSON.parse(fs.readFileSync("/workspace/"+source.path,"utf8"));require("node:assert/strict").equal(rows[0].label,"Authorized input");require("node:assert/strict").equal(rows[0].value,8);sourceText=rows[0].label+": "+rows[0].value;let denied=false;try{fs.appendFileSync("/workspace/"+source.path,"unexpected write")}catch(e){if(["EACCES","EROFS","EPERM"].includes(e.code))denied=true;else throw e}if(!denied)throw Error("Selected source was writable");}const n=Number(fs.existsSync(countFile)?fs.readFileSync(countFile,"utf8"):0)+1;const text=n===1?"First version for review":"Second draft kept private";fs.writeFileSync("/workspace/"+dataFile,JSON.stringify([{label:"Generated data",value:n}]));const document={version:1,blocks:[{type:"text",text},...(sourceText?[{type:"details",title:"Selected source",text:sourceText}]:[]),{type:"table",fileId:"workspace:"+dataFile,pointer:"",columns:[{label:"Item",key:"label"},{label:"Count",key:"value"}]}]};fs.writeFileSync("/session/asset-draft.json",JSON.stringify({expectedRevision:context.revision,document}));const result=JSON.parse(execFileSync("wme-asset",["save","/session/asset-draft.json"],{encoding:"utf8"}));if(!result.saved)throw Error("Save was not confirmed");fs.writeFileSync(countFile,String(n));console.log("ASSET_FIXTURE_SAVED:"+result.revision);`;
+  const command = asset
+    ? "node -e '" + assetProgram + "'"
+    : background
+      ? `wme-background start -- node -e 'setInterval(()=>require("node:fs").writeFileSync("/workspace/background-${background}",String(Date.now())),100)'`
+      : "node -e '" + program + "'";
   const args = {
     [key]: properties[key].type === "array" ? ["sh", "-c", command] : command,
   };
   if (properties.is_background) args.is_background = false;
   if (properties.description)
     args.description = "Synthetic scoped proxy tool check";
-  toolRequests.add(harness);
-  toolNames.set(harness, selected.name);
+  toolRequests.add(keyId);
+  toolNames.set(keyId, selected.name);
   return {
     tool: {
       name: selected.name,
       arguments: JSON.stringify(args),
-      id: "call_fixture_" + harness,
+      id:
+        "call_fixture_" +
+        (asset ? require("node:crypto").randomUUID() : (keyId ?? hold)),
     },
   };
 }
 const usage = {
   input_tokens: 8,
-  input_tokens_details: { cached_tokens: 0 },
+  input_tokens_details: {
+    cached_tokens: 0,
+  },
   output_tokens: 4,
-  output_tokens_details: { reasoning_tokens: 0 },
+  output_tokens_details: {
+    reasoning_tokens: 0,
+  },
   total_tokens: 12,
 };
-http
-  .createServer(async (request, response) => {
-    if (request.url === "/") {
-      response.end("gateway-fixture");
-      return;
-    }
-    const status = /^\/fixture-status\/(codex|grok|claude|pi)$/.exec(
-      request.url,
+const handler = async (request, response) => {
+  const gatewayPath =
+    /^\/enterprise\/api\/runtime\/inference\/[^/]+/.exec(request.url)?.[0] ??
+    "";
+  request.url = request.url.replace(
+    /^\/enterprise\/api\/runtime\/inference\/[^/]+/,
+    "",
+  );
+  if (request.url === "/") {
+    response.end("gateway-fixture");
+    return;
+  }
+  const status = /^\/fixture-status\/(codex|grok|claude|pi)$/.exec(request.url);
+  if (status) {
+    response.setHeader("content-type", "application/json");
+    response.end(
+      JSON.stringify({
+        toolRequested: toolRequests.has(status[1]),
+        tool: toolNames.get(status[1]),
+        proxyObserved: proxyProofs.has(status[1]),
+        gatewayObserved: gatewayProofs.has(status[1]),
+      }),
     );
-    if (status) {
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({
-          toolRequested: toolRequests.has(status[1]),
-          tool: toolNames.get(status[1]),
-          proxyObserved: proxyProofs.has(status[1]),
-          gatewayObserved: gatewayProofs.has(status[1]),
-        }),
-      );
-      return;
-    }
-    const proof = /^\/native-gateway-proof\/(codex|grok|claude|pi)$/.exec(
-      request.url,
-    );
-    if (proof) {
-      if (request.headers["proxy-authorization"]) {
-        response.writeHead(400);
-        response.end();
-        return;
-      }
-      gatewayProofs.add(proof[1]);
-      response.end("synthetic-gateway-ok");
-      return;
-    }
-    let raw = "";
-    try {
-      for await (const chunk of request) raw += chunk;
-    } catch {
-      // Native clients can cancel an in-flight fixture request during shutdown.
-      response.destroy();
-      return;
-    }
-    let input;
-    try {
-      input = raw ? JSON.parse(raw) : {};
-    } catch {
+    return;
+  }
+  const proof = /^\/native-gateway-proof\/(codex|grok|claude|pi)$/.exec(
+    request.url,
+  );
+  if (proof) {
+    if (request.headers["proxy-authorization"]) {
       response.writeHead(400);
       response.end();
       return;
     }
-    const json = (value) => {
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(value));
-    };
-    let sequence = 0;
-    const event = (type, data) =>
-      response.write(
-        `event: ${type}\ndata: ${JSON.stringify(type.startsWith("response.") ? { ...data, sequence_number: sequence++ } : data)}\n\n`,
-      );
-    let planned;
-    try {
-      planned =
-        request.url === "/v1/responses" ||
-        request.url === "/v1/chat/completions" ||
-        /^\/v1\/messages(?:\?|$)/.test(request.url)
-          ? nativeTool(input, raw)
-          : {};
-    } catch (error) {
-      console.error(error.message);
-      response.writeHead(500);
-      response.end("Synthetic tool schema unsupported");
-      return;
-    }
-    const text = planned.answer ?? answer;
-    if (request.url === "/v1/messages/count_tokens") {
-      json({ input_tokens: 8 });
-      return;
-    }
-    if (request.url === "/v1/models") {
-      json({
-        object: "list",
-        data: [
-          {
-            id: "synthetic-acceptance-model",
-            object: "model",
-            owned_by: "fixture",
-          },
-        ],
-      });
-      return;
-    }
-    if (request.url === "/v1/responses") {
-      const message = planned.tool
-        ? {
-            id: "fc_fixture",
-            type: "function_call",
-            status: "completed",
-            call_id: planned.tool.id,
-            name: planned.tool.name,
-            arguments: planned.tool.arguments,
-          }
-        : {
-            id: "msg_fixture",
-            type: "message",
-            status: "completed",
-            role: "assistant",
-            content: [{ type: "output_text", text, annotations: [] }],
-          };
-      const result = {
-        id: "resp_fixture",
-        object: "response",
-        created_at: Math.floor(Date.now() / 1000),
-        status: "completed",
-        model: input.model,
-        output: [message],
-        usage,
-        error: null,
-      };
-      if (!input.stream) {
-        json(result);
-        return;
-      }
-      response.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-      });
-      event("response.created", {
-        type: "response.created",
-        response: { ...result, status: "in_progress", output: [] },
-      });
-      event("response.output_item.added", {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: planned.tool
-          ? { ...message, status: "in_progress", arguments: "" }
-          : { ...message, status: "in_progress", content: [] },
-      });
-      if (planned.tool) {
-        event("response.function_call_arguments.delta", {
-          type: "response.function_call_arguments.delta",
-          item_id: message.id,
-          output_index: 0,
-          delta: planned.tool.arguments,
-        });
-        event("response.function_call_arguments.done", {
-          type: "response.function_call_arguments.done",
-          item_id: message.id,
-          output_index: 0,
+    gatewayProofs.add(proof[1]);
+    response.end("synthetic-gateway-ok");
+    return;
+  }
+  let raw = "";
+  try {
+    for await (const chunk of request) raw += chunk;
+  } catch {
+    // Native clients can cancel an in-flight fixture request during shutdown.
+    response.destroy();
+    return;
+  }
+  let input;
+  try {
+    input = raw ? JSON.parse(raw) : {};
+  } catch {
+    response.writeHead(400);
+    response.end();
+    return;
+  }
+  const json = (value) => {
+    response.setHeader("content-type", "application/json");
+    response.end(JSON.stringify(value));
+  };
+  let sequence = 0;
+  const event = (type, data) =>
+    response.write(
+      `event: ${type}\ndata: ${JSON.stringify(
+        type.startsWith("response.")
+          ? {
+              ...data,
+              sequence_number: sequence++,
+            }
+          : data,
+      )}\n\n`,
+    );
+  let planned;
+  try {
+    planned =
+      request.url === "/v1/responses" ||
+      request.url === "/v1/chat/completions" ||
+      /^\/v1\/messages(?:\?|$)/.test(request.url)
+        ? nativeTool(input, raw, gatewayPath, request.headers.authorization)
+        : {};
+  } catch (error) {
+    console.error(error.message);
+    response.writeHead(500);
+    response.end("Synthetic tool schema unsupported");
+    return;
+  }
+  const text = planned.answer ?? answer;
+  if (request.url === "/v1/messages/count_tokens") {
+    json({
+      input_tokens: 8,
+    });
+    return;
+  }
+  if (request.url === "/v1/models") {
+    json({
+      object: "list",
+      data: [
+        {
+          id: "synthetic-acceptance-model",
+          object: "model",
+          owned_by: "fixture",
+        },
+      ],
+    });
+    return;
+  }
+  if (request.url === "/v1/responses") {
+    const message = planned.tool
+      ? {
+          id: "fc_fixture",
+          type: "function_call",
+          status: "completed",
+          call_id: planned.tool.id,
           name: planned.tool.name,
           arguments: planned.tool.arguments,
-        });
-      } else {
-        event("response.content_part.added", {
-          type: "response.content_part.added",
-          item_id: message.id,
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: "", annotations: [] },
-        });
-        event("response.output_text.delta", {
-          type: "response.output_text.delta",
-          item_id: message.id,
-          output_index: 0,
-          content_index: 0,
-          delta: text,
-        });
-        event("response.output_text.done", {
-          type: "response.output_text.done",
-          item_id: message.id,
-          output_index: 0,
-          content_index: 0,
-          text,
-        });
-        event("response.content_part.done", {
-          type: "response.content_part.done",
-          item_id: message.id,
-          output_index: 0,
-          content_index: 0,
-          part: message.content[0],
-        });
-      }
-      event("response.output_item.done", {
-        type: "response.output_item.done",
+        }
+      : {
+          id: "msg_fixture",
+          type: "message",
+          status: "completed",
+          role: "assistant",
+          content: [
+            {
+              type: "output_text",
+              text,
+              annotations: [],
+            },
+          ],
+        };
+    const result = {
+      id: "resp_fixture",
+      object: "response",
+      created_at: Math.floor(Date.now() / 1000),
+      status: "completed",
+      model: input.model,
+      output: [message],
+      usage,
+      error: null,
+    };
+    if (!input.stream) {
+      json(result);
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    });
+    event("response.created", {
+      type: "response.created",
+      response: {
+        ...result,
+        status: "in_progress",
+        output: [],
+      },
+    });
+    event("response.output_item.added", {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: planned.tool
+        ? {
+            ...message,
+            status: "in_progress",
+            arguments: "",
+          }
+        : {
+            ...message,
+            status: "in_progress",
+            content: [],
+          },
+    });
+    if (planned.tool) {
+      event("response.function_call_arguments.delta", {
+        type: "response.function_call_arguments.delta",
+        item_id: message.id,
         output_index: 0,
-        item: message,
+        delta: planned.tool.arguments,
       });
-      event("response.completed", {
-        type: "response.completed",
-        response: result,
+      event("response.function_call_arguments.done", {
+        type: "response.function_call_arguments.done",
+        item_id: message.id,
+        output_index: 0,
+        name: planned.tool.name,
+        arguments: planned.tool.arguments,
       });
-      response.end();
-      return;
-    }
-    if (
-      request.url === "/v1/messages" ||
-      request.url?.startsWith("/v1/messages?")
-    ) {
-      const message = {
-        id: "msg_fixture",
-        type: "message",
-        role: "assistant",
-        model: input.model,
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: { input_tokens: 8, output_tokens: 0 },
-      };
-      if (!input.stream) {
-        json({
-          ...message,
-          content: planned.tool
-            ? [
-                {
-                  type: "tool_use",
-                  id: planned.tool.id,
-                  name: planned.tool.name,
-                  input: JSON.parse(planned.tool.arguments),
-                },
-              ]
-            : [{ type: "text", text }],
-          stop_reason: planned.tool ? "tool_use" : "end_turn",
-          usage,
-        });
-        return;
-      }
-      response.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-      });
-      event("message_start", { type: "message_start", message });
-      event("content_block_start", {
-        type: "content_block_start",
-        index: 0,
-        content_block: planned.tool
-          ? {
-              type: "tool_use",
-              id: planned.tool.id,
-              name: planned.tool.name,
-              input: {},
-            }
-          : { type: "text", text: "" },
-      });
-      event("content_block_delta", {
-        type: "content_block_delta",
-        index: 0,
-        delta: planned.tool
-          ? { type: "input_json_delta", partial_json: planned.tool.arguments }
-          : { type: "text_delta", text },
-      });
-      event("content_block_stop", { type: "content_block_stop", index: 0 });
-      event("message_delta", {
-        type: "message_delta",
-        delta: {
-          stop_reason: planned.tool ? "tool_use" : "end_turn",
-          stop_sequence: null,
+    } else {
+      event("response.content_part.added", {
+        type: "response.content_part.added",
+        item_id: message.id,
+        output_index: 0,
+        content_index: 0,
+        part: {
+          type: "output_text",
+          text: "",
+          annotations: [],
         },
-        usage: { output_tokens: 4 },
       });
-      event("message_stop", { type: "message_stop" });
-      response.end();
+      event("response.output_text.delta", {
+        type: "response.output_text.delta",
+        item_id: message.id,
+        output_index: 0,
+        content_index: 0,
+        delta: text,
+      });
+      event("response.output_text.done", {
+        type: "response.output_text.done",
+        item_id: message.id,
+        output_index: 0,
+        content_index: 0,
+        text,
+      });
+      event("response.content_part.done", {
+        type: "response.content_part.done",
+        item_id: message.id,
+        output_index: 0,
+        content_index: 0,
+        part: message.content[0],
+      });
+    }
+    event("response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: message,
+    });
+    event("response.completed", {
+      type: "response.completed",
+      response: result,
+    });
+    response.end();
+    return;
+  }
+  if (
+    request.url === "/v1/messages" ||
+    request.url?.startsWith("/v1/messages?")
+  ) {
+    const message = {
+      id: "msg_fixture",
+      type: "message",
+      role: "assistant",
+      model: input.model,
+      content: [],
+      stop_reason: null,
+      stop_sequence: null,
+      usage: {
+        input_tokens: 8,
+        output_tokens: 0,
+      },
+    };
+    if (!input.stream) {
+      json({
+        ...message,
+        content: planned.tool
+          ? [
+              {
+                type: "tool_use",
+                id: planned.tool.id,
+                name: planned.tool.name,
+                input: JSON.parse(planned.tool.arguments),
+              },
+            ]
+          : [
+              {
+                type: "text",
+                text,
+              },
+            ],
+        stop_reason: planned.tool ? "tool_use" : "end_turn",
+        usage,
+      });
       return;
     }
-    if (request.url === "/v1/chat/completions") {
-      const base = {
-        id: "chatcmpl_fixture",
-        object: "chat.completion.chunk",
-        created: Math.floor(Date.now() / 1000),
-        model: input.model,
-      };
-      response.writeHead(200, {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache",
-      });
-      response.write(
-        "data: " +
-          JSON.stringify({
-            ...base,
-            choices: [
-              {
-                index: 0,
-                delta: planned.tool
-                  ? {
-                      role: "assistant",
-                      tool_calls: [
-                        {
-                          index: 0,
-                          id: planned.tool.id,
-                          type: "function",
-                          function: {
-                            name: planned.tool.name,
-                            arguments: planned.tool.arguments,
-                          },
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    });
+    event("message_start", {
+      type: "message_start",
+      message,
+    });
+    event("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: planned.tool
+        ? {
+            type: "tool_use",
+            id: planned.tool.id,
+            name: planned.tool.name,
+            input: {},
+          }
+        : {
+            type: "text",
+            text: "",
+          },
+    });
+    event("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: planned.tool
+        ? {
+            type: "input_json_delta",
+            partial_json: planned.tool.arguments,
+          }
+        : {
+            type: "text_delta",
+            text,
+          },
+    });
+    event("content_block_stop", {
+      type: "content_block_stop",
+      index: 0,
+    });
+    event("message_delta", {
+      type: "message_delta",
+      delta: {
+        stop_reason: planned.tool ? "tool_use" : "end_turn",
+        stop_sequence: null,
+      },
+      usage: {
+        output_tokens: 4,
+      },
+    });
+    event("message_stop", {
+      type: "message_stop",
+    });
+    response.end();
+    return;
+  }
+  if (request.url === "/v1/chat/completions") {
+    const base = {
+      id: "chatcmpl_fixture",
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: input.model,
+    };
+    response.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+    });
+    response.write(
+      "data: " +
+        JSON.stringify({
+          ...base,
+          choices: [
+            {
+              index: 0,
+              delta: planned.tool
+                ? {
+                    role: "assistant",
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: planned.tool.id,
+                        type: "function",
+                        function: {
+                          name: planned.tool.name,
+                          arguments: planned.tool.arguments,
                         },
-                      ],
-                    }
-                  : { role: "assistant", content: text },
-                finish_reason: null,
-              },
-            ],
-          }) +
-          "\n\n",
-      );
-      response.write(
-        "data: " +
-          JSON.stringify({
-            ...base,
-            choices: [
-              {
-                index: 0,
-                delta: {},
-                finish_reason: planned.tool ? "tool_calls" : "stop",
-              },
-            ],
-            usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
-          }) +
-          "\n\n",
-      );
-      response.end("data: [DONE]\n\n");
-      return;
-    }
-    console.error(
-      "Unexpected synthetic fixture route:",
-      request.method,
-      request.url,
+                      },
+                    ],
+                  }
+                : {
+                    role: "assistant",
+                    content: text,
+                  },
+              finish_reason: null,
+            },
+          ],
+        }) +
+        "\n\n",
     );
-    response.writeHead(404);
-    response.end("Synthetic fixture route unavailable");
-  })
-  .listen(4100, "0.0.0.0");
+    response.write(
+      "data: " +
+        JSON.stringify({
+          ...base,
+          choices: [
+            {
+              index: 0,
+              delta: {},
+              finish_reason: planned.tool ? "tool_calls" : "stop",
+            },
+          ],
+          usage: {
+            prompt_tokens: 8,
+            completion_tokens: 4,
+            total_tokens: 12,
+          },
+        }) +
+        "\n\n",
+    );
+    response.end("data: [DONE]\n\n");
+    return;
+  }
+  console.error(
+    "Unexpected synthetic fixture route:",
+    request.method,
+    request.url,
+  );
+  response.writeHead(404);
+  response.end("Synthetic fixture route unavailable");
+};
+module.exports = { handler, assetProtocolShapes };
+if (require.main === module) http.createServer(handler).listen(4100, "0.0.0.0");

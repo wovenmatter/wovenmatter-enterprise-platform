@@ -2,6 +2,9 @@ FROM golang:1.26-bookworm AS build
 ARG CLI_PROXY_REVISION=acdace936fa7df2905500c7f5e0a97d683138dea
 WORKDIR /source
 RUN git init && git remote add origin https://github.com/router-for-me/CLIProxyAPI.git && git fetch --depth=1 origin ${CLI_PROXY_REVISION} && git checkout --detach FETCH_HEAD && test "$(git rev-parse HEAD)" = "${CLI_PROXY_REVISION}"
+COPY platform/deploy/inference-patch /patch
+RUN git apply --check /patch/upstream.patch && git apply /patch/upstream.patch && cp -R /patch/sdk /patch/internal /source/
+RUN go test ./sdk/auth ./internal/auth/claude ./internal/auth/xai ./internal/api/handlers/management -run EnterpriseRemote -count=1
 RUN CGO_ENABLED=1 GOOS=linux go build -buildvcs=false -trimpath -ldflags="-s -w -X main.Commit=${CLI_PROXY_REVISION}" -o /out/CLIProxyAPI ./cmd/server
 
 FROM debian:bookworm-slim

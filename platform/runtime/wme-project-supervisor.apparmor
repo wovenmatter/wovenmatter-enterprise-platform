@@ -1,0 +1,31 @@
+abi <abi/4.0>,
+#include <tunables/global>
+# Trusted project supervisor only. Never attach this profile to agent tools.
+profile wme-project-supervisor flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  file,
+  network inet stream,
+  network inet6 stream,
+  network unix stream,
+  network netlink raw,
+  network inet dgram,
+  network inet6 dgram,
+  capability sys_admin,
+  capability net_admin,
+  capability sys_chroot,
+  capability setuid,
+  capability setgid,
+  capability chown,
+  capability dac_override,
+  mount,
+  umount,
+  pivot_root,
+  userns,
+  signal (send,receive),
+  change_profile -> &wme-platform-agent,
+  deny /proc/sys/** wklx,
+  deny /proc/sysrq-trigger rwklx,
+  deny /sys/** wklx,
+  deny /run/docker.sock rwklx,
+  deny /var/run/docker.sock rwklx,
+}

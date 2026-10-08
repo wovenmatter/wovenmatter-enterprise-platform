@@ -47,11 +47,11 @@ async function fixture() {
     now = new Date().toISOString();
   await db.batch([
     {
-      sql: "INSERT INTO organizations VALUES (?,?,?)",
+      sql: "INSERT INTO organizations(id,name,created_at) VALUES (?,?,?)",
       params: [orgA, "A", now],
     },
     {
-      sql: "INSERT INTO organizations VALUES (?,?,?)",
+      sql: "INSERT INTO organizations(id,name,created_at) VALUES (?,?,?)",
       params: [orgB, "B", now],
     },
   ]);
@@ -66,15 +66,7 @@ async function fixture() {
     const id = randomUUID();
     await db.run(
       "INSERT INTO users (id,org_id,email,name,role,enabled,password_hash,created_at) VALUES (?,?,?,?,?,1,?,?)",
-      [
-      id,
-      orgId,
-      `${key}@test.example`,
-      key,
-      role,
-      hash,
-      now,
-      ],
+      [id, orgId, `${key}@test.example`, key, role, hash, now],
     );
     const session = newSession(id);
     await db.run(session.statement.sql, session.statement.params);
@@ -114,7 +106,7 @@ test("worker SQLite migrations are idempotent and batch conflicts roll back atom
     await assert.rejects(
       f.db.batch([
         {
-          sql: "INSERT INTO organizations VALUES (?,?,?)",
+          sql: "INSERT INTO organizations(id,name,created_at) VALUES (?,?,?)",
           params: [id, "rollback", new Date().toISOString()],
         },
         {
@@ -145,7 +137,7 @@ test("browser mutations require exact Origin and CSRF; owner-only organization c
     ]) {
       const r = await f.app.inject({
         method: "POST",
-        url: "/api/organizations",
+        url: "/enterprise/api/organizations",
         headers,
         payload: { name: "N" },
       });
@@ -153,14 +145,14 @@ test("browser mutations require exact Origin and CSRF; owner-only organization c
     }
     const denied = await f.app.inject({
       method: "POST",
-      url: "/api/organizations",
+      url: "/enterprise/api/organizations",
       headers: f.admin.headers,
       payload: { name: "N" },
     });
     assert.equal(denied.statusCode, 403);
     const ok = await f.app.inject({
       method: "POST",
-      url: "/api/organizations",
+      url: "/enterprise/api/organizations",
       headers: f.owner.headers,
       payload: { name: "N" },
     });
@@ -174,14 +166,14 @@ test("login uses opaque hashed session identities and logout revokes the session
   try {
     const wrong = await f.app.inject({
       method: "POST",
-      url: "/api/login",
+      url: "/enterprise/api/login",
       headers: { origin: f.origin },
       payload: { email: "admin@test.example", password: "incorrect" },
     });
     assert.equal(wrong.statusCode, 401);
     const ok = await f.app.inject({
       method: "POST",
-      url: "/api/login",
+      url: "/enterprise/api/login",
       headers: { origin: f.origin },
       payload: { email: "ADMIN@test.example", password },
     });
@@ -206,14 +198,23 @@ test("login uses opaque hashed session identities and logout revokes the session
     ]);
     assert.equal(await f.ctx.isSessionActive(sessionId!.id, f.admin.id), true);
     assert.equal(
-      (await f.app.inject({ method: "POST", url: "/api/logout", headers }))
-        .statusCode,
+      (
+        await f.app.inject({
+          method: "POST",
+          url: "/enterprise/api/logout",
+          headers,
+        })
+      ).statusCode,
       200,
     );
     assert.equal(await f.ctx.isSessionActive(sessionId!.id, f.admin.id), false);
     assert.equal(
-      (await f.app.inject({ url: "/api/session", headers: { cookie } })).json()
-        .user,
+      (
+        await f.app.inject({
+          url: "/enterprise/api/session",
+          headers: { cookie },
+        })
+      ).json().user,
       null,
     );
   } finally {
@@ -225,7 +226,7 @@ test("personal profile updates only own name and theme", async () => {
   try {
     const update = await f.app.inject({
       method: "PATCH",
-      url: "/api/me",
+      url: "/enterprise/api/me",
       headers: f.admin.headers,
       payload: {
         id: f.owner.id,
@@ -240,9 +241,7 @@ test("personal profile updates only own name and theme", async () => {
     assert.equal(update.json().theme, "cognac");
     assert.equal(update.json().email, "admin@test.example");
     assert.equal(update.json().role, "admin");
-    const row = await f.db.get("SELECT * FROM users WHERE id=?", [
-      f.admin.id,
-    ]);
+    const row = await f.db.get("SELECT * FROM users WHERE id=?", [f.admin.id]);
     assert.equal(row.name, "Admin Renamed");
     assert.equal(row.theme, "cognac");
     assert.equal(row.email, "admin@test.example");
@@ -256,7 +255,7 @@ test("password reset tokens are hashed, expiring, single use, and revoke session
   try {
     const request = await f.app.inject({
       method: "POST",
-      url: "/api/password-reset/request",
+      url: "/enterprise/api/password-reset/request",
       headers: { origin: f.origin },
       payload: { email: "ADMIN@test.example" },
     });
@@ -277,7 +276,7 @@ test("password reset tokens are hashed, expiring, single use, and revoke session
     assert.equal(
       (
         await f.app.inject({
-          url: `/api/jobs/${job.id}`,
+          url: `/enterprise/api/jobs/${job.id}`,
           headers: f.owner.headers,
         })
       ).statusCode,
@@ -290,7 +289,7 @@ test("password reset tokens are hashed, expiring, single use, and revoke session
     assert.ok(oldSessionId);
     const reset = await f.app.inject({
       method: "POST",
-      url: "/api/password-reset/confirm",
+      url: "/enterprise/api/password-reset/confirm",
       headers: { origin: f.origin },
       payload: { token, password: "new correct test password 47" },
     });
@@ -303,7 +302,7 @@ test("password reset tokens are hashed, expiring, single use, and revoke session
       (
         await f.app.inject({
           method: "POST",
-          url: "/api/password-reset/confirm",
+          url: "/enterprise/api/password-reset/confirm",
           headers: { origin: f.origin },
           payload: { token, password: "another correct test password 47" },
         })
@@ -311,21 +310,18 @@ test("password reset tokens are hashed, expiring, single use, and revoke session
       400,
     );
     const expiredToken = "expired-reset-token";
-    await f.db.run(
-      "INSERT INTO password_reset_tokens VALUES (?,?,?,?,?,?,?)",
-      [
-        randomUUID(),
-        f.admin.id,
-        hashToken(expiredToken),
-        new Date(Date.now() - 1000).toISOString(),
-        null,
-        new Date(Date.now() - 3600_000).toISOString(),
-        null,
-      ],
-    );
+    await f.db.run("INSERT INTO password_reset_tokens VALUES (?,?,?,?,?,?,?)", [
+      randomUUID(),
+      f.admin.id,
+      hashToken(expiredToken),
+      new Date(Date.now() - 1000).toISOString(),
+      null,
+      new Date(Date.now() - 3600_000).toISOString(),
+      null,
+    ]);
     const expired = await f.app.inject({
       method: "POST",
-      url: "/api/password-reset/confirm",
+      url: "/enterprise/api/password-reset/confirm",
       headers: { origin: f.origin },
       payload: {
         token: expiredToken,
@@ -344,7 +340,7 @@ test("successful password reset invalidates every outstanding reset token for th
     for (let index = 0; index < 2; index++) {
       const request = await f.app.inject({
         method: "POST",
-        url: "/api/password-reset/request",
+        url: "/enterprise/api/password-reset/request",
         headers: { origin: f.origin },
         payload: { email: "admin@test.example" },
       });
@@ -355,19 +351,20 @@ test("successful password reset invalidates every outstanding reset token for th
       const payload = JSON.parse(jobs[index].payload);
       tokens.push(new URL(payload.resetUrl).searchParams.get("token")!);
     }
-    const oldSessions = await f.db.all("SELECT id FROM sessions WHERE user_id=?", [
-      f.admin.id,
-    ]);
+    const oldSessions = await f.db.all(
+      "SELECT id FROM sessions WHERE user_id=?",
+      [f.admin.id],
+    );
     const first = await f.app.inject({
       method: "POST",
-      url: "/api/password-reset/confirm",
+      url: "/enterprise/api/password-reset/confirm",
       headers: { origin: f.origin },
       payload: { token: tokens[0], password: "fresh correct test password 47" },
     });
     assert.equal(first.statusCode, 200);
     const second = await f.app.inject({
       method: "POST",
-      url: "/api/password-reset/confirm",
+      url: "/enterprise/api/password-reset/confirm",
       headers: { origin: f.origin },
       payload: {
         token: tokens[1],
@@ -397,7 +394,7 @@ test("organization admins can queue member password resets only inside their sco
   try {
     const reset = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/members/${f.member.id}/password-reset`,
+      url: `/enterprise/api/organizations/${f.orgA}/members/${f.member.id}/password-reset`,
       headers: f.admin.headers,
       payload: {},
     });
@@ -420,21 +417,21 @@ test("organization admins can queue member password resets only inside their sco
     assert.equal(tokenRow.request_ip_hash, hashToken("127.0.0.1"));
     const crossOrg = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/members/${f.other.id}/password-reset`,
+      url: `/enterprise/api/organizations/${f.orgA}/members/${f.other.id}/password-reset`,
       headers: f.admin.headers,
       payload: {},
     });
     assert.equal(crossOrg.statusCode, 404);
     const memberDenied = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/members/${f.admin.id}/password-reset`,
+      url: `/enterprise/api/organizations/${f.orgA}/members/${f.admin.id}/password-reset`,
       headers: f.member.headers,
       payload: {},
     });
     assert.equal(memberDenied.statusCode, 403);
     const ownerDenied = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/members/${f.owner.id}/password-reset`,
+      url: `/enterprise/api/organizations/${f.orgA}/members/${f.owner.id}/password-reset`,
       headers: f.admin.headers,
       payload: {},
     });
@@ -442,11 +439,18 @@ test("organization admins can queue member password resets only inside their sco
     const pendingId = randomUUID();
     await f.db.run(
       "INSERT INTO users (id,org_id,email,name,role,enabled,created_at) VALUES (?,?,?,?,?,0,?)",
-      [pendingId, f.orgA, "pending@test.example", "Pending", "member", new Date().toISOString()],
+      [
+        pendingId,
+        f.orgA,
+        "pending@test.example",
+        "Pending",
+        "member",
+        new Date().toISOString(),
+      ],
     );
     const pending = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/members/${pendingId}/password-reset`,
+      url: `/enterprise/api/organizations/${f.orgA}/members/${pendingId}/password-reset`,
       headers: f.admin.headers,
       payload: {},
     });
@@ -460,7 +464,7 @@ test("invitation activation is single use, grants requested role, and outbox doe
   try {
     const r = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/invitations`,
+      url: `/enterprise/api/organizations/${f.orgA}/invitations`,
       headers: f.admin.headers,
       payload: { email: "new@test.example", name: "New", role: "member" },
     });
@@ -474,7 +478,7 @@ test("invitation activation is single use, grants requested role, and outbox doe
       token,
     );
     const view = await f.app.inject({
-      url: `/api/jobs/${job!.id}`,
+      url: `/enterprise/api/jobs/${job!.id}`,
       headers: f.admin.headers,
     });
     assert.equal(view.body.includes(token), false);
@@ -486,7 +490,7 @@ test("invitation activation is single use, grants requested role, and outbox doe
     );
     const activated = await f.app.inject({
       method: "POST",
-      url: "/api/activate",
+      url: "/enterprise/api/activate",
       headers: { origin: f.origin },
       payload: { token, password },
     });
@@ -497,7 +501,7 @@ test("invitation activation is single use, grants requested role, and outbox doe
       (
         await f.app.inject({
           method: "POST",
-          url: "/api/activate",
+          url: "/enterprise/api/activate",
           headers: { origin: f.origin },
           payload: { token, password },
         })
@@ -514,7 +518,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     assert.equal(
       (
         await f.app.inject({
-          url: `/api/organizations/${f.orgB}`,
+          url: `/enterprise/api/organizations/${f.orgB}`,
           headers: f.admin.headers,
         })
       ).statusCode,
@@ -522,7 +526,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     );
     const created = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/projects`,
+      url: `/enterprise/api/organizations/${f.orgA}/projects`,
       headers: f.admin.headers,
       payload: { name: "Case" },
     });
@@ -532,7 +536,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     assert.equal(
       (
         await f.app.inject({
-          url: `/api/projects/${p.id}`,
+          url: `/enterprise/api/projects/${p.id}`,
           headers: f.member.headers,
         })
       ).statusCode,
@@ -542,7 +546,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
       (
         await f.app.inject({
           method: "POST",
-          url: `/api/projects/${p.id}/members`,
+          url: `/enterprise/api/projects/${p.id}/members`,
           headers: f.admin.headers,
           payload: { userId: f.other.id, access: "write" },
         })
@@ -551,12 +555,15 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     );
     await f.app.inject({
       method: "POST",
-      url: `/api/projects/${p.id}/members`,
+      url: `/enterprise/api/projects/${p.id}/members`,
       headers: f.admin.headers,
       payload: { userId: f.member.id, access: "write" },
     });
     const user = (
-      await f.app.inject({ url: "/api/session", headers: f.member.headers })
+      await f.app.inject({
+        url: "/enterprise/api/session",
+        headers: f.member.headers,
+      })
     ).json().user;
     assert.equal(
       (await f.ctx.requireProject(user, p.id, "write")).access,
@@ -564,7 +571,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     );
     await f.app.inject({
       method: "PATCH",
-      url: `/api/projects/${p.id}`,
+      url: `/enterprise/api/projects/${p.id}`,
       headers: f.admin.headers,
       payload: { access: "read" },
     });
@@ -574,7 +581,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     );
     await f.app.inject({
       method: "DELETE",
-      url: `/api/projects/${p.id}/members/${f.member.id}`,
+      url: `/enterprise/api/projects/${p.id}/members/${f.member.id}`,
       headers: f.admin.headers,
     });
     await assert.rejects(
@@ -585,36 +592,39 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     await f.close();
   }
 });
-test("disabled members lose sessions and membership; no owner invitation escalation", async () => {
+test("removed organization membership loses its access without disabling the platform account; no owner invitation escalation", async () => {
   const f = await fixture();
   try {
     const escalated = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/invitations`,
+      url: `/enterprise/api/organizations/${f.orgA}/invitations`,
       headers: f.admin.headers,
       payload: { email: "intruder@test.example", role: "owner" },
     });
     assert.equal(escalated.statusCode, 400);
     const removed = await f.app.inject({
       method: "DELETE",
-      url: `/api/organizations/${f.orgA}/members/${f.member.id}`,
+      url: `/enterprise/api/organizations/${f.orgA}/members/${f.member.id}`,
       headers: f.admin.headers,
     });
     assert.equal(removed.statusCode, 200);
     assert.equal(
       (
-        await f.app.inject({ url: "/api/session", headers: f.member.headers })
-      ).json().user,
-      null,
+        await f.app.inject({
+          url: "/enterprise/api/session",
+          headers: f.member.headers,
+        })
+      ).json().user.id,
+      f.member.id,
     );
     assert.equal(
       (
         await f.app.inject({
-          url: `/api/organizations/${f.orgA}`,
+          url: `/enterprise/api/organizations/${f.orgA}`,
           headers: f.member.headers,
         })
       ).statusCode,
-      401,
+      404,
     );
   } finally {
     await f.close();
@@ -679,7 +689,7 @@ test("project provision completion transitions ready only after handler succeeds
   try {
     const created = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/projects`,
+      url: `/enterprise/api/organizations/${f.orgA}/projects`,
       headers: f.admin.headers,
       payload: { name: "New runtime" },
     });
@@ -716,18 +726,21 @@ test("HTTPS sessions use host-only cookies and reject an insecure sibling-domain
     f.ctx.config.publicOrigin = "https://portal.test";
     const response = await f.app.inject({
       method: "POST",
-      url: "/api/login",
+      url: "/enterprise/api/login",
       headers: { origin: "https://portal.test" },
       payload: { email: "admin@test.example", password },
     });
     assert.equal(response.statusCode, 200);
-    assert.match(String(response.headers["set-cookie"]), /^__Host-wme_session=/);
+    assert.match(
+      String(response.headers["set-cookie"]),
+      /^__Host-wme_session=/,
+    );
     assert.match(String(response.headers["set-cookie"]), /; Secure/);
     const secureCookie = String(response.headers["set-cookie"]).split(";")[0];
     assert.equal(
       (
         await f.app.inject({
-          url: "/api/session",
+          url: "/enterprise/api/session",
           headers: { cookie: f.admin.headers.cookie },
         })
       ).json().user,
@@ -736,7 +749,7 @@ test("HTTPS sessions use host-only cookies and reject an insecure sibling-domain
     assert.equal(
       (
         await f.app.inject({
-          url: "/api/session",
+          url: "/enterprise/api/session",
           headers: { cookie: secureCookie },
         })
       ).json().user.id,
@@ -752,7 +765,7 @@ test("removing or reinviting a pending account invalidates the previous activati
     const invite = async () =>
       f.app.inject({
         method: "POST",
-        url: `/api/organizations/${f.orgA}/invitations`,
+        url: `/enterprise/api/organizations/${f.orgA}/invitations`,
         headers: f.admin.headers,
         payload: { email: "pending@test.example", name: "Pending" },
       });
@@ -763,7 +776,7 @@ test("removing or reinviting a pending account invalidates the previous activati
       (
         await f.app.inject({
           method: "POST",
-          url: "/api/activate",
+          url: "/enterprise/api/activate",
           headers: { origin: f.origin },
           payload: { token: firstToken, password },
         })
@@ -772,7 +785,7 @@ test("removing or reinviting a pending account invalidates the previous activati
     );
     await f.app.inject({
       method: "DELETE",
-      url: `/api/organizations/${f.orgA}/members/${second.user.id}`,
+      url: `/enterprise/api/organizations/${f.orgA}/members/${second.user.id}`,
       headers: f.admin.headers,
     });
     const secondToken = new URL(second.activationUrl).searchParams.get("token");
@@ -780,7 +793,7 @@ test("removing or reinviting a pending account invalidates the previous activati
       (
         await f.app.inject({
           method: "POST",
-          url: "/api/activate",
+          url: "/enterprise/api/activate",
           headers: { origin: f.origin },
           payload: { token: secondToken, password },
         })
@@ -796,9 +809,12 @@ test("audit details drop nested credential fields and bound oversized text", asy
   const f = await fixture();
   try {
     const user = (
-      await f.app.inject({ url: "/api/session", headers: f.admin.headers })
+      await f.app.inject({
+        url: "/enterprise/api/session",
+        headers: f.admin.headers,
+      })
     ).json().user;
-    await f.ctx.audit(user, "test.audit", f.orgA, {
+    await f.ctx.audit(user, f.orgA, "test.audit", f.orgA, {
       metadata: {
         token: "never-persist",
         nested: [{ password: "never-persist", ok: "retained" }],
@@ -852,7 +868,7 @@ test("failed project setup reports needs_attention and only admins may retry saf
   try {
     const response = await f.app.inject({
       method: "POST",
-      url: `/api/organizations/${f.orgA}/projects`,
+      url: `/enterprise/api/organizations/${f.orgA}/projects`,
       headers: f.admin.headers,
       payload: { name: "Provision failure" },
     });
@@ -868,7 +884,7 @@ test("failed project setup reports needs_attention and only admins may retry saf
       (
         await f.app.inject({
           method: "POST",
-          url: `/api/projects/${project.id}/retry`,
+          url: `/enterprise/api/projects/${project.id}/retry`,
           headers: f.other.headers,
         })
       ).statusCode,
@@ -876,7 +892,7 @@ test("failed project setup reports needs_attention and only admins may retry saf
     );
     const retry = await f.app.inject({
       method: "POST",
-      url: `/api/projects/${project.id}/retry`,
+      url: `/enterprise/api/projects/${project.id}/retry`,
       headers: f.admin.headers,
     });
     assert.equal(retry.statusCode, 202);
@@ -902,7 +918,7 @@ test("failed project setup reports needs_attention and only admins may retry saf
       (
         await f.app.inject({
           method: "POST",
-          url: `/api/jobs/${mailId}/retry`,
+          url: `/enterprise/api/jobs/${mailId}/retry`,
           headers: f.admin.headers,
         })
       ).statusCode,
@@ -938,23 +954,36 @@ for (const administrative of [false, true]) {
   test(`concurrent ${administrative ? "admin" : "public"} password reset requests respect the per-user cap`, async () => {
     const f = await fixture();
     try {
-      const responses = await Promise.all(Array.from({ length: 12 }, (_, i) =>
-        f.app.inject({
-          method: "POST",
-          url: administrative
-            ? `/api/organizations/${f.orgA}/members/${f.member.id}/password-reset`
-            : "/api/password-reset/request",
-          remoteAddress: `192.0.2.${i + 1}`,
-          headers: administrative ? f.admin.headers : { origin: f.origin },
-          payload: administrative ? {} : { email: "member@test.example" },
-        }),
-      ));
-      const tokens = await f.db.all("SELECT id FROM password_reset_tokens WHERE user_id=?", [f.member.id]);
-      const jobs = await f.db.all("SELECT id FROM jobs WHERE type='password_reset.deliver'");
+      const responses = await Promise.all(
+        Array.from({ length: 12 }, (_, i) =>
+          f.app.inject({
+            method: "POST",
+            url: administrative
+              ? `/enterprise/api/organizations/${f.orgA}/members/${f.member.id}/password-reset`
+              : "/enterprise/api/password-reset/request",
+            remoteAddress: `192.0.2.${i + 1}`,
+            headers: administrative ? f.admin.headers : { origin: f.origin },
+            payload: administrative ? {} : { email: "member@test.example" },
+          }),
+        ),
+      );
+      const tokens = await f.db.all(
+        "SELECT id FROM password_reset_tokens WHERE user_id=?",
+        [f.member.id],
+      );
+      const jobs = await f.db.all(
+        "SELECT id FROM jobs WHERE type='password_reset.deliver'",
+      );
       assert.equal(tokens.length, 5);
       assert.equal(jobs.length, 5);
-      assert.equal(responses.filter((r) => r.statusCode === 202).length, administrative ? 5 : 12);
-      assert.equal(responses.filter((r) => r.statusCode === 429).length, administrative ? 7 : 0);
+      assert.equal(
+        responses.filter((r) => r.statusCode === 202).length,
+        administrative ? 5 : 12,
+      );
+      assert.equal(
+        responses.filter((r) => r.statusCode === 429).length,
+        administrative ? 7 : 0,
+      );
     } finally {
       await f.close();
     }

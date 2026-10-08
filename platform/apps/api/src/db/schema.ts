@@ -30,4 +30,21 @@ CREATE INDEX password_reset_tokens_user ON password_reset_tokens(user_id,created
 CREATE INDEX password_reset_tokens_expiry ON password_reset_tokens(expires_at);
 `,
   );
+  await db.migrate(
+    "platform-memberships-v1",
+    `
+CREATE TABLE organization_memberships(org_id TEXT NOT NULL REFERENCES organizations(id),user_id TEXT NOT NULL REFERENCES users(id),role TEXT NOT NULL CHECK(role IN ('admin','member')),library_access TEXT NOT NULL DEFAULT 'read' CHECK(library_access IN ('read','write')),created_at TEXT NOT NULL,PRIMARY KEY(org_id,user_id));
+INSERT INTO organization_memberships SELECT org_id,id,role,CASE WHEN role='admin' THEN 'write' ELSE 'read' END,created_at FROM users WHERE org_id IS NOT NULL;
+CREATE INDEX memberships_user ON organization_memberships(user_id);
+-- Compatibility with baseline development fixtures. Legacy home/role columns are
+-- retained for safe upgrades but never used as an authorization boundary.
+CREATE TRIGGER legacy_user_membership AFTER INSERT ON users WHEN NEW.org_id IS NOT NULL BEGIN
+ INSERT INTO organization_memberships VALUES(NEW.org_id,NEW.id,NEW.role,CASE WHEN NEW.role='admin' THEN 'write' ELSE 'read' END,NEW.created_at);
+END;
+ALTER TABLE organizations ADD COLUMN default_host_id TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE projects ADD COLUMN host_id TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE projects ADD COLUMN deleted_at TEXT;
+ALTER TABLE projects ADD COLUMN purge_after TEXT;
+`,
+  );
 }

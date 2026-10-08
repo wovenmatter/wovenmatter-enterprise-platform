@@ -1,0 +1,291 @@
+--- a/internal/api/handlers/management/handler.go
++++ b/internal/api/handlers/management/handler.go
+@@ -38,6 +38,7 @@
+ 
+ // Handler aggregates config reference, persistence path and helpers.
+ type Handler struct {
++	enterpriseRemote        *remoteSessions
+ 	cfg                     *config.Config
+ 	configFilePath          string
+ 	mu                      sync.Mutex
+--- a/internal/api/server_management_v8.go
++++ b/internal/api/server_management_v8.go
+@@ -53,6 +53,11 @@
+ 	v8.PATCH("/credentials/fields", s.mgmt.PatchAuthFileFields)
+ 	v8.POST("/credentials/refresh", s.mgmt.RefreshAuthFiles)
+ 	v8.POST("/oauth/import", s.mgmt.ImportOAuthV8)
++	v8.POST("/oauth/remote", s.mgmt.StartEnterpriseRemote)
++	v8.GET("/oauth/remote/:id", s.mgmt.GetEnterpriseRemote)
++	v8.POST("/oauth/remote/:id/code", s.mgmt.SubmitEnterpriseRemote)
++	v8.POST("/oauth/remote/:id/commit", s.mgmt.CommitEnterpriseRemote)
++	v8.DELETE("/oauth/remote/:id", s.mgmt.CancelEnterpriseRemote)
+ 	v8.GET("/oauth/auth-url", s.mgmt.StartOAuthV8)
+ 	v8.GET("/oauth/status", s.mgmt.GetAuthStatus)
+ 	v8.DELETE("/oauth/session", s.mgmt.CancelAuthSession)
+--- a/internal/auth/claude/anthropic_auth.go
++++ b/internal/auth/claude/anthropic_auth.go
+@@ -295,11 +295,11 @@
+ func (o *ClaudeAuth) inspectOAuthAccount(ctx context.Context, accessToken string) *OAuthProfile {
+ 	profile, errProfile := o.FetchOAuthProfile(ctx, accessToken)
+ 	if errProfile != nil {
+-		log.Warnf("fetch Claude OAuth profile after token exchange: %v", errProfile)
++		log.Warn("Claude OAuth profile lookup failed")
+ 		profile = nil
+ 	}
+ 	if _, errRoles := o.FetchOAuthRoles(ctx, accessToken); errRoles != nil {
+-		log.Warnf("fetch Claude OAuth claude_cli roles after token exchange: %v", errRoles)
++		log.Warn("Claude OAuth roles lookup failed")
+ 	}
+ 	return profile
+ }
+@@ -317,6 +317,12 @@
+ //   - string: The state parameter for verification
+ //   - error: An error if PKCE codes are missing or URL generation fails
+ func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string, string, error) {
++	return o.generateAuthURLWithRedirect(state, pkceCodes, RedirectURI)
++}
++func (o *ClaudeAuth) GenerateRemoteAuthURL(state string, pkceCodes *PKCECodes) (string, string, error) {
++	return o.generateAuthURLWithRedirect(state, pkceCodes, "https://platform.claude.com/oauth/code/callback")
++}
++func (o *ClaudeAuth) generateAuthURLWithRedirect(state string, pkceCodes *PKCECodes, redirect string) (string, string, error) {
+ 	if pkceCodes == nil {
+ 		return "", "", fmt.Errorf("PKCE codes are required")
+ 	}
+@@ -325,7 +331,7 @@
+ 		"code":                  {"true"},
+ 		"client_id":             {ClientID},
+ 		"response_type":         {"code"},
+-		"redirect_uri":          {RedirectURI},
++		"redirect_uri":          {redirect},
+ 		"scope":                 {ClaudeOAuthScope},
+ 		"code_challenge":        {pkceCodes.CodeChallenge},
+ 		"code_challenge_method": {"S256"},
+@@ -368,6 +374,14 @@
+ //   - *ClaudeAuthBundle: The complete authentication bundle with tokens
+ //   - error: An error if token exchange fails
+ func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state string, pkceCodes *PKCECodes) (*ClaudeAuthBundle, error) {
++	return o.exchangeCodeWithRedirect(ctx, code, state, pkceCodes, RedirectURI)
++}
++func (o *ClaudeAuth) ExchangeRemoteCodeForTokens(ctx context.Context, code, state string, pkceCodes *PKCECodes) (*ClaudeAuthBundle, error) {
++	o.httpClient.Timeout = 30 * time.Second
++	o.httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
++	return o.exchangeCodeWithRedirect(ctx, code, state, pkceCodes, "https://platform.claude.com/oauth/code/callback")
++}
++func (o *ClaudeAuth) exchangeCodeWithRedirect(ctx context.Context, code, state string, pkceCodes *PKCECodes, redirect string) (*ClaudeAuthBundle, error) {
+ 	if pkceCodes == nil {
+ 		return nil, fmt.Errorf("PKCE codes are required for token exchange")
+ 	}
+@@ -379,7 +393,7 @@
+ 	reqBody := authorizationCodeExchangeRequest{
+ 		GrantType:    "authorization_code",
+ 		Code:         newCode,
+-		RedirectURI:  RedirectURI,
++		RedirectURI:  redirect,
+ 		ClientID:     ClientID,
+ 		CodeVerifier: pkceCodes.CodeVerifier,
+ 		State:        state,
+--- a/sdk/auth/codex_device.go
++++ b/sdk/auth/codex_device.go
+@@ -41,6 +41,7 @@
+ 	UserCode     string          `json:"user_code"`
+ 	UserCodeAlt  string          `json:"usercode"`
+ 	Interval     json.RawMessage `json:"interval"`
++	ExpiresIn    int             `json:"expires_in"`
+ }
+ 
+ type codexDeviceTokenRequest struct {
+@@ -144,7 +145,7 @@
+ 	}
+ 	defer func() { _ = resp.Body.Close() }()
+ 
+-	respBody, err := io.ReadAll(resp.Body)
++	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read codex device code response: %w", err)
+ 	}
+@@ -172,6 +173,11 @@
+ 	deadline := time.Now().Add(codexDeviceTimeout)
+ 
+ 	for {
++		select {
++		case <-ctx.Done():
++			return nil, ctx.Err()
++		case <-time.After(interval):
++		}
+ 		if time.Now().After(deadline) {
+ 			return nil, fmt.Errorf("codex device authentication timed out after 15 minutes")
+ 		}
+@@ -196,7 +202,7 @@
+ 			return nil, fmt.Errorf("failed to poll codex device token: %w", err)
+ 		}
+ 
+-		respBody, readErr := io.ReadAll(resp.Body)
++		respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 		_ = resp.Body.Close()
+ 		if readErr != nil {
+ 			return nil, fmt.Errorf("failed to read codex device poll response: %w", readErr)
+@@ -209,13 +215,28 @@
+ 				return nil, fmt.Errorf("failed to decode codex device token response: %w", err)
+ 			}
+ 			return &parsed, nil
+-		case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound:
+-			select {
+-			case <-ctx.Done():
+-				return nil, ctx.Err()
+-			case <-time.After(interval):
++		case resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusBadRequest:
++			var failure struct {
++				Error string `json:"error"`
++			}
++			_ = json.Unmarshal(respBody, &failure)
++			if failure.Error == "access_denied" {
++				return nil, ErrRemoteDenied
++			}
++			if failure.Error == "expired_token" {
++				return nil, ErrRemoteExpired
++			}
++			if failure.Error == "slow_down" || resp.StatusCode == http.StatusTooManyRequests {
++				interval += 5 * time.Second
++				if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 && seconds <= 86400 && time.Duration(seconds)*time.Second > interval {
++					interval = time.Duration(seconds) * time.Second
++				}
+ 				continue
+ 			}
++			if failure.Error == "authorization_pending" || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
++				continue
++			}
++			return nil, fmt.Errorf("device authorization failed")
+ 		default:
+ 			trimmed := strings.TrimSpace(string(respBody))
+ 			if trimmed == "" {
+--- a/internal/auth/codex/openai_auth.go
++++ b/internal/auth/codex/openai_auth.go
+@@ -57,7 +57,7 @@
+ 	}
+ 	sdkCfg.ProxyURL = effectiveProxyURL
+ 	return &CodexAuth{
+-		httpClient: util.SetProxy(&sdkCfg, &http.Client{}),
++		httpClient: util.SetProxy(&sdkCfg, &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}),
+ 	}
+ }
+ 
+@@ -129,7 +129,7 @@
+ 		_ = resp.Body.Close()
+ 	}()
+ 
+-	body, err := io.ReadAll(resp.Body)
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("failed to read token response: %w", err)
+ 	}
+@@ -236,7 +236,7 @@
+ 		}
+ 	}()
+ 
+-	body, errRead := io.ReadAll(resp.Body)
++	body, errRead := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if errRead != nil {
+ 		return nil, fmt.Errorf("failed to read refresh response: %w", errRead)
+ 	}
+--- a/internal/auth/xai/xai.go
++++ b/internal/auth/xai/xai.go
+@@ -4,6 +4,7 @@
+ 	"context"
+ 	"encoding/base64"
+ 	"encoding/json"
++	"errors"
+ 	"fmt"
+ 	"io"
+ 	"net/http"
+@@ -24,6 +25,8 @@
+ }
+ 
+ var xaiRefreshGroup singleflight.Group
++var ErrDeviceExpired = errors.New("device expired")
++var ErrDeviceDenied = errors.New("device denied")
+ 
+ // NewXAIAuth creates an xAI OAuth helper using config proxy settings.
+ func NewXAIAuth(cfg *config.Config) *XAIAuth {
+@@ -41,7 +44,7 @@
+ 		}
+ 	}
+ 	sdkCfg.ProxyURL = effectiveProxyURL
+-	return &XAIAuth{httpClient: util.SetProxy(&sdkCfg, &http.Client{Timeout: httpClientTimeout})}
++	return &XAIAuth{httpClient: util.SetProxy(&sdkCfg, &http.Client{Timeout: httpClientTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})}
+ }
+ 
+ // ValidateOAuthEndpoint validates an endpoint returned by xAI discovery.
+@@ -83,7 +86,7 @@
+ 			log.Errorf("xai discovery: close response body error: %v", errClose)
+ 		}
+ 	}()
+-	body, err := io.ReadAll(resp.Body)
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("xai discovery: read response: %w", err)
+ 	}
+@@ -151,7 +154,7 @@
+ 		}
+ 	}()
+ 
+-	body, err := io.ReadAll(resp.Body)
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("xai device code: read response: %w", err)
+ 	}
+@@ -232,9 +235,9 @@
+ 		}
+ 	}
+ 
+-	// Poll immediately once, then wait between subsequent attempts.
+-	firstAttempt := true
+-	timer := time.NewTimer(0)
++	// Respect the provider interval before the first and subsequent attempts.
++
++	timer := time.NewTimer(interval)
+ 	defer timer.Stop()
+ 
+ 	for {
+@@ -242,10 +245,9 @@
+ 		case <-ctx.Done():
+ 			return nil, fmt.Errorf("xai device code: context cancelled: %w", ctx.Err())
+ 		case <-timer.C:
+-			if !firstAttempt && time.Now().After(deadline) {
+-				return nil, fmt.Errorf("xai device code expired")
++			if time.Now().After(deadline) {
++				return nil, ErrDeviceExpired
+ 			}
+-			firstAttempt = false
+ 
+ 			token, pollErr, nextInterval, shouldContinue := a.exchangeDeviceCode(ctx, tokenEndpoint, deviceCode.DeviceCode, interval)
+ 			if token != nil {
+@@ -286,7 +288,7 @@
+ 		}
+ 	}()
+ 
+-	body, err := io.ReadAll(resp.Body)
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("xai device token: read response: %w", err), interval, false
+ 	}
+@@ -316,9 +318,9 @@
+ 			nextInterval := interval + step
+ 			return nil, nil, nextInterval, true
+ 		case "expired_token":
+-			return nil, fmt.Errorf("xai device code expired"), interval, false
++			return nil, ErrDeviceExpired, interval, false
+ 		case "access_denied":
+-			return nil, fmt.Errorf("xai device authorization denied"), interval, false
++			return nil, ErrDeviceDenied, interval, false
+ 		default:
+ 			desc := strings.TrimSpace(payload.ErrorDescription)
+ 			if desc != "" {
+@@ -398,7 +400,7 @@
+ 			log.Errorf("xai token request: close response body error: %v", errClose)
+ 		}
+ 	}()
+-	body, err := io.ReadAll(resp.Body)
++	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+ 	if err != nil {
+ 		return nil, fmt.Errorf("xai token response: read body: %w", err)
+ 	}

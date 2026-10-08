@@ -1,0 +1,7 @@
+[Unit]
+Description=Encrypted off-host workspace backup (configure destination first)
+[Service]
+Type=oneshot
+UMask=0077
+EnvironmentFile=/etc/wme/backup.env
+ExecStart=/usr/bin/node /opt/wme/platform/scripts/backup.mjs backup ${WME_BACKUP_CONFIG} daily

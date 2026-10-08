@@ -20,7 +20,7 @@ COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/wovenmatter-enterprise/
 COPY third-party /usr/share/doc/wovenmatter-enterprise/third-party
 USER 10001:10001
 EXPOSE 4100
-HEALTHCHECK --interval=15s --timeout=3s --start-period=15s CMD node -e "const q=require('http').get({hostname:'127.0.0.1',port:4100,path:'/healthz',headers:{host:new URL(process.env.WME_PUBLIC_ORIGIN||'http://localhost:4100').host}},r=>{r.resume();process.exit(r.statusCode===200?0:1)});q.on('error',()=>process.exit(1))"
+HEALTHCHECK --interval=15s --timeout=3s --start-period=15s CMD node -e "const q=require('http').get({hostname:'127.0.0.1',port:4100,path:'/enterprise/healthz',headers:{host:new URL(process.env.WME_PUBLIC_ORIGIN||'http://localhost:4100').host}},r=>{r.resume();process.exit(r.statusCode===200?0:1)});q.on('error',()=>process.exit(1))"
 CMD ["node", "platform/dist/apps/api/src/main.js"]
 
 # Trusted supervisor alone receives Docker authority. Never use this target for the API.
