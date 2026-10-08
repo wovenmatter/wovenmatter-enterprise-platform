@@ -41,6 +41,8 @@ const placed = hosts
   ? placedRuntime(
       hosts,
       async (id) => {
+        if (id.startsWith("asset-"))
+          return system!.assetAgents.spec(id.slice(6));
         const row = await system?.ctx.db.get<any>(
           "SELECT id,org_id,host_id FROM projects WHERE id=?",
           [id],
@@ -56,7 +58,10 @@ const placed = hosts
         (
           await system?.ctx.db.get<{
             project_id: string;
-          }>("SELECT project_id FROM conversation_runs WHERE id=?", [id])
+          }>(
+            "SELECT COALESCE(project_id,'asset-'||asset_id) AS project_id FROM conversation_runs WHERE id=?",
+            [id],
+          )
         )?.project_id,
     )
   : undefined;

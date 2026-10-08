@@ -18,6 +18,7 @@ export interface ProxyRegistry {
 export interface RunScope {
   orgId: string;
   projectId: string;
+  assetId?: string;
   userId: string;
   runId: string;
   model: string;
@@ -66,7 +67,8 @@ interface OAuthRow {
 }
 interface GatewayRow {
   org_id: string;
-  project_id: string;
+  project_id: string | null;
+  asset_id: string | null;
   user_id: string;
   run_id: string;
   expires_at: string;
@@ -173,6 +175,16 @@ export class InferenceService {
       ALTER TABLE inference_oauth_sessions ADD COLUMN protocol INTEGER NOT NULL DEFAULT 0;
       UPDATE inference_oauth_sessions SET status='interrupted' WHERE status='pending';
     `,
+    );
+    await this.ctx.db.migrate(
+      "asset-inference-v1",
+      `
+CREATE TABLE inference_gateway_next(token_hash TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),project_id TEXT REFERENCES projects(id),user_id TEXT NOT NULL REFERENCES users(id),run_id TEXT NOT NULL,conversation_id TEXT,model TEXT NOT NULL,harness TEXT NOT NULL,expires_at TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0,asset_id TEXT,CHECK(project_id IS NOT NULL OR asset_id IS NOT NULL));
+INSERT INTO inference_gateway_next SELECT *,NULL FROM inference_gateway_tokens;
+DROP TABLE inference_gateway_tokens;
+ALTER TABLE inference_gateway_next RENAME TO inference_gateway_tokens;
+CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
+`,
     );
     const pending = await this.ctx.db.all<OAuthRow>(
       "SELECT * FROM inference_oauth_sessions WHERE protocol=1 AND status IN ('starting','pending','cancelling')",
@@ -1379,17 +1391,20 @@ export class InferenceService {
     await this.proxy.endpoint(scope.orgId);
     const token = `wme_run_${randomBytes(32).toString("base64url")}`;
     await this.ctx.db.run(
-      "INSERT INTO inference_gateway_tokens (token_hash,org_id,project_id,user_id,run_id,conversation_id,model,harness,expires_at,revoked) VALUES (?,?,?,?,?,?,?,?,?,0)",
+      "INSERT INTO inference_gateway_tokens (token_hash,org_id,project_id,user_id,run_id,conversation_id,model,harness,expires_at,revoked,asset_id) VALUES (?,?,?,?,?,?,?,?,?,0,?)",
       [
         hash(token),
         scope.orgId,
-        scope.projectId,
+        scope.assetId && scope.projectId === "asset-" + scope.assetId
+          ? null
+          : scope.projectId,
         scope.userId,
         scope.runId,
         scope.conversationId ?? null,
         scope.model,
         scope.harness,
         new Date(Date.now() + 24 * 3600_000).toISOString(),
+        scope.assetId ?? null,
       ],
     );
     const origin = (
@@ -1408,12 +1423,13 @@ export class InferenceService {
         "A valid run credential is required.",
       );
     const row = await this.ctx.db.get<GatewayRow>(
-      "SELECT * FROM inference_gateway_tokens WHERE token_hash=? AND project_id=? AND revoked=0 AND expires_at>?",
+      "SELECT * FROM inference_gateway_tokens WHERE token_hash=? AND COALESCE(project_id,'asset-'||asset_id)=? AND revoked=0 AND expires_at>?",
       [hash(token), projectId, new Date().toISOString()],
     );
     const scope = row && {
       orgId: row.org_id,
-      projectId: row.project_id,
+      projectId: row.project_id ?? "asset-" + row.asset_id,
+      assetId: row.asset_id ?? undefined,
       userId: row.user_id,
       runId: row.run_id,
       model: row.model,

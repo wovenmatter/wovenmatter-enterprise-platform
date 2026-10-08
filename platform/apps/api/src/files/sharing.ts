@@ -310,7 +310,7 @@ export async function resolveScheduledMounts(
   }
   return mounts;
 }
-async function ensureMountpoint(
+export async function ensureMountpoint(
   root: string,
   name: string,
   kind: "file" | "folder",

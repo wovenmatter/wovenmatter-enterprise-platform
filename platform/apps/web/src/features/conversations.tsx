@@ -39,12 +39,12 @@ import {
   Modal,
   Status,
 } from "../components/ui";
-type Model = {
+export type Model = {
   id: string;
   name: string;
   provider: string;
 };
-type Conversation = {
+export type Conversation = {
   id: string;
   title: string;
   mode: "read" | "write";
@@ -208,7 +208,7 @@ export function ConversationsPage({ project }: { project: Project }) {
     </div>
   );
 }
-function ConversationForm({
+export function ConversationForm({
   project,
   models,
   modelsError,
@@ -216,7 +216,7 @@ function ConversationForm({
   onSave,
   onCancel,
 }: {
-  project: Project;
+  project?: Project;
   models: Model[];
   modelsError?: string;
   conversation?: Conversation;
@@ -259,7 +259,7 @@ function ConversationForm({
           defaultValue={conversation?.mode ?? "read"}
         >
           <option value="read">Read-only</option>
-          {project.access === "write" || conversation?.mode === "write" ? (
+          {project?.access === "write" || conversation?.mode === "write" ? (
             <option value="write">Full access</option>
           ) : null}
         </select>
@@ -295,20 +295,24 @@ function ConversationForm({
     </AsyncForm>
   );
 }
-function Thread({
+export function Thread({
   id,
   project,
   models,
   refresh,
   onDeleted,
+  asset,
 }: {
   id: string;
-  project: Project;
+  project?: Project;
   models: Model[];
   refresh: () => void;
   onDeleted: () => void;
+  asset?: { onSaved: () => void };
 }) {
   const { user, orgBase } = useWorkspace();
+  const assetSaved = useRef(asset?.onSaved);
+  assetSaved.current = asset?.onSaved;
   const detail = useResource<Conversation>(
     `/enterprise/api/conversations/${id}`,
   );
@@ -349,7 +353,7 @@ function Thread({
   const follow = useRef(true);
   const active =
     runs.data?.items.filter((r) => activeStatuses.has(r.status)) ?? [];
-  const creator = detail.data?.createdBy === user.id;
+  const creator = !!asset || detail.data?.createdBy === user.id;
   useEffect(() => {
     if (detail.data && initialCursor === undefined)
       setInitialCursor(detail.data.lastEventId ?? 0);
@@ -397,6 +401,7 @@ function Thread({
         );
       if (event.type === "tool.completed") setTool("");
       if (event.type === "members.changed") detail.reload();
+      if (event.type === "asset.saved") assetSaved.current?.();
       if (event.type === "run.queued" || event.type === "run.started")
         detail.reload();
       if (
@@ -431,12 +436,14 @@ function Thread({
       "message.steering",
       "message.delivery",
       "members.changed",
+      "asset.saved",
       "access.revoked",
     ])
       source.addEventListener(name, update);
     source.onopen = () => {
       setStreamState("Connected");
       reload();
+      assetSaved.current?.();
     };
     source.onerror = () => setStreamState("Reconnecting…");
     return () => {
@@ -523,13 +530,15 @@ function Thread({
           </small>
         </div>
         <div className="row-actions">
-          <button
-            className="icon-button"
-            aria-label="Conversation members"
-            onClick={() => setMembers(true)}
-          >
-            <Users size={18} />
-          </button>
+          {!asset ? (
+            <button
+              className="icon-button"
+              aria-label="Conversation members"
+              onClick={() => setMembers(true)}
+            >
+              <Users size={18} />
+            </button>
+          ) : null}
           {creator ? (
             <>
               <button
@@ -540,13 +549,15 @@ function Thread({
               >
                 <Settings size={18} />
               </button>
-              <button
-                className="icon-button danger"
-                aria-label="Delete conversation"
-                onClick={() => setDeleting(true)}
-              >
-                <Trash2 size={17} />
-              </button>
+              {!asset ? (
+                <button
+                  className="icon-button danger"
+                  aria-label="Delete conversation"
+                  onClick={() => setDeleting(true)}
+                >
+                  <Trash2 size={17} />
+                </button>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -576,7 +587,9 @@ function Thread({
           <Loading />
         ) : !combined.length ? (
           <Empty title="What would you like to work on?">
-            Your agent can use the files available in this project.
+            {asset
+              ? "Describe what you want to create or change. The agent saves a private draft for your review."
+              : "Your agent can use the files available in this project."}
           </Empty>
         ) : (
           combined.map((m) => (

@@ -21,7 +21,10 @@ export default defineConfig({
     ...(process.platform === "darwin" ? { channel: "chrome" } : {}),
     baseURL: origin,
     storageState: `${evidence}/auth.json`,
-    trace: "retain-on-failure",
+    // Trace snapshot injection attempts scripts in intentionally script-free
+    // report frames. Keep the boundary and all console assertions; retain
+    // screenshots and request/console evidence without that instrumentation.
+    trace: "off",
     screenshot: "only-on-failure",
     viewport: { width: 1536, height: 1024 },
   },

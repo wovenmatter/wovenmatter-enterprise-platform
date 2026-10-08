@@ -19,7 +19,7 @@ import {
   type Asset,
 } from "./reports.js";
 
-type StoredAsset = Asset & {
+export type StoredAsset = Asset & {
   description: string;
   draft_document: string;
   draft_revision: number;
@@ -64,7 +64,7 @@ export async function migrateAssets(ctx: AppContext) {
   `,
   );
 }
-async function get(ctx: AppContext, id: string) {
+export async function getAsset(ctx: AppContext, id: string) {
   const a = await ctx.db.get<StoredAsset>(
     `SELECT r.* FROM reports r WHERE r.id=? AND r.deleted_at IS NULL AND ${activeProject}`,
     [id],
@@ -72,7 +72,7 @@ async function get(ctx: AppContext, id: string) {
   if (!a) throw new AppError(404, "asset_not_found", "Asset not found.");
   return a;
 }
-async function manage(
+export async function manageAsset(
   ctx: AppContext,
   a: StoredAsset,
   user: User,
@@ -92,7 +92,7 @@ async function access(ctx: AppContext, a: StoredAsset, user?: User) {
         "asset_not_published",
         "This asset is not published.",
       );
-    return manage(ctx, a, user);
+    return manageAsset(ctx, a, user);
   }
   if (a.visibility === "public") return;
   if (!user)
@@ -162,25 +162,19 @@ async function content(
 function revision(a: StoredAsset, body: Record<string, unknown>) {
   if (body.expectedRevision !== a.draft_revision) throw conflict();
 }
-export async function registerReports(app: FastifyInstance, ctx: AppContext) {
+export async function registerReports(
+  app: FastifyInstance,
+  ctx: AppContext,
+  hooks: { removed?: (id: string) => Promise<void> } = {},
+) {
   await migrateAssets(ctx);
-  const locks = new Map<string, Promise<unknown>>();
-  async function locked<T>(id: string, fn: () => Promise<T>) {
-    const task = (locks.get(id) ?? Promise.resolve()).catch(() => {}).then(fn);
-    locks.set(id, task);
-    try {
-      return await task;
-    } finally {
-      if (locks.get(id) === task) locks.delete(id);
-    }
-  }
   async function dto(a: StoredAsset, user: User, detail = false) {
     let canManage = false,
       canEdit = false;
     try {
-      await manage(ctx, a, user);
+      await manageAsset(ctx, a, user);
       canManage = true;
-      await manage(ctx, a, user, true);
+      await manageAsset(ctx, a, user, true);
       canEdit = true;
     } catch (error) {
       if (!(error instanceof AppError)) throw error;
@@ -333,7 +327,7 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
     "/enterprise/api/assets/:assetId",
     async (req) => {
       const user = await ctx.requireUser(req),
-        a = await get(ctx, req.params.assetId);
+        a = await getAsset(ctx, req.params.assetId);
       await access(ctx, a, user);
       return dto(a, user, true);
     },
@@ -341,16 +335,16 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
   app.patch<{ Params: { assetId: string } }>(
     "/enterprise/api/assets/:assetId",
     (req) =>
-      locked(req.params.assetId, async () => {
+      withAssetLock(ctx, req.params.assetId, async () => {
         const user = await ctx.requireUser(req),
-          a = await get(ctx, req.params.assetId),
+          a = await getAsset(ctx, req.params.assetId),
           b = objectBody(req.body);
         const editing =
           b.name !== undefined ||
           b.description !== undefined ||
           b.document !== undefined ||
           b.sourceFileId !== undefined;
-        await manage(ctx, a, user, editing);
+        await manageAsset(ctx, a, user, editing);
         if (editing) revision(a, b);
         const updated = {
           ...a,
@@ -369,7 +363,7 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
             ...updated,
             document: updated.draft_document,
           });
-        await manage(ctx, a, user, editing);
+        await manageAsset(ctx, a, user, editing);
         const result = await ctx.db.run(
           "UPDATE reports SET name=?,description=?,visibility=?,draft_document=?,draft_revision=?,updated_at=? WHERE id=? AND draft_revision=? AND deleted_at IS NULL",
           [
@@ -393,17 +387,17 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
   app.post<{ Params: { assetId: string } }>(
     "/enterprise/api/assets/:assetId/publish",
     (req) =>
-      locked(req.params.assetId, async () => {
+      withAssetLock(ctx, req.params.assetId, async () => {
         const user = await ctx.requireUser(req),
-          a = await get(ctx, req.params.assetId),
+          a = await getAsset(ctx, req.params.assetId),
           b = objectBody(req.body);
-        await manage(ctx, a, user, true);
+        await manageAsset(ctx, a, user, true);
         revision(a, b);
         const v = visibility(b.visibility, a.project_id, a.visibility),
           time = new Date().toISOString(),
           number = a.published_version + 1;
         await renderReport(ctx, { ...a, document: a.draft_document });
-        await manage(ctx, a, user, true);
+        await manageAsset(ctx, a, user, true);
         await ctx.db.batch([
           {
             sql: "UPDATE reports SET document=draft_document,visibility=?,published_version=?,draft_revision=draft_revision+1,updated_at=? WHERE id=? AND draft_revision=? AND deleted_at IS NULL",
@@ -426,17 +420,17 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
           version: number,
           visibility: v,
         });
-        return dto(await get(ctx, a.id), user, true);
+        return dto(await getAsset(ctx, a.id), user, true);
       }),
   );
   app.post<{ Params: { assetId: string; number: string } }>(
     "/enterprise/api/assets/:assetId/versions/:number/restore",
     (req) =>
-      locked(req.params.assetId, async () => {
+      withAssetLock(ctx, req.params.assetId, async () => {
         const user = await ctx.requireUser(req),
-          a = await get(ctx, req.params.assetId),
+          a = await getAsset(ctx, req.params.assetId),
           b = objectBody(req.body);
-        await manage(ctx, a, user, true);
+        await manageAsset(ctx, a, user, true);
         revision(a, b);
         const v = await ctx.db.get<Version>(
           "SELECT * FROM asset_versions WHERE asset_id=? AND number=?",
@@ -445,7 +439,7 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
         if (!v)
           throw new AppError(404, "version_not_found", "Version not found.");
         await renderReport(ctx, { ...a, name: v.name, document: v.document });
-        await manage(ctx, a, user, true);
+        await manageAsset(ctx, a, user, true);
         const result = await ctx.db.run(
           "UPDATE reports SET name=?,description=?,draft_document=?,draft_revision=draft_revision+1,updated_at=? WHERE id=? AND draft_revision=? AND deleted_at IS NULL",
           [
@@ -458,20 +452,21 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
           ],
         );
         if (!result.changes) throw conflict();
-        return dto(await get(ctx, a.id), user, true);
+        return dto(await getAsset(ctx, a.id), user, true);
       }),
   );
   app.delete<{ Params: { assetId: string } }>(
     "/enterprise/api/assets/:assetId",
     (req) =>
-      locked(req.params.assetId, async () => {
+      withAssetLock(ctx, req.params.assetId, async () => {
         const user = await ctx.requireUser(req),
-          a = await get(ctx, req.params.assetId);
-        await manage(ctx, a, user);
+          a = await getAsset(ctx, req.params.assetId);
+        await manageAsset(ctx, a, user);
         await ctx.db.run("UPDATE reports SET deleted_at=? WHERE id=?", [
           new Date().toISOString(),
           a.id,
         ]);
+        await hooks.removed?.(a.id);
         return { ok: true };
       }),
   );
@@ -481,14 +476,18 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
     safe,
     async (req, reply) => {
       const user = await ctx.requireUser(req),
-        a = await get(ctx, req.params.assetId);
-      await manage(ctx, a, user);
-      const html = await renderReport(ctx, {
-        ...a,
-        document: a.draft_document,
-      });
-      await manage(ctx, await get(ctx, a.id), user);
-      headers(reply);
+        a = await getAsset(ctx, req.params.assetId);
+      await manageAsset(ctx, a, user);
+      const html = await renderReport(
+        ctx,
+        {
+          ...a,
+          document: a.draft_document,
+        },
+        user,
+      );
+      await manageAsset(ctx, await getAsset(ctx, a.id), user);
+      headers(reply, true);
       return reply.type("text/html; charset=utf-8").send(html);
     },
   );
@@ -496,7 +495,7 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
     id: string,
     req: Parameters<AppContext["requireUser"]>[0],
   ) {
-    const a = await get(ctx, id);
+    const a = await getAsset(ctx, id);
     if (!a.published_version)
       throw new AppError(
         404,
@@ -549,4 +548,21 @@ export async function registerReports(app: FastifyInstance, ctx: AppContext) {
       return reply.type(imageType(bytes)).send(bytes);
     },
   );
+}
+
+const assetLocks = new WeakMap<AppContext, Map<string, Promise<unknown>>>();
+export async function withAssetLock<T>(
+  ctx: AppContext,
+  id: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const locks = assetLocks.get(ctx) ?? new Map<string, Promise<unknown>>();
+  assetLocks.set(ctx, locks);
+  const task = (locks.get(id) ?? Promise.resolve()).catch(() => {}).then(fn);
+  locks.set(id, task);
+  try {
+    return await task;
+  } finally {
+    if (locks.get(id) === task) locks.delete(id);
+  }
 }

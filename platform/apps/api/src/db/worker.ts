@@ -38,14 +38,24 @@ parentPort!.on("message", ({ id, method, args }) => {
         throw e;
       }
     } else if (method === "migrate") {
-      db.exec("BEGIN IMMEDIATE");
+      // SQLite records deferred DROP-parent violations even when an identical
+      // replacement is installed. A trusted schema rebuild needs FK checks off
+      // OUTSIDE its transaction, followed by an explicit complete validation.
+      // This synchronous worker cannot process another request in this window.
+      const rebuild = args[2]?.rebuild === true;
+      let inTransaction = false;
       try {
+        if (rebuild) db.exec("PRAGMA foreign_keys=OFF");
+        db.exec("BEGIN IMMEDIATE");
+        inTransaction = true;
         if (
           !db
             .prepare("SELECT name FROM schema_migrations WHERE name=?")
             .get(args[0])
         ) {
           db.exec(args[1]);
+          if (rebuild && db.prepare("PRAGMA foreign_key_check").all().length)
+            throw new Error("Schema rebuild violates foreign keys");
           run("INSERT INTO schema_migrations VALUES (?,?)", [
             args[0],
             new Date().toISOString(),
@@ -53,8 +63,20 @@ parentPort!.on("message", ({ id, method, args }) => {
         }
         db.exec("COMMIT");
       } catch (e) {
-        db.exec("ROLLBACK");
+        if (inTransaction) db.exec("ROLLBACK");
         throw e;
+      } finally {
+        if (rebuild) {
+          try {
+            db.exec("PRAGMA foreign_keys=ON");
+            if (db.prepare("PRAGMA foreign_keys").get()?.foreign_keys !== 1)
+              throw new Error("Foreign-key enforcement could not be restored");
+          } catch (error) {
+            // Refuse every subsequent request if enforcement cannot be restored.
+            db.close();
+            throw error;
+          }
+        }
       }
     } else if (method === "close") {
       db.close();

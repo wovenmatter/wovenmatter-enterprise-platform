@@ -1,3 +1,5 @@
+import { migrateAssets } from "../library/assets.js";
+import { migrateAssetConversations, workspaceId } from "../assets/schema.js";
 import type { Statement } from "../db/index.js";
 import { RuntimeError } from "../../../../packages/runtime/src/types.js";
 import { randomUUID } from "node:crypto";
@@ -134,6 +136,8 @@ CREATE TRIGGER conversation_fixed_mode BEFORE UPDATE OF mode ON conversations WH
 `,
     );
     await this.initializeWorkspaceSchema();
+    await migrateAssets(this.ctx);
+    await migrateAssetConversations(this.ctx);
   }
   private async initializeWorkspaceSchema() {
     await this.ctx.db.migrate(
@@ -232,8 +236,15 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       [id],
     );
     if (!c) throw hidden();
+    if (c.asset_id) {
+      if (!this.dependencies.assets) throw hidden();
+      const a = await this.dependencies.assets.require(user, c.asset_id);
+      if (a.org_id !== c.org_id || a.project_id !== c.project_id)
+        throw hidden();
+      return c;
+    }
     try {
-      await this.ctx.requireProject(user, c.project_id);
+      await this.ctx.requireProject(user, c.project_id!);
     } catch {
       throw hidden();
     }
@@ -249,7 +260,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   async list(user: User, projectId: string) {
     await this.ctx.requireProject(user, projectId);
     const rows = await this.ctx.db.all<ConversationRow>(
-      "SELECT c.* FROM conversations c WHERE c.project_id=? AND c.deleted_at IS NULL AND (c.creator_id=? OR EXISTS(SELECT 1 FROM conversation_members m WHERE m.conversation_id=c.id AND m.user_id=?)) ORDER BY c.updated_at DESC",
+      "SELECT c.* FROM conversations c WHERE c.project_id=? AND c.asset_id IS NULL AND c.deleted_at IS NULL AND (c.creator_id=? OR EXISTS(SELECT 1 FROM conversation_members m WHERE m.conversation_id=c.id AND m.user_id=?)) ORDER BY c.updated_at DESC",
       [projectId, user.id, user.id],
     );
     return {
@@ -264,7 +275,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   async get(user: User, id: string) {
     const c = await this.requireConversation(user, id);
-    await this.ctx.requireProject(user, c.project_id);
+    if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!);
     const cursor = await this.ctx.db.get<{
       id: number;
     }>(
@@ -365,7 +376,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "fixed_mode",
         "Thread access is fixed at creation. Create a new thread to use a different mode.",
       );
-    await this.ctx.requireProject(user, c.project_id);
+    if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!);
     await this.dependencies.inference.validateSelection(
       c.org_id,
       model,
@@ -392,6 +403,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   async remove(user: User, id: string) {
     const c = await this.requireConversation(user, id, true);
+    if (c.asset_id)
+      throw new AppError(
+        409,
+        "asset_conversation",
+        "Delete the asset to remove its conversation.",
+      );
     await this.ctx.db.run(
       "UPDATE conversations SET deleted_at=?,updated_at=? WHERE id=?",
       [now(), now(), id],
@@ -404,6 +421,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   async members(user: User, id: string) {
     const c = await this.requireConversation(user, id);
+    if (c.asset_id) return { items: [] };
     const rows = await this.ctx.db.all<{
       id: string;
       name: string;
@@ -417,7 +435,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     const items = [];
     for (const row of rows) {
       try {
-        await this.ctx.requireProject(await this.user(row.id), c.project_id);
+        await this.ctx.requireProject(await this.user(row.id), c.project_id!);
         items.push({
           id: row.id,
           name: row.name,
@@ -435,7 +453,13 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   async addMember(user: User, id: string, userId: string) {
     const c = await this.requireConversation(user, id),
       candidate = await this.user(userId);
-    await this.ctx.requireProject(candidate, c.project_id);
+    if (c.asset_id)
+      throw new AppError(
+        403,
+        "asset_conversation",
+        "Asset conversations are limited to current asset editors.",
+      );
+    await this.ctx.requireProject(candidate, c.project_id!);
     await this.ctx.db.batch([
       {
         sql: "INSERT OR IGNORE INTO conversation_members(conversation_id,user_id,added_by,created_at) VALUES(?,?,?,?)",
@@ -560,11 +584,22 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "queue_full",
           "Wait for pending input delivery before sending more messages.",
         );
+      if (c.asset_id && !c.project_id && kind === "message" && !current)
+        await this.dependencies.assets!.initializeWorkspace(user, c.asset_id);
       const messageId = randomUUID(),
         assistantId = randomUUID(),
         timestamp = now();
       const runId = kind === "comment" ? null : (current?.id ?? randomUUID());
       await this.ctx.db.batch([
+        ...(!c.project_id && c.asset_id && runId && !current
+          ? [
+              {
+                sql: "UPDATE asset_workspaces SET generation=generation+1,last_activity=?,state='ready',user_id=? WHERE asset_id=?",
+                params: [Date.now(), user.id, c.asset_id],
+                expectChanges: 1,
+              },
+            ]
+          : []),
         {
           sql: "INSERT INTO conversation_messages(id,conversation_id,run_id,role,author_id,content,created_at,kind) VALUES(?,?,?,?,?,?,?,?)",
           params: [
@@ -593,7 +628,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
                 ],
               },
               {
-                sql: "INSERT INTO conversation_runs(id,conversation_id,org_id,project_id,user_id,request_id,user_message_id,assistant_message_id,status,mode,harness,model,connection_id,created_at,runtime_generation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT runtime_generation FROM conversations WHERE id=?))",
+                sql: "INSERT INTO conversation_runs(id,conversation_id,org_id,project_id,user_id,request_id,user_message_id,assistant_message_id,status,mode,harness,model,connection_id,created_at,runtime_generation,asset_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,(SELECT runtime_generation FROM conversations WHERE id=?),?)",
                 params: [
                   runId,
                   id,
@@ -610,6 +645,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
                   c.connection_id,
                   timestamp,
                   id,
+                  c.asset_id ?? null,
                 ],
               },
             ]
@@ -767,6 +803,75 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       ).map(runView),
     };
   }
+  private async mounts(user: User, row: ConversationRow | RunRow) {
+    if (row.asset_id)
+      return this.dependencies.assets!.mounts(user, row.asset_id);
+    return this.dependencies.files.resolveProjectMounts(
+      this.ctx,
+      user,
+      row.project_id!,
+      row.mode,
+    );
+  }
+  async stopAsset(id: string, reason = "asset_deleted") {
+    const c = await this.ctx.db.get<{ id: string }>(
+      "SELECT id FROM conversations WHERE asset_id=?",
+      [id],
+    );
+    if (c) await this.retireThread(c.id, reason);
+  }
+  async createAsset(
+    user: User,
+    assetId: string,
+    input: Record<string, unknown>,
+  ) {
+    return this.serial("asset:" + assetId, async () => {
+      const a = await this.dependencies.assets!.require(user, assetId);
+      const existing = await this.ctx.db.get<{ id: string }>(
+        "SELECT id FROM conversations WHERE asset_id=?",
+        [assetId],
+      );
+      if (existing) return this.get(user, existing.id);
+      const model = field(input.model, "Model", 200),
+        harness =
+          input.harness == null
+            ? await this.dependencies.inference.defaultHarness(a.org_id, model)
+            : selectedHarness(input.harness);
+      const connectionId =
+        input.connectionId == null
+          ? null
+          : field(input.connectionId, "Connection", 100);
+      await this.dependencies.inference.validateSelection(
+        a.org_id,
+        model,
+        harness,
+        connectionId ?? undefined,
+      );
+      await this.dependencies.assets!.require(
+        await this.user(user.id),
+        assetId,
+      );
+      const id = randomUUID(),
+        time = now();
+      await this.ctx.db.run(
+        "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,asset_id) VALUES(?,?,?,?,?,'write',?,?,?,?,?,?)",
+        [
+          id,
+          a.org_id,
+          a.project_id,
+          user.id,
+          a.name,
+          harness,
+          model,
+          connectionId,
+          time,
+          time,
+          a.id,
+        ],
+      );
+      return this.get(user, id);
+    });
+  }
   async canUseRun(input: {
     orgId: string;
     projectId: string;
@@ -775,13 +880,19 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }) {
     try {
       const run = await this.ctx.db.get<RunRow>(
-        `SELECT * FROM conversation_runs WHERE id=? AND org_id=? AND project_id=? AND user_id=? AND status IN ('dispatching','running')`,
+        `SELECT * FROM conversation_runs WHERE id=? AND org_id=? AND COALESCE(project_id,'asset-'||asset_id)=? AND user_id=? AND status IN ('dispatching','running')`,
         [input.runId, input.orgId, input.projectId, input.userId],
       );
       if (!run) return false;
       const user = await this.user(run.user_id);
-      await this.requireConversation(user, run.conversation_id);
-      await this.ctx.requireProject(user, run.project_id);
+      const c = await this.requireConversation(user, run.conversation_id);
+      if (
+        (c.asset_id ?? null) !== (run.asset_id ?? null) ||
+        c.project_id !== run.project_id ||
+        c.org_id !== run.org_id
+      )
+        return false;
+      if (!run.asset_id) await this.ctx.requireProject(user, run.project_id!);
       return true;
     } catch {
       return false;
@@ -868,7 +979,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       }
     }
     this.kick();
+    await this.dependencies.assets?.maintenance();
   }
+
   private resume(run: RunRow) {
     if (this.pumping.has(run.id) || this.running.has(run.id) || this.closing)
       return;
@@ -966,7 +1079,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     if (
       !(await this.canUseRun({
         orgId: run.org_id,
-        projectId: run.project_id,
+        projectId: workspaceId(run),
         userId: run.user_id,
         runId: run.id,
       }))
@@ -1069,29 +1182,30 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "authority_revoked",
         "This request belongs to a stopped thread environment.",
       );
-    const project = await this.ctx.requireProject(user, run.project_id);
-    if (project.status !== "ready")
-      throw new AppError(
-        409,
-        "project_not_ready",
-        "The project runtime is not ready.",
-      );
+    const assetContext = run.asset_id
+      ? await this.dependencies.assets!.prepare(user, run)
+      : undefined;
+    if (!run.asset_id) {
+      const project = await this.ctx.requireProject(user, run.project_id!);
+      if (project.status !== "ready")
+        throw new AppError(
+          409,
+          "project_not_ready",
+          "The project runtime is not ready.",
+        );
+    }
     await this.dependencies.inference.validateSelection(
       run.org_id,
       run.model,
       run.harness,
       run.connection_id ?? undefined,
     );
-    const mounts = await this.dependencies.files.resolveProjectMounts(
-      this.ctx,
-      user,
-      run.project_id,
-      run.mode,
-    );
+    const mounts = await this.mounts(user, run);
     execution.signature = JSON.stringify(mounts);
     const gateway = await this.dependencies.inference.issueGateway({
       orgId: run.org_id,
-      projectId: run.project_id,
+      projectId: workspaceId(run),
+      assetId: run.asset_id ?? undefined,
       userId: user.id,
       runId: run.id,
       conversationId: run.conversation_id,
@@ -1104,7 +1218,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       controller.signal.aborted ||
       !(await this.canUseRun({
         orgId: run.org_id,
-        projectId: run.project_id,
+        projectId: workspaceId(run),
         userId: user.id,
         runId: run.id,
       }))
@@ -1170,12 +1284,14 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       execution.initialMessages = pending.map((m) => m.message_id);
       return `${context ? `Conversation context (data):\n${context}\n\n` : ""}${pending.length ? pending.map((m) => `User (${m.author_id}): ${m.content}`).join("\n\n") : message.content}`;
     });
-    const manifest =
-      (await this.dependencies.files.captureProjectManifest?.(
-        this.ctx,
-        user,
-        run.project_id,
-      )) ?? [];
+    if (assetContext) prompt += "\n\n" + assetContext.prompt;
+    const manifest = run.asset_id
+      ? await this.dependencies.assets!.manifest(user, run.asset_id)
+      : ((await this.dependencies.files.captureProjectManifest?.(
+          this.ctx,
+          user,
+          run.project_id!,
+        )) ?? []);
     if (manifest.length) {
       await this.ctx.db.batch(
         manifest.map((source) => ({
@@ -1193,7 +1309,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       this.ctx.config.stateDir,
       "agent-sessions",
       run.org_id,
-      run.project_id,
+      workspaceId(run),
       "sessions",
       run.conversation_id,
       run.harness,
@@ -1274,7 +1390,10 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       {
         runId: run.id,
         organizationId: run.org_id,
-        projectId: run.project_id,
+        projectId: workspaceId(run),
+        ...(assetContext
+          ? { assetId: run.asset_id!, workspaceLease: assetContext.lease }
+          : {}),
         conversationId: run.conversation_id,
         generation,
         userId: user.id,
@@ -1515,7 +1634,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           ? input.label.slice(0, 200)
           : source.path,
       verification: "source_reference",
-      url: `/enterprise/api/files/${encodeURIComponent(input.fileId)}/content?projectId=${encodeURIComponent(run.project_id)}&versionId=${encodeURIComponent(input.versionId)}`,
+      url: `/enterprise/api/files/${encodeURIComponent(input.fileId)}/content?${run.project_id ? `projectId=${encodeURIComponent(run.project_id)}&` : ""}versionId=${encodeURIComponent(input.versionId)}`,
     };
     citations.push(citation);
     await commit([
@@ -1699,10 +1818,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   private async reconcile(run: RunRow) {
     try {
-      await this.dependencies.files.reconcileProjectFiles(
-        this.ctx,
-        run.project_id,
-      );
+      if (run.asset_id) await this.dependencies.assets!.settled(run);
+      if (run.project_id)
+        await this.dependencies.files.reconcileProjectFiles(
+          this.ctx,
+          run.project_id,
+        );
     } catch {
       await this.ctx.db.batch([
         eventInsert(
@@ -1809,7 +1930,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         },
         {
           sql: "INSERT INTO conversation_runtime_stops(conversation_id,project_id,generation) VALUES(?,?,?)",
-          params: [id, row.project_id, generation],
+          params: [id, workspaceId(row), generation],
         },
         {
           sql: "UPDATE conversation_runs SET status='cancelling' WHERE conversation_id=? AND runtime_generation<? AND status IN ('dispatching','running')",
@@ -1825,7 +1946,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       if (!current || (current.runtime_generation ?? 0) < generation)
         throw error;
     }
-    return { project_id: row.project_id, generation };
+    return { project_id: workspaceId(row), generation };
   }
   private async completeThreadStop(
     id: string,
@@ -1913,12 +2034,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             try {
               const user = await this.user(owner.user_id),
                 conversation = await this.requireConversation(user, id);
-              const mounts = await this.dependencies.files.resolveProjectMounts(
-                this.ctx,
-                user,
-                conversation.project_id,
-                conversation.mode,
-              );
+              const mounts = await this.mounts(user, conversation);
               if (JSON.stringify(mounts) !== owner.signature)
                 return this.fenceThread(id);
             } catch {
@@ -1949,7 +2065,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           if (
             !(await this.canUseRun({
               orgId: run.org_id,
-              projectId: run.project_id,
+              projectId: workspaceId(run),
               userId: run.user_id,
               runId: run.id,
             }))
@@ -1959,11 +2075,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           }
           if (execution.signature) {
             try {
-              const mounts = await this.dependencies.files.resolveProjectMounts(
-                this.ctx,
+              const mounts = await this.mounts(
                 await this.user(run.user_id),
-                run.project_id,
-                run.mode,
+                run,
               );
               if (JSON.stringify(mounts) !== execution.signature)
                 await this.cancelExecution(execution, "file_access_changed");

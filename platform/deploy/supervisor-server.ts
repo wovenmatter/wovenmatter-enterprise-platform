@@ -130,7 +130,9 @@ export function supervisorHandler(deps: SupervisorDependencies) {
         });
       }
       match = path.match(
-        new RegExp(`^/v1/projects/(${ID})/(ensure|stop|restore|purge|update)$`),
+        new RegExp(
+          `^/v1/projects/(${ID})/(ensure|stop|restore|purge|update|release-asset)$`,
+        ),
       );
       if (match && request.method === "POST") {
         const spec = (await body(request)) as ProjectRuntimeSpec;
@@ -142,6 +144,7 @@ export function supervisorHandler(deps: SupervisorDependencies) {
             error: "wrong_host",
           });
         const operations = {
+          "release-asset": deps.runtime.releaseAsset,
           update: deps.runtime.updateProject,
           ensure: deps.runtime.ensureProject,
           stop: deps.runtime.stopProject,

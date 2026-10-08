@@ -183,6 +183,7 @@ export async function sessionBroker(
   }
   return {
     token,
+    activeGateway: () => (retired ? undefined : active),
     setGateway(value?: RuntimeRequest["gateway"]) {
       for (const socket of inference) socket.destroy();
       active = retired ? undefined : value;

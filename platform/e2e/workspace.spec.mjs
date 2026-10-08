@@ -815,9 +815,29 @@ test("safe report publication is public without JavaScript and visibility change
   await page.getByLabel("Name", { exact: true }).fill("Browser report");
   await page.getByLabel("Belongs to").selectOption(f.projectId);
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
-  await page.getByLabel("Content", { exact: true }).selectOption("existing");
-  await page.getByLabel("Content file").selectOption(file.id);
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+  // Keep the renderer/import-compatibility regression through its existing API;
+  // conversational preparation is covered by the asset agent workflow below.
+  const assetList = await (
+    await page.request.get(`/enterprise/api/organizations/${f.orgId}/assets`)
+  ).json();
+  const selectedAsset = assetList.items.find(
+    (a) => a.name === "Browser report",
+  );
+  const asset = await (
+    await page.request.get(`/enterprise/api/assets/${selectedAsset.id}`)
+  ).json();
+  const prepared = await page.request.patch(
+    `/enterprise/api/assets/${asset.id}`,
+    {
+      headers,
+      data: { expectedRevision: asset.revision, sourceFileId: file.id },
+    },
+  );
+  expect(prepared.status()).toBe(200);
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Browser report", exact: true })
+    .click();
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   await page.getByLabel("Visibility", { exact: true }).selectOption("public");
   await page
@@ -2030,6 +2050,7 @@ test("organization assets start without projects from Files and Assets, remain p
   page,
   browser,
 }) => {
+  test.setTimeout(180000);
   const f = await ensureFixture(page),
     session = await (await page.request.get("/enterprise/api/session")).json();
   const headers = { origin: f.origin, "x-csrf-token": session.csrfToken };
@@ -2056,9 +2077,28 @@ test("organization assets start without projects from Files and Assets, remain p
   await expect(page.getByLabel("Belongs to")).toHaveValue("");
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
   await page
-    .getByLabel("Text", { exact: true })
-    .fill("First version for review");
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+    .getByLabel("Model", { exact: true })
+    .selectOption("synthetic-asset-codex");
+  await page
+    .getByLabel("Message", { exact: true })
+    .fill("Prepare an overview with a useful generated data table.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(
+    page
+      .frameLocator('iframe[title="Draft preview"]')
+      .getByText("First version for review", { exact: true }),
+  ).toBeVisible({ timeout: 60000 });
+  await expect(
+    page.getByText("Asset draft saved.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page
+      .frameLocator('iframe[title="Draft preview"]')
+      .locator("script,object,embed,form"),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Save draft", exact: true }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "Publish", exact: true }).click();
   const preview = await page
     .getByRole("link", { name: "Preview draft" })
@@ -2089,9 +2129,14 @@ test("organization assets start without projects from Files and Assets, remain p
   expect((await anonymous.request.get(url)).status()).toBe(200);
   await page.getByRole("button", { name: "Prepare", exact: true }).click();
   await page
-    .getByLabel("Text", { exact: true })
-    .fill("Second draft kept private");
-  await page.getByRole("button", { name: "Save draft", exact: true }).click();
+    .getByPlaceholder("Message your agent…")
+    .fill("Revise the overview and its generated data.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(
+    page
+      .frameLocator('iframe[title="Draft preview"]')
+      .getByText("Second draft kept private", { exact: true }),
+  ).toBeVisible({ timeout: 60000 });
   await expect
     .poll(async () =>
       (await (await anonymous.request.get(url)).text()).includes(
@@ -2107,9 +2152,11 @@ test("organization assets start without projects from Files and Assets, remain p
   await page
     .getByRole("button", { name: "Restore version 1 to draft", exact: true })
     .click();
-  await expect(page.getByLabel("Text", { exact: true })).toHaveValue(
-    "First version for review",
-  );
+  await expect(
+    page
+      .frameLocator('iframe[title="Draft preview"]')
+      .getByText("First version for review", { exact: true }),
+  ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
     path: `${evidence}/asset-edit-mobile.png`,

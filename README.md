@@ -5,6 +5,7 @@ Managed AI workspaces for expert teams. React and TypeScript provide the browser
 ## Application
 
 - Accounts are invite-only and can belong to multiple organizations. Organization administrators manage scoped memberships/projects; only the platform owner creates organizations.
+- Assets are created and revised by talking to an agent, with private previews and separate Publish, Versions and Settings. Project assets share their project workspace; standalone assets retain their work while compute rests between sessions.
 - Organization and project files support uploads, folders, move, copy and version history. Organization files can be shared into projects with read-only or full access and revoked later.
 - Conversations are private until project members are added. Runs are durable, ordered and cancellable. Participants direct a fixed thread mode. Messages steer active work; Comment adds context. Durable native histories survive restarts; uncertain work is never automatically replayed.
 - Administrators manage subscription accounts and provider API keys through private per-organization CLIProxyAPI services. Employees select available models without managing credentials.

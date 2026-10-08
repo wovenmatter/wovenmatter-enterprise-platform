@@ -23,7 +23,11 @@ export interface Database {
   ): Promise<T[]>;
   run(sql: string, params?: SqlValue[]): Promise<RunResult>;
   batch(statements: Statement[]): Promise<RunResult[]>;
-  migrate(name: string, sql: string): Promise<void>;
+  migrate(
+    name: string,
+    sql: string,
+    options?: { rebuild?: boolean },
+  ): Promise<void>;
   close(): Promise<void>;
 }
 export async function createDatabase(filename: string): Promise<Database> {
@@ -104,7 +108,7 @@ export async function createDatabase(filename: string): Promise<Database> {
     all: (sql, params) => call("all", sql, params),
     run: (sql, params) => call("run", sql, params),
     batch: (statements) => call("batch", statements),
-    migrate: (name, sql) => call("migrate", name, sql),
+    migrate: (name, sql, options) => call("migrate", name, sql, options),
     close: () => {
       if (closingPromise) return closingPromise;
       if (closed) return Promise.resolve();

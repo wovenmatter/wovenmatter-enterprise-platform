@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { ExternalLink, Plus } from "lucide-react";
 import { api, date, send, useResource, type List, type Project } from "../api";
 import { useWorkspace } from "../workspace";
@@ -14,6 +14,7 @@ import {
   Status,
 } from "../components/ui";
 import { FilesPage } from "./files";
+import { AssetPreparation } from "./asset-preparation";
 
 type Block = {
   type: string;
@@ -26,7 +27,7 @@ type Block = {
   labelKey?: string;
   valueKey?: string;
 };
-type Asset = {
+export type Asset = {
   id: string;
   projectId: string | null;
   name: string;
@@ -216,6 +217,7 @@ export function LibraryPage() {
       ) : null}
       {selected ? (
         <AssetDetail
+          key={selected}
           id={selected}
           onClose={() => setSelected(undefined)}
           onChanged={assets.reload}
@@ -237,10 +239,10 @@ function AssetDetail({
   const [tab, setTab] = useState("content"),
     [removing, setRemoving] = useState(false);
   const a = asset.data;
-  const changed = () => {
+  const changed = useCallback(() => {
     asset.reload();
     onChanged();
-  };
+  }, [asset.reload, onChanged]);
   return (
     <Modal title={a?.name ?? "Asset"} onClose={onClose} wide>
       <ErrorNotice message={asset.error} />
@@ -273,7 +275,7 @@ function AssetDetail({
           </nav>
           {tab === "content" ? (
             a.canEdit ? (
-              <AssetEditor key={a.revision} asset={a} onSaved={changed} />
+              <AssetPreparation key={a.id} asset={a} onSaved={changed} />
             ) : (
               <p>Full access is needed to edit this asset.</p>
             )
@@ -367,6 +369,41 @@ function AssetDetail({
           ) : null}
           {tab === "settings" ? (
             <div className="asset-section">
+              {a.canEdit ? (
+                <AsyncForm
+                  key={`metadata-${a.revision}`}
+                  submitLabel="Save details"
+                  onSubmit={async (d) => {
+                    await send(
+                      `/enterprise/api/assets/${id}`,
+                      {
+                        name: d.get("name"),
+                        description: d.get("description"),
+                        expectedRevision: a.revision,
+                      },
+                      "PATCH",
+                    );
+                    changed();
+                  }}
+                >
+                  <Field label="Name">
+                    <input
+                      name="name"
+                      defaultValue={a.name}
+                      required
+                      maxLength={200}
+                    />
+                  </Field>
+                  <Field label="Description">
+                    <textarea
+                      name="description"
+                      defaultValue={a.description}
+                      rows={3}
+                      maxLength={2000}
+                    />
+                  </Field>
+                </AsyncForm>
+              ) : null}
               {a.publishedVersion ? (
                 <AsyncForm
                   key={a.revision}
@@ -412,302 +449,5 @@ function AssetDetail({
         </>
       )}
     </Modal>
-  );
-}
-const blockNames: Record<string, string> = {
-  heading: "Heading",
-  text: "Text",
-  details: "Expandable section",
-  table: "Table",
-  bars: "Bar chart",
-  image: "Image",
-};
-function newBlock(type: string): Block {
-  if (type === "heading" || type === "text") return { type, text: "" };
-  if (type === "details") return { type, title: "", text: "" };
-  if (type === "image") return { type, fileId: "", alt: "" };
-  if (type === "table")
-    return { type, fileId: "", pointer: "", columns: [{ label: "", key: "" }] };
-  return {
-    type,
-    fileId: "",
-    pointer: "",
-    labelKey: "",
-    valueKey: "",
-    title: "",
-  };
-}
-function AssetEditor({
-  asset: a,
-  onSaved,
-}: {
-  asset: Asset;
-  onSaved: () => void;
-}) {
-  const { org } = useWorkspace();
-  const [blocks, setBlocks] = useState(a.document.blocks),
-    [source, setSource] = useState("edit"),
-    [path, setPath] = useState("");
-  const query = new URLSearchParams({
-    orgId: org.id,
-    path,
-    ...(a.projectId ? { projectId: a.projectId } : {}),
-  });
-  const files = useResource<
-    List<{ id: string; path: string; name: string; kind: string }>
-  >(`/enterprise/api/files?${query}`);
-  const update = (i: number, changes: Partial<Block>) =>
-    setBlocks((current) =>
-      current.map((b, j) => (j === i ? { ...b, ...changes } : b)),
-    );
-  return (
-    <AsyncForm
-      submitLabel="Save draft"
-      onSubmit={async (d) => {
-        await send(
-          `/enterprise/api/assets/${a.id}`,
-          {
-            expectedRevision: a.revision,
-            name: d.get("name"),
-            description: d.get("description"),
-            ...(source === "existing"
-              ? { sourceFileId: d.get("sourceFileId") }
-              : { document: { version: 1, blocks } }),
-          },
-          "PATCH",
-        );
-        onSaved();
-      }}
-    >
-      <Field label="Name">
-        <input name="name" defaultValue={a.name} required maxLength={200} />
-      </Field>
-      <Field label="Description">
-        <textarea
-          name="description"
-          defaultValue={a.description}
-          rows={2}
-          maxLength={2000}
-        />
-      </Field>
-      <Field label="Content">
-        <select value={source} onChange={(e) => setSource(e.target.value)}>
-          <option value="edit">Write or edit content</option>
-          <option value="existing">Use prepared workspace content</option>
-        </select>
-      </Field>
-      <details>
-        <summary>Browse content sources</summary>
-        <Field
-          label="Source folder"
-          hint="Use a folder in this workspace or an available library share."
-        >
-          <input value={path} onChange={(e) => setPath(e.target.value)} />
-        </Field>
-        <ErrorNotice message={files.error} />
-        {files.loading ? <Loading /> : null}
-      </details>
-      {source === "existing" ? (
-        <>
-          <Field label="Content file">
-            <select name="sourceFileId" required defaultValue="">
-              <option value="" disabled>
-                Select prepared content
-              </option>
-              {files.data?.items
-                .filter((f) => f.kind === "file" && f.path.endsWith(".json"))
-                .map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.path}
-                  </option>
-                ))}
-            </select>
-          </Field>
-          <p className="muted">
-            Choose a safe asset definition prepared by your agent. You can edit
-            its content after saving.
-          </p>
-        </>
-      ) : (
-        <>
-          {blocks.map((b, i) => (
-            <section
-              className="asset-section"
-              key={i}
-              aria-label={`${blockNames[b.type]} ${i + 1}`}
-            >
-              <div className="section-heading-row">
-                <h3>
-                  {blockNames[b.type]} {i + 1}
-                </h3>
-                <button
-                  type="button"
-                  className="text-button"
-                  disabled={blocks.length === 1}
-                  onClick={() => setBlocks(blocks.filter((_, j) => j !== i))}
-                >
-                  Remove section {i + 1}
-                </button>
-              </div>
-              {b.title !== undefined ? (
-                <Field label="Section title">
-                  <input
-                    value={b.title}
-                    maxLength={200}
-                    onChange={(e) => update(i, { title: e.target.value })}
-                  />
-                </Field>
-              ) : null}
-              {b.text !== undefined ? (
-                <Field label={b.type === "heading" ? "Heading" : "Text"}>
-                  <textarea
-                    rows={b.type === "heading" ? 1 : 5}
-                    maxLength={b.type === "heading" ? 200 : 8000}
-                    value={b.text}
-                    onChange={(e) => update(i, { text: e.target.value })}
-                  />
-                </Field>
-              ) : null}
-              {b.fileId !== undefined ? (
-                <Field label="Source file">
-                  <select
-                    required
-                    value={b.fileId}
-                    onChange={(e) => update(i, { fileId: e.target.value })}
-                  >
-                    <option value="" disabled>
-                      Select a file
-                    </option>
-                    {b.fileId &&
-                    !files.data?.items.some((f) => f.id === b.fileId) ? (
-                      <option value={b.fileId}>Current source</option>
-                    ) : null}
-                    {files.data?.items
-                      .filter((f) => f.kind === "file")
-                      .map((f) => (
-                        <option key={f.id} value={f.id}>
-                          {f.path}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-              ) : null}
-              {b.alt !== undefined ? (
-                <Field label="Image description">
-                  <input
-                    value={b.alt}
-                    maxLength={200}
-                    onChange={(e) => update(i, { alt: e.target.value })}
-                  />
-                </Field>
-              ) : null}
-              {b.pointer !== undefined ? (
-                <Field
-                  label="Data location"
-                  hint="Leave empty for a list at the top of the source file, or enter a path such as /rows."
-                >
-                  <input
-                    value={b.pointer}
-                    maxLength={512}
-                    onChange={(e) => update(i, { pointer: e.target.value })}
-                  />
-                </Field>
-              ) : null}
-              {b.type === "bars" ? (
-                <>
-                  <Field label="Label field">
-                    <input
-                      required
-                      value={b.labelKey}
-                      onChange={(e) => update(i, { labelKey: e.target.value })}
-                    />
-                  </Field>
-                  <Field label="Value field">
-                    <input
-                      required
-                      value={b.valueKey}
-                      onChange={(e) => update(i, { valueKey: e.target.value })}
-                    />
-                  </Field>
-                </>
-              ) : null}
-              {b.columns?.map((c, j) => (
-                <div className="form-grid" key={j}>
-                  <Field label={`Column ${j + 1} heading`}>
-                    <input
-                      value={c.label}
-                      onChange={(e) =>
-                        update(i, {
-                          columns: b.columns!.map((x, k) =>
-                            k === j ? { ...x, label: e.target.value } : x,
-                          ),
-                        })
-                      }
-                    />
-                  </Field>
-                  <Field label={`Column ${j + 1} field`}>
-                    <input
-                      required
-                      value={c.key}
-                      onChange={(e) =>
-                        update(i, {
-                          columns: b.columns!.map((x, k) =>
-                            k === j ? { ...x, key: e.target.value } : x,
-                          ),
-                        })
-                      }
-                    />
-                  </Field>
-                  <button
-                    type="button"
-                    disabled={b.columns!.length === 1}
-                    onClick={() =>
-                      update(i, {
-                        columns: b.columns!.filter((_, k) => k !== j),
-                      })
-                    }
-                  >
-                    Remove column {j + 1}
-                  </button>
-                </div>
-              ))}
-              {b.columns ? (
-                <button
-                  type="button"
-                  disabled={b.columns.length >= 20}
-                  onClick={() =>
-                    update(i, {
-                      columns: [...b.columns!, { label: "", key: "" }],
-                    })
-                  }
-                >
-                  Add column
-                </button>
-              ) : null}
-            </section>
-          ))}
-          <Field label="Add section">
-            <select
-              value=""
-              disabled={blocks.length >= 100}
-              onChange={(e) => setBlocks([...blocks, newBlock(e.target.value)])}
-            >
-              <option value="" disabled>
-                Choose a section
-              </option>
-              {Object.entries(blockNames).map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </>
-      )}
-      <p className="muted">
-        Save your draft, then use Publish to preview and share it. Saving does
-        not change an existing published version.
-      </p>
-    </AsyncForm>
   );
 }

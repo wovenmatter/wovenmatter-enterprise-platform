@@ -6,7 +6,8 @@ export interface ConversationRow {
   runtime_generation?: number;
   id: string;
   org_id: string;
-  project_id: string;
+  project_id: string | null;
+  asset_id?: string | null;
   creator_id: string;
   title: string;
   mode: Mode;
@@ -22,7 +23,8 @@ export interface RunRow {
   id: string;
   conversation_id: string;
   org_id: string;
-  project_id: string;
+  project_id: string | null;
+  asset_id?: string | null;
   user_id: string;
   request_id: string;
   user_message_id: string;
@@ -63,6 +65,7 @@ export interface EventRow {
   created_at: string;
 }
 export interface ConversationDependencies {
+  assets?: import("../assets/service.js").AssetAgentService;
   runtime: Runtime;
   files: {
     resolveProjectMounts(
@@ -85,6 +88,7 @@ export interface ConversationDependencies {
     issueGateway(input: {
       orgId: string;
       projectId: string;
+      assetId?: string;
       userId: string;
       runId: string;
       model?: string;
@@ -109,6 +113,7 @@ export function conversationView(c: ConversationRow) {
     id: c.id,
     orgId: c.org_id,
     projectId: c.project_id,
+    assetId: c.asset_id ?? null,
     createdBy: c.creator_id,
     title: c.title,
     mode: c.mode,

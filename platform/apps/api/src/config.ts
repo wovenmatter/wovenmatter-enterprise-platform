@@ -44,7 +44,15 @@ export function loadConfig(env = process.env): AppConfig {
       throw new Error(`${name} must be an integer from 1 to 64`);
     return value;
   }
+  const assetIdleSeconds = Number(env.WME_ASSET_IDLE_SECONDS ?? 300);
+  if (
+    !Number.isInteger(assetIdleSeconds) ||
+    assetIdleSeconds < 30 ||
+    assetIdleSeconds > 86400
+  )
+    throw new Error("WME_ASSET_IDLE_SECONDS must be 30–86400");
   return {
+    assetIdleMs: assetIdleSeconds * 1000,
     egressEnabled: egressEnabled === "true",
     egressHost: env.WME_EGRESS_HOST ?? env.WME_HOST ?? "127.0.0.1",
     egressPort,

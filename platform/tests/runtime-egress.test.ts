@@ -182,3 +182,65 @@ test("unavailable host metadata prevents production startup before opening SQLit
   );
   await assert.rejects(stat(stateDir), { code: "ENOENT" });
 });
+
+test("egress wrapper preserves durable attachment and asset release without lending project schedule authority", async (t) => {
+  const calls: string[] = [],
+    spec = {
+      projectId: "asset-fixture",
+      organizationId: "org",
+      hostId: "local",
+      owner: { kind: "asset" as const, assetId: "fixture" },
+      workspaceLease: 1,
+      scheduleEnabled: false,
+    };
+  const runtime: Runtime = {
+    async execute() {},
+    async cancel() {},
+    async recover() {
+      return [];
+    },
+    async ensureProject(value) {
+      assert.equal(value.egressToken, undefined);
+      calls.push("ensure");
+    },
+    async attach(id, cursor) {
+      calls.push("attach:" + id + ":" + cursor);
+    },
+    async acknowledge(id, cursor) {
+      calls.push("ack:" + id + ":" + cursor);
+    },
+    async stopSession(id, thread, generation) {
+      calls.push("stop:" + id + ":" + thread + ":" + generation);
+    },
+    async releaseAsset(value) {
+      assert.deepEqual(value, spec);
+      calls.push("release");
+    },
+  };
+  const wrapped = await createRuntimeEgress({
+    runtime,
+    proxyOrigin: "http://api:4101",
+    host: "127.0.0.1",
+    port: 0,
+    networkBoundary: async () => ({ addresses: ["127.0.0.1"], hostnames: ["host.example"] }),
+    issueProjectCapability: async () => {
+      throw Error("Asset must not receive project scheduling authority");
+    },
+    authorize: async () => {
+      throw Error("unused");
+    },
+  });
+  t.after(() => wrapped.close());
+  await wrapped.runtime.ensureProject!(spec);
+  await wrapped.runtime.attach!("run", 7, () => {});
+  await wrapped.runtime.acknowledge!("run", 8);
+  await wrapped.runtime.stopSession!(spec.projectId, "thread", 2);
+  await wrapped.runtime.releaseAsset!(spec);
+  assert.deepEqual(calls, [
+    "ensure",
+    "attach:run:7",
+    "ack:run:8",
+    "stop:asset-fixture:thread:2",
+    "release",
+  ]);
+});

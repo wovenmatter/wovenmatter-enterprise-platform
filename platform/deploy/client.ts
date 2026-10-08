@@ -194,6 +194,13 @@ export function createSupervisorClient(options: SupervisorClientOptions) {
       );
   }
   const runtime: Runtime = {
+    async releaseAsset(spec) {
+      await json(
+        `/v1/projects/${encodeURIComponent(spec.projectId)}/release-asset`,
+        "POST",
+        spec,
+      );
+    },
     async updateProject(spec) {
       await json(
         `/v1/projects/${encodeURIComponent(spec.projectId)}/update`,

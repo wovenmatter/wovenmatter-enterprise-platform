@@ -304,3 +304,26 @@ test("offline results survive storage pressure until the API explicitly acknowle
   assert.equal((await restored.poll("offline", 2)).terminal, true);
   await restored.close();
 });
+
+test("durable input identities bind asset authority and workspace admission lease", async (t) => {
+  const { service, workers } = await fixture(t);
+  const r = { ...request("asset-run"), assetId: "asset-a", workspaceLease: 1 };
+  await service.admit(r);
+  await service.admit(r);
+  assert.equal(workers.length, 1);
+  await assert.rejects(service.admit({ ...r, assetId: "asset-b" }), {
+    code: "request_conflict",
+  });
+  await assert.rejects(service.admit({ ...r, workspaceLease: 2 }), {
+    code: "request_conflict",
+  });
+  await workers[0]!.emit!({ type: "completed" });
+  workers[0]!.completion!.resolve();
+  await service.admit({ ...r, runId: "asset-next", workspaceLease: 2 });
+  assert.equal(
+    workers.length,
+    1,
+    "successive turns retain the authorized native environment",
+  );
+  await service.close();
+});

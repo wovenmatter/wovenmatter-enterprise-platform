@@ -137,6 +137,9 @@ export function placedRuntime(
     };
   }
   const runtime: Runtime = {
+    async releaseAsset(spec) {
+      await target(spec).client.runtime.releaseAsset!(spec);
+    },
     async updateProject(spec) {
       const { host, client } = target(spec);
       await client.runtime.updateProject!(policy(spec, host));

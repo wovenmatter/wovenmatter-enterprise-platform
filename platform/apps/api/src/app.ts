@@ -1,3 +1,6 @@
+import { AssetAgentService } from "./assets/service.js";
+import { migrateAssetAgents } from "./assets/schema.js";
+import { registerAssetAgents } from "./assets/index.js";
 import Fastify, { LogController } from "fastify";
 import staticFiles from "@fastify/static";
 import { existsSync } from "node:fs";
@@ -214,7 +217,7 @@ export async function buildApp(
         );
       reply.header(
         "content-security-policy",
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-src blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
       );
     }
     return payload;
@@ -239,9 +242,16 @@ export async function buildApp(
   await registerProjects(app, ctx);
   await registerJobs(app, ctx);
   await registerFiles(app, ctx);
-  await registerReports(app, ctx);
+  const assetAgents = new AssetAgentService(
+    ctx,
+    options.runtime ?? unavailableRuntime,
+    () => conversations!,
+  );
+  await registerReports(app, ctx, { removed: (id) => assetAgents.removed(id) });
+  await migrateAssetAgents(ctx);
   await registerInferenceRoutes(app, ctx, inference);
   conversations = await createConversationService(ctx, {
+    assets: assetAgents,
     runtime: options.runtime ?? unavailableRuntime,
     files: {
       resolveProjectMounts: (ctx, user, projectId, mode) =>
@@ -273,6 +283,10 @@ export async function buildApp(
       .catch(() => {})
       .then(async () => {
         await conversations!.recheckAccess();
+        const assetCleanup = assetAgents.maintenance().then(
+          () => undefined,
+          (error) => error,
+        );
         if (options.runtime?.updateProject) {
           const projects = await db.all<{
             id: string;
@@ -314,12 +328,15 @@ export async function buildApp(
           if (failed?.status === "rejected") throw failed.reason;
         }
         await inference.recheckOAuthAccess();
+        const assetFailure = await assetCleanup;
+        if (assetFailure) throw assetFailure;
         if (revision === accessSyncRevision) accessSyncPending = false;
       });
     accessSyncLane = operation;
     return operation;
   };
   await registerConversations(app, ctx, conversations);
+  await registerAssetAgents(app, ctx, assetAgents, inference);
   const handlers: Record<string, JobHandler> = {
     "project.provision": {
       replaySafe: true,
@@ -509,6 +526,7 @@ export async function buildApp(
     app,
     ctx,
     conversations,
+    assetAgents,
     inference,
     jobs,
   };

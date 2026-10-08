@@ -61,6 +61,7 @@ export async function registerConversations(
         await ctx.requireUser(r),
         params(r).conversationId!,
       );
+      if (c.asset_id) return { items: [] };
       const project = await ctx.db.get<{
         org_id: string;
       }>("SELECT org_id FROM projects WHERE id=?", [c.project_id]);

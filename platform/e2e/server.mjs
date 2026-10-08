@@ -10,11 +10,29 @@ if (process.env.WME_E2E_FIXTURE !== "1")
   throw new Error("Synthetic acceptance requires WME_E2E_FIXTURE=1");
 const port = Number(process.env.WME_E2E_PORT ?? 4155);
 const origin = `http://localhost:${port}`;
-const stateDir = await mkdtemp(join(tmpdir(), "wme-browser-"));
+const stateDir = await mkdtemp(
+  join(process.env.WME_E2E_STATE_PARENT ?? tmpdir(), "wme-browser-"),
+);
+const output = resolve(
+  process.env.WME_E2E_OUTPUT ?? `${tmpdir()}/wme-e2e-evidence`,
+);
+await mkdir(output, { recursive: true });
+const native = process.env.WME_E2E_AGENT_IMAGE
+  ? await (
+      await import("./native-runtime.mjs")
+    ).nativeFixture({
+      stateDir,
+      origin,
+      output,
+      image: process.env.WME_E2E_AGENT_IMAGE,
+    })
+  : undefined;
 const webRoot = join(stateDir, "web");
 await cp(resolve("platform/apps/web/dist"), webRoot, { recursive: true });
-const runtime = {
+const runtime = native?.runtime ?? {
   async ensureProject() {},
+  async releaseAsset() {},
+  async stopSession() {},
   async stopProject() {},
   async restoreProject() {},
   async purgeProject() {},
@@ -22,6 +40,111 @@ const runtime = {
   async execute(request, emit, signal) {
     await emit({ type: "started" });
     await emit({ type: "input_accepted" });
+    if (request.assetId) {
+      const operation = async (payload) => {
+        const r = await system.app.inject({
+          method: "POST",
+          url: new URL(request.gateway.baseUrl).pathname + "/asset",
+          headers: {
+            host: new URL(origin).host,
+            authorization: "Bearer " + request.gateway.token,
+          },
+          payload,
+        });
+        if (r.statusCode !== 200)
+          throw Error("Synthetic asset operation failed: " + r.statusCode);
+        return r.json();
+      };
+      const context = await operation({ operation: "context" });
+      const root = request.mounts.find((m) => m.target === "/workspace").source;
+      const n =
+        Number(
+          await readFile(
+            join(root, "asset-" + request.assetId + "-turn.txt"),
+            "utf8",
+          ).catch(() => 0),
+        ) + 1;
+      await writeFile(
+        join(root, "asset-" + request.assetId + "-data.json"),
+        JSON.stringify([{ label: "Generated data", value: n }]),
+      );
+      await emit({
+        type: "tool_start",
+        tool: "wme-asset",
+        toolId: "fixture-save",
+      });
+      let sourceText = "";
+      for (const source of context.sources.filter((s) =>
+        s.path.startsWith("Source-"),
+      )) {
+        const mount = request.mounts.find(
+          (m) =>
+            m.target !== "/workspace" &&
+            ("/workspace/" + source.path === m.target ||
+              ("/workspace/" + source.path).startsWith(m.target + "/")),
+        );
+        if (!mount || mount.access !== "read")
+          throw Error("Fixture selected source must be read-only");
+        const rows = JSON.parse(
+          await readFile(
+            mount.source +
+              ("/workspace/" + source.path).slice(mount.target.length),
+            "utf8",
+          ),
+        );
+        if (rows[0].label !== "Authorized input" || rows[0].value !== 8)
+          throw Error("Fixture source content mismatch");
+        sourceText = rows[0].label + ": " + rows[0].value;
+      }
+      await operation({
+        operation: "save",
+        operationId: randomUUID(),
+        expectedRevision: context.revision,
+        document: {
+          version: 1,
+          blocks: [
+            {
+              type: "text",
+              text:
+                n === 1
+                  ? "First version for review"
+                  : "Second draft kept private",
+            },
+            ...(sourceText
+              ? [
+                  {
+                    type: "details",
+                    title: "Selected source",
+                    text: sourceText,
+                  },
+                ]
+              : []),
+            {
+              type: "table",
+              fileId: "workspace:asset-" + request.assetId + "-data.json",
+              pointer: "",
+              columns: [
+                { label: "Item", key: "label" },
+                { label: "Count", key: "value" },
+              ],
+            },
+          ],
+        },
+      });
+      await writeFile(
+        join(root, "asset-" + request.assetId + "-turn.txt"),
+        String(n),
+      );
+      await emit({
+        type: "tool_end",
+        tool: "wme-asset",
+        toolId: "fixture-save",
+        status: "completed",
+      });
+      await emit({ type: "assistant_delta", delta: "Asset draft saved." });
+      await emit({ type: "completed" });
+      return;
+    }
     for (const delta of [
       "Synthetic protocol fixture: ",
       "the request reached the durable runtime.",
@@ -47,6 +170,10 @@ const system = await buildApp(
     port,
     publicOrigin: origin,
     secureCookies: false,
+    internalApiOrigin: native?.internalApiOrigin,
+    assetIdleMs: process.env.WME_E2E_ASSET_IDLE_MS
+      ? Number(process.env.WME_E2E_ASSET_IDLE_MS)
+      : 1500,
     hosts: [{ id: "local", name: "Initial host" }],
   },
   { runtime, jobs: false, webRoot },
@@ -55,7 +182,7 @@ const system = await buildApp(
 const remoteAttempts = new Map(),
   connected = [];
 const fixtureEndpoint = async () => ({
-  baseUrl: "http://fixture.invalid",
+  baseUrl: native?.providerOrigin ?? "http://fixture.invalid",
   managementKey: "fixture-management",
   clientKey: "fixture-client",
 });
@@ -64,6 +191,7 @@ system.inference.proxy = new ProxyClient(
   fixtureEndpoint,
   async (input, init = {}) => {
     const path = new URL(String(input)).pathname;
+    if (native && path.startsWith("/v1/")) return fetch(input, init);
     if (path.endsWith("/credentials"))
       return Response.json({ files: connected });
     if (path.endsWith("/observability/usage/api-keys"))
@@ -123,12 +251,14 @@ system.inference.proxy = new ProxyClient(
 );
 system.inference.models = async () => [
   { id: "gpt-test-fixture", name: "Synthetic test model", provider: "openai" },
+  ...["codex", "claude", "grok", "pi"].map((h) => ({
+    id: "synthetic-asset-" + h,
+    name: "Asset fixture " + h,
+    provider: h === "claude" ? "anthropic" : h === "grok" ? "xai" : "openai",
+  })),
 ];
 system.inference.validateSelection = async () => {};
-system.inference.issueGateway = async () => ({
-  baseUrl: "http://fixture.invalid",
-  token: "synthetic-scoped-fixture",
-});
+
 const owner = randomUUID();
 await system.ctx.db.run(
   "INSERT INTO users(id,org_id,email,name,role,enabled,created_at) VALUES (?,NULL,?,?,?,1,?)",
@@ -148,9 +278,7 @@ const headers = {
   cookie: `wme_session=${session.token}`,
   "x-csrf-token": session.csrfToken,
 };
-const output = resolve(
-  process.env.WME_E2E_OUTPUT ?? `${tmpdir()}/wme-e2e-evidence`,
-);
+
 await mkdir(output, { recursive: true });
 await writeFile(
   join(output, "auth.json"),
@@ -184,6 +312,7 @@ console.log(`Synthetic browser fixture ready at ${origin}`);
 for (const event of ["SIGINT", "SIGTERM"])
   process.once(event, async () => {
     await system.app.close();
+    await native?.close();
     await rm(stateDir, { recursive: true, force: true });
     process.exit(0);
   });

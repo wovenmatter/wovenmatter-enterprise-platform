@@ -26,11 +26,22 @@ export async function launchWorkspaceWorker(
   const definition = JSON.parse(
     await readFile("/control/definition.json", "utf8"),
   );
+  const assetWorkspace = definition.owner?.kind === "asset";
   const broker = await sessionBroker(
     brokerDirectory,
     request.projectId,
-    { origin: definition.egressProxyUrl, token: definition.egressToken },
+    {
+      origin: assetWorkspace
+        ? request.egressProxyUrl
+        : definition.egressProxyUrl,
+      token: assetWorkspace ? request.gateway.token : definition.egressToken,
+    },
     async () => {
+      if (assetWorkspace)
+        return {
+          origin: request.egressProxyUrl,
+          token: broker.activeGateway()?.token,
+        };
       const current = JSON.parse(
         await readFile("/control/definition.json", "utf8"),
       );
@@ -197,6 +208,7 @@ export async function launchWorkspaceWorker(
       broker.setGateway(next.gateway);
       const payload: ContainerRequest = {
         runId: next.runId,
+        ...(next.assetId ? { assetId: next.assetId } : {}),
         projectId: next.projectId,
         harness: next.harness,
         model: next.model,

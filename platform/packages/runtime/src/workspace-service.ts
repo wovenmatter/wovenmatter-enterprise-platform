@@ -242,7 +242,7 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
     const generation = request.generation ?? 0;
     if (!Number.isSafeInteger(generation) || generation < 0)
       throw failure("invalid_generation");
-    const signature = digest([request.mounts, request.access]);
+    const signature = digest([request.mounts, request.access, request.assetId]);
     const sessionKey = digest([
       request.conversationId,
       request.harness,
@@ -263,6 +263,8 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
       request.resumeId,
       generation,
       request.userId,
+      request.assetId,
+      request.workspaceLease,
     ]);
     const pending = await this.lane(
       request.conversationId,

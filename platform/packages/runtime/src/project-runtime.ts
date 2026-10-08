@@ -29,7 +29,19 @@ import { ensureStorageVolumes, volumeMount } from "./volumes.js";
 import { createIsolatedNetwork, validateNetworkPool } from "./networks.js";
 import type { DockerRuntimeOptions } from "./docker.js";
 const exec = promisify(execFile);
+const containerName = (id: string) =>
+  id.startsWith("asset-")
+    ? "wme-" + identity(id)
+    : "wme-project-" + identity(id);
+const ownerLabel = (id: string) =>
+  "com.wovenmatter.enterprise." +
+  (id.startsWith("asset-") ? "asset" : "project");
+const ownerId = (id: string) => (id.startsWith("asset-") ? id.slice(6) : id);
+const workspacePath = (root: string, id: string) =>
+  join(root, id.startsWith("asset-") ? "assets" : "projects", ownerId(id));
+
 type Placement = ProjectRuntimeSpec & {
+  computeReleased?: boolean;
   allocationId: string;
   network: string;
   status: "ready" | "deleted" | "purged";
@@ -91,7 +103,7 @@ export class ProjectDockerRuntime implements Runtime {
     ) as Placement;
   }
   private async inspect(p: Placement) {
-    const name = "wme-project-" + identity(p.projectId);
+    const name = containerName(p.projectId);
     try {
       const data = JSON.parse(
         (await this.command(["container", "inspect", name])).stdout,
@@ -99,8 +111,8 @@ export class ProjectDockerRuntime implements Runtime {
       if (
         data?.Config?.Labels?.["com.wovenmatter.enterprise.allocation"] !==
           p.allocationId ||
-        data?.Config?.Labels?.["com.wovenmatter.enterprise.project"] !==
-          p.projectId ||
+        data?.Config?.Labels?.[ownerLabel(p.projectId)] !==
+          ownerId(p.projectId) ||
         data?.Config?.Labels?.["com.wovenmatter.enterprise.organization"] !==
           p.organizationId
       )
@@ -159,6 +171,21 @@ export class ProjectDockerRuntime implements Runtime {
     identity(spec.projectId);
     identity(spec.organizationId);
     identity(spec.hostId);
+    if (spec.owner !== undefined || spec.projectId.startsWith("asset-")) {
+      if (
+        spec.owner?.kind !== "asset" ||
+        spec.projectId !== "asset-" + identity(spec.owner.assetId) ||
+        !Number.isSafeInteger(spec.workspaceLease) ||
+        spec.workspaceLease! < 0 ||
+        spec.scheduleEnabled !== false ||
+        (spec.scheduleMounts?.length ?? 0) !== 0
+      )
+        throw new RuntimeError(
+          "invalid_workspace",
+          "Invalid asset workspace ownership or lease",
+        );
+    }
+
     if (spec.egressProxyUrl || spec.egressToken) {
       if (
         !spec.egressProxyUrl ||
@@ -186,7 +213,8 @@ export class ProjectDockerRuntime implements Runtime {
       if (
         p.projectId !== spec.projectId ||
         p.organizationId !== spec.organizationId ||
-        p.hostId !== spec.hostId
+        p.hostId !== spec.hostId ||
+        JSON.stringify(p.owner) !== JSON.stringify(spec.owner)
       )
         throw new RuntimeError(
           "placement_conflict",
@@ -304,6 +332,18 @@ export class ProjectDockerRuntime implements Runtime {
       p = this.fresh(spec, "ready");
       await this.save(this.placementFile(spec.projectId), p);
     }
+    if (spec.owner) {
+      if (
+        (p.workspaceLease ?? 0) > spec.workspaceLease! ||
+        (p.computeReleased && (p.workspaceLease ?? 0) >= spec.workspaceLease!)
+      )
+        throw new RuntimeError(
+          "stale_workspace_lease",
+          "This asset admission has expired.",
+        );
+      p = { ...p, workspaceLease: spec.workspaceLease, computeReleased: false };
+      await this.save(this.placementFile(p.projectId), p);
+    }
     if (spec.egressToken && p.egressToken !== spec.egressToken) {
       p = {
         ...p,
@@ -339,7 +379,7 @@ export class ProjectDockerRuntime implements Runtime {
       return;
     }
     const root = this.options.storageRoots[0],
-      project = join(root, "projects", spec.projectId),
+      project = workspacePath(root, spec.projectId),
       library = join(root, "organizations", spec.organizationId, "files"),
       sessions = join(
         this.options.sessionRoot,
@@ -370,7 +410,7 @@ export class ProjectDockerRuntime implements Runtime {
           pool: this.options.networkPool,
           bridgeName: `br-wmerun${createHash("sha256").update(p.projectId).digest("hex").slice(0, 6)}`,
           labels: {
-            "com.wovenmatter.enterprise.project": p.projectId,
+            [ownerLabel(p.projectId)]: ownerId(p.projectId),
             "com.wovenmatter.enterprise.allocation": p.allocationId,
           },
         },
@@ -404,11 +444,11 @@ export class ProjectDockerRuntime implements Runtime {
     const args = [
       "create",
       "--name",
-      "wme-project-" + spec.projectId,
+      containerName(spec.projectId),
       "--restart",
       "unless-stopped",
       "--label",
-      "com.wovenmatter.enterprise.project=" + spec.projectId,
+      ownerLabel(spec.projectId) + "=" + ownerId(spec.projectId),
       "--label",
       "com.wovenmatter.enterprise.organization=" + spec.organizationId,
       "--label",
@@ -468,8 +508,71 @@ export class ProjectDockerRuntime implements Runtime {
       "/opt/runtime/src/project-daemon.js",
     ];
     await this.command(args);
-    await this.command(["start", "wme-project-" + spec.projectId]);
+    await this.command(["start", containerName(spec.projectId)]);
     await this.ready(spec.projectId);
+  }
+  releaseAsset(spec: ProjectRuntimeSpec) {
+    return this.lane(spec.projectId, async () => {
+      if (!spec.owner)
+        throw new RuntimeError(
+          "asset_only",
+          "Idle release requires asset ownership.",
+        );
+      const p = await this.placed(spec);
+      if (!p || p.workspaceLease !== spec.workspaceLease) return;
+      const c = await this.inspect(p);
+      if (c?.State.Running) {
+        const status = await this.send(p.projectId, { operation: "status" });
+        if (
+          status.runIds?.length ||
+          status.sessions?.some((x: any) => x.activeRun)
+        )
+          throw new RuntimeError(
+            "workspace_busy",
+            "Asset work is still active.",
+          );
+      }
+      await this.save(this.placementFile(p.projectId), {
+        ...p,
+        computeReleased: true,
+      });
+      if (c) {
+        if (c.State.Running) await this.command(["stop", "--time", "10", c.Id]);
+        await this.command(["rm", c.Id]);
+      }
+      let network: any;
+      try {
+        network = JSON.parse(
+          (await this.command(["network", "inspect", p.network])).stdout,
+        )[0];
+      } catch (e) {
+        const x = e as { code?: number; stderr?: string };
+        if (
+          x.code !== 1 ||
+          !(
+            x.stderr?.includes("No such") ||
+            x.stderr?.trim() ===
+              `Error response from daemon: network ${p.network} not found`
+          )
+        )
+          throw e;
+      }
+      if (network) {
+        if (
+          network.Labels?.["com.wovenmatter.enterprise.allocation"] !==
+            p.allocationId ||
+          network.Labels?.[ownerLabel(p.projectId)] !== ownerId(p.projectId)
+        )
+          throw new RuntimeError(
+            "resource_ownership",
+            "Asset network ownership cannot be verified.",
+          );
+        for (const [id, value] of Object.entries(network.Containers ?? {}))
+          if ((value as any).Name === this.options.gatewayContainer)
+            await this.command(["network", "disconnect", network.Id, id]);
+        await this.command(["network", "rm", network.Id]);
+      }
+    });
   }
   stopProject(spec: ProjectRuntimeSpec) {
     return this.lane(spec.projectId, async () => {
@@ -530,7 +633,7 @@ export class ProjectDockerRuntime implements Runtime {
         if (
           n.Labels?.["com.wovenmatter.enterprise.allocation"] !==
             p.allocationId ||
-          n.Labels?.["com.wovenmatter.enterprise.project"] !== p.projectId
+          n.Labels?.[ownerLabel(p.projectId)] !== ownerId(p.projectId)
         )
           throw new RuntimeError(
             "resource_ownership",
@@ -556,7 +659,7 @@ export class ProjectDockerRuntime implements Runtime {
           "--interactive",
           "--user",
           "0:0",
-          "wme-project-" + identity(projectId),
+          containerName(projectId),
           "node",
           "/opt/runtime/src/project-client.js",
         ],
@@ -630,7 +733,7 @@ export class ProjectDockerRuntime implements Runtime {
         "Runtime transport destination is not allowed.",
       );
     const root = this.options.storageRoots[0],
-      expected = join(root, "projects", request.projectId, "files"),
+      expected = join(workspacePath(root, request.projectId), "files"),
       library = join(root, "organizations", request.organizationId, "files");
     if (
       request.mounts.find((m) => m.target === "/workspace")?.source !== expected
@@ -693,6 +796,8 @@ export class ProjectDockerRuntime implements Runtime {
           request.resumeId,
           request.generation,
           request.userId,
+          request.assetId,
+          request.workspaceLease,
         ]),
       )
       .digest("hex");
@@ -722,6 +827,25 @@ export class ProjectDockerRuntime implements Runtime {
           status: "active",
         });
       signal?.throwIfAborted();
+      if (
+        (request.generation ?? 0) <
+        (await this.sessionFence(request.projectId, request.conversationId))
+      )
+        throw new RuntimeError(
+          "authority_revoked",
+          "This session environment has been stopped.",
+        );
+      const current = await this.placement(request.projectId);
+      if (
+        current.owner &&
+        (current.computeReleased ||
+          current.workspaceLease !== request.workspaceLease ||
+          request.assetId !== current.owner.assetId)
+      )
+        throw new RuntimeError(
+          "stale_workspace_lease",
+          "Asset authority has changed.",
+        );
       await this.send(request.projectId, {
         operation: "execute",
         request: { ...request, mounts },
@@ -836,20 +960,60 @@ export class ProjectDockerRuntime implements Runtime {
       cursor,
     });
   }
+  private fenceFile(projectId: string, conversationId: string) {
+    return join(
+      this.options.journalRoot,
+      "session-fences",
+      identity(projectId),
+      identity(conversationId) + ".json",
+    );
+  }
+  private async sessionFence(projectId: string, conversationId: string) {
+    try {
+      const value = JSON.parse(
+        await readFile(this.fenceFile(projectId, conversationId), "utf8"),
+      );
+      if (!Number.isSafeInteger(value.generation) || value.generation < 0)
+        throw new RuntimeError(
+          "invalid_generation",
+          "The session fence is unavailable.",
+        );
+      return value.generation as number;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+  }
   async stopSession(
     projectId: string,
     conversationId: string,
     generation: number,
   ) {
-    const placement = await this.placement(projectId),
-      container = await this.inspect(placement);
-    // Persisted API generation fences every future admission even when the container is stopped.
-    if (container?.State.Running)
-      await this.send(projectId, {
-        operation: "stop-session",
-        conversationId,
-        generation,
+    if (!Number.isSafeInteger(generation) || generation < 0)
+      throw new RuntimeError("invalid_generation", "Invalid session fence.");
+    return this.lane(projectId, async () => {
+      const current = await this.sessionFence(projectId, conversationId);
+      const fence = Math.max(current, generation);
+      // Persist even before first compute or while idle. A stale dispatch must
+      // not escape Stop by racing container recreation or a supervisor restart.
+      await this.save(this.fenceFile(projectId, conversationId), {
+        generation: fence,
       });
+      let placement: Placement;
+      try {
+        placement = await this.placement(projectId);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      const container = await this.inspect(placement);
+      if (container?.State.Running)
+        await this.send(projectId, {
+          operation: "stop-session",
+          conversationId,
+          generation: fence,
+        });
+    });
   }
   async cancel(runId: string) {
     let receipt: Receipt;
@@ -874,7 +1038,8 @@ export class ProjectDockerRuntime implements Runtime {
     }
     for (const id of projects) {
       const placement = await this.placement(id);
-      if (placement.status === "ready") await this.ensureProject(placement);
+      if (placement.status === "ready" && !placement.owner)
+        await this.ensureProject(placement);
     }
     return [];
   }

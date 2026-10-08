@@ -1,3 +1,4 @@
+import { readAssetOutput } from "../assets/files.js";
 import type { FastifyReply } from "fastify";
 import {
   AppError,
@@ -215,7 +216,10 @@ export async function source(
   a: Asset,
   user: User,
   fileId: string,
+  maxBytes = 4 * 1024 * 1024,
 ) {
+  if (fileId.startsWith("af_"))
+    return readAssetOutput(ctx, a, fileId, maxBytes);
   const auth = await authorizeFile(
     ctx,
     user,
@@ -233,7 +237,7 @@ export async function source(
     );
   return readCurrentFile(ctx, user, fileId, {
     projectId: a.project_id ?? undefined,
-    maxBytes: 4 * 1024 * 1024,
+    maxBytes,
   });
 }
 export function imageType(bytes: Buffer) {
@@ -300,8 +304,8 @@ async function rows(
     );
   return data as Record<string, unknown>[];
 }
-export async function renderReport(ctx: AppContext, a: Asset) {
-  const user = await creator(ctx, a),
+export async function renderReport(ctx: AppContext, a: Asset, actor?: User) {
+  const user = actor ?? (await creator(ctx, a)),
     report = validateReport(JSON.parse(a.document));
   let sourceBytes = 0,
     contentBytes = 0,
@@ -322,20 +326,13 @@ export async function renderReport(ctx: AppContext, a: Asset) {
     // the same authorized snapshot during this render.
     const remaining = 8 * 1024 * 1024 - sourceBytes;
     if (remaining <= 0) throw limited();
-    const auth = await authorizeFile(ctx, user, id, a.project_id ?? undefined);
-    if (
-      auth.row.org_id !== a.org_id ||
-      (auth.row.project_id && auth.row.project_id !== a.project_id)
-    )
-      throw new AppError(
-        403,
-        "report_source_scope",
-        "Report sources must belong to this project or its current library shares.",
-      );
-    const bytes = await readCurrentFile(ctx, user, id, {
-      projectId: a.project_id ?? undefined,
-      maxBytes: Math.min(remaining, 4 * 1024 * 1024),
-    });
+    const bytes = await source(
+      ctx,
+      a,
+      user,
+      id,
+      Math.min(remaining, 4 * 1024 * 1024),
+    );
     sourceBytes += bytes.length;
     cache.set(id, bytes);
     return bytes;
@@ -410,7 +407,7 @@ export async function renderReport(ctx: AppContext, a: Asset) {
   // Only this constant stylesheet is emitted. No author CSS, URL, HTML or attribute names.
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(a.name)}</title><style>body{font:17px system-ui;line-height:1.6;margin:2rem auto;padding:0 1rem;max-width:70rem;color:#172b24;background:#fff}p{white-space:pre-wrap}table{border-collapse:collapse;display:block;overflow:auto}th,td{padding:.5rem;border:1px solid #ccc;text-align:left}img,svg{max-width:100%;height:auto}summary{cursor:pointer}figure{margin:1rem 0}</style></head><body><main><h1>${escapeHtml(a.name)}</h1>${rendered.join("")}</main></body></html>`;
 }
-export function headers(reply: FastifyReply) {
+export function headers(reply: FastifyReply, preview = false) {
   reply
     .header("cache-control", "no-store")
     .header("referrer-policy", "no-referrer")
@@ -418,7 +415,7 @@ export function headers(reply: FastifyReply) {
     .header("cross-origin-resource-policy", "same-origin")
     .header(
       "content-security-policy",
-      "sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      `sandbox; default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors ${preview ? "'self'" : "'none'"}`,
     );
 }
 export { registerReports } from "./assets.js";

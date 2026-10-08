@@ -32,6 +32,9 @@ export interface RuntimeMount {
   access: Access;
 }
 export interface RuntimeRequest {
+  /** Dedicated asset draft capability; never inferred from shared project access. */
+  assetId?: string;
+  workspaceLease?: number;
   runId: string;
   organizationId: string;
   projectId: string;
@@ -64,6 +67,7 @@ export type ContainerRequest = Pick<
   | "gateway"
   | "egressProxyUrl"
   | "resumeId"
+  | "assetId"
 > & { mountEvidence?: MountEvidence[] };
 export interface SteeringInput {
   id: string;
@@ -73,6 +77,9 @@ export interface SteeringInput {
   content: string;
 }
 export interface ProjectRuntimeSpec {
+  /** Absent means a project. Asset IDs use a distinct asset- namespace on the legacy wire. */
+  owner?: { kind: "asset"; assetId: string };
+  workspaceLease?: number;
   projectId: string;
   organizationId: string;
   hostId: string;
@@ -82,6 +89,8 @@ export interface ProjectRuntimeSpec {
   scheduleMounts?: RuntimeMount[];
 }
 export interface Runtime {
+  /** Release only idle asset compute, conditional on the current workspace lease. Keep durable state. */
+  releaseAsset?(spec: ProjectRuntimeSpec): Promise<void>;
   ensureProject?(spec: ProjectRuntimeSpec): Promise<void>;
   updateProject?(spec: ProjectRuntimeSpec): Promise<void>;
   stopProject?(spec: ProjectRuntimeSpec): Promise<void>;

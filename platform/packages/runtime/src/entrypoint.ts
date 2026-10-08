@@ -1,3 +1,4 @@
+import { writeFile, unlink } from "node:fs/promises";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
 import { assertIsolation, proxy } from "./process-boundary.js";
@@ -58,6 +59,16 @@ async function turn(request: ContainerRequest) {
   };
   try {
     await verifyMountEvidence(request.mountEvidence!);
+    if (request.assetId)
+      await writeFile(
+        "/session/.wme-asset.json",
+        JSON.stringify(request.gateway),
+        { mode: 0o600 },
+      );
+    else
+      await unlink("/session/.wme-asset.json").catch((e) => {
+        if (e.code !== "ENOENT") throw e;
+      });
     if (!prepared) {
       await proxy(4101, "/broker/gateway.sock");
       if (request.egressProxyUrl) await proxy(4102, "/broker/egress.sock");

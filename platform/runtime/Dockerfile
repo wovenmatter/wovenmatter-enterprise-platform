@@ -39,6 +39,7 @@ RUN python3 -m venv /opt/document-tools \
 COPY --from=dependencies /opt/runtime/node_modules ./node_modules
 COPY --from=build /build/platform/dist/packages/runtime/src ./src
 RUN chmod 0755 /opt/runtime/src/background-cli.js && ln -s /opt/runtime/src/background-cli.js /usr/local/bin/wme-background
+RUN chmod 0755 /opt/runtime/src/asset-cli.js && ln -s /opt/runtime/src/asset-cli.js /usr/local/bin/wme-asset
 COPY platform/runtime/AGENTS.md /opt/runtime/AGENTS.md
 ENV NODE_ENV=production HOME=/home/agent PATH=/opt/document-tools/bin:/usr/local/bin:/usr/bin:/bin
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/wovenmatter-enterprise/

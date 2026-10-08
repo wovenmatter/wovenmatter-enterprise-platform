@@ -22,6 +22,7 @@ services:
       # Internal per-run proxy only; disabled unless the operator explicitly opts in.
       WME_EGRESS_ENABLED: ${WME_EGRESS_ENABLED:-false}
       WME_EGRESS_PORT: 4101
+      WME_ASSET_IDLE_SECONDS: ${WME_ASSET_IDLE_SECONDS:-300}
       WME_MAX_CONCURRENT_RUNS: ${WME_MAX_CONCURRENT_RUNS:-8}
       WME_MAX_CONCURRENT_RUNS_PER_ORGANIZATION: ${WME_MAX_CONCURRENT_RUNS_PER_ORGANIZATION:-4}
       WME_SUPERVISOR_SOCKET: ${WME_CANDIDATE_ROOT}/run/supervisor.sock

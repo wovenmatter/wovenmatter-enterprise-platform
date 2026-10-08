@@ -61,13 +61,17 @@ export async function createRuntimeEgress(options: RuntimeEgressOptions) {
   });
   let listening = false;
   const runtime: Runtime = {
+    releaseAsset: options.runtime.releaseAsset?.bind(options.runtime),
+    attach: options.runtime.attach?.bind(options.runtime),
+    acknowledge: options.runtime.acknowledge?.bind(options.runtime),
+    stopSession: options.runtime.stopSession?.bind(options.runtime),
     steer: options.runtime.steer?.bind(options.runtime),
     updateProject: options.runtime.updateProject?.bind(options.runtime),
     ensureProject: options.runtime.ensureProject
       ? async (spec) =>
           options.runtime.ensureProject!({
             ...spec,
-            ...(options.issueProjectCapability
+            ...(options.issueProjectCapability && !spec.owner
               ? {
                   egressProxyUrl: origin.origin,
                   egressToken: await options.issueProjectCapability(spec),
@@ -80,7 +84,7 @@ export async function createRuntimeEgress(options: RuntimeEgressOptions) {
       ? async (spec) =>
           options.runtime.restoreProject!({
             ...spec,
-            ...(options.issueProjectCapability
+            ...(options.issueProjectCapability && !spec.owner
               ? {
                   egressProxyUrl: origin.origin,
                   egressToken: await options.issueProjectCapability(spec),

@@ -20,6 +20,7 @@ export function identity(value: string): string {
 export function validateContainerRequest(input: ContainerRequest): void {
   identity(input.runId);
   identity(input.projectId);
+  if (input.assetId !== undefined) identity(input.assetId);
   if (
     !["codex", "claude", "grok", "pi"].includes(input.harness) ||
     !["read", "write"].includes(input.access)

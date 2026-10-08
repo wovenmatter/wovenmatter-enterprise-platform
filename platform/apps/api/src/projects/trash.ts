@@ -108,6 +108,19 @@ export async function purgeExpiredProject(ctx: AppContext, id: string) {
           if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
         }
       }
+      const assets = await ctx.db.all<{ id: string }>(
+        "SELECT id FROM reports WHERE project_id=?",
+        [id],
+      );
+      for (const asset of assets) {
+        const parent = join(ctx.config.stateDir, "asset-versions");
+        await mkdir(parent, { recursive: true, mode: 0o700 });
+        try {
+          await removeTree(parent, asset.id);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
       const hashes = await ctx.db.all<{
         hash: string;
       }>(
@@ -129,6 +142,36 @@ export async function purgeExpiredProject(ctx: AppContext, id: string) {
         },
         {
           sql: "DELETE FROM workspace_files WHERE project_id=?",
+          params: [id],
+        },
+        // Retain ordinary thread tombstones, but unlink asset FKs before their
+        // definitions and immutable output are irreversibly purged.
+        {
+          sql: "UPDATE conversations SET asset_id=NULL WHERE project_id=?",
+          params: [id],
+        },
+        {
+          sql: "UPDATE conversation_runs SET asset_id=NULL WHERE project_id=?",
+          params: [id],
+        },
+        {
+          sql: "UPDATE inference_gateway_tokens SET asset_id=NULL,revoked=1 WHERE project_id=?",
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM asset_agent_saves WHERE asset_id IN (SELECT id FROM reports WHERE project_id=?)",
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM asset_sources WHERE asset_id IN (SELECT id FROM reports WHERE project_id=?)",
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM asset_output_versions WHERE file_id IN (SELECT id FROM asset_output_files WHERE asset_id IN (SELECT id FROM reports WHERE project_id=?))",
+          params: [id],
+        },
+        {
+          sql: "DELETE FROM asset_output_files WHERE asset_id IN (SELECT id FROM reports WHERE project_id=?)",
           params: [id],
         },
         {

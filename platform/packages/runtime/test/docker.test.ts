@@ -45,7 +45,7 @@ if(a[0]==='create')save(container,{Id:'container1',Config:{Labels:labels(),Image
 if(['start','stop'].includes(a[0])){const c=load(container);c.State.Running=a[0]==='start';save(container,c);}
 if(a[0]==='rm')fs.rmSync(container,{force:true});
 if(a[0]==='network'&&a[1]==='rm'){if(fs.existsSync(root+'/fail-network-remove')){fs.rmSync(root+'/fail-network-remove');process.exit(1);}fs.rmSync(network,{force:true});}
-if(a[0]==='exec')for await(const line of createInterface({input:process.stdin})){const r=JSON.parse(line);if(r.operation==='status'){console.log(JSON.stringify({ready:true}));break;}if(r.operation==='policy'){console.log(JSON.stringify({ok:true}));break;}if(r.operation==='cancel'){console.log(JSON.stringify({ok:true}));break;}if(r.operation==='execute'){fs.writeFileSync(root+'/request-'+r.request.runId+'.json',JSON.stringify(r.request));console.log(JSON.stringify({ok:true}));break;}if(r.operation==='attach'){console.log(JSON.stringify({attachment:'synthetic-attachment'}));break;}if(r.operation==='poll'){console.log(JSON.stringify({events:['started','input_accepted','completed'].map((type,i)=>({type,sequence:i+1})).filter(e=>e.sequence>r.after),terminal:true}));break;}if(['acknowledge','stop-session'].includes(r.operation)){console.log(JSON.stringify({ok:true}));break;}}
+if(a[0]==='exec')for await(const line of createInterface({input:process.stdin})){const r=JSON.parse(line);if(r.operation==='status'){console.log(JSON.stringify(fs.existsSync(root+'/status.json')?load(root+'/status.json'):{ready:true}));break;}if(r.operation==='policy'){console.log(JSON.stringify({ok:true}));break;}if(r.operation==='cancel'){console.log(JSON.stringify({ok:true}));break;}if(r.operation==='execute'){fs.writeFileSync(root+'/request-'+r.request.runId+'.json',JSON.stringify(r.request));console.log(JSON.stringify({ok:true}));break;}if(r.operation==='attach'){console.log(JSON.stringify({attachment:'synthetic-attachment'}));break;}if(r.operation==='poll'){console.log(JSON.stringify({events:['started','input_accepted','completed'].map((type,i)=>({type,sequence:i+1})).filter(e=>e.sequence>r.after),terminal:true}));break;}if(['acknowledge','stop-session'].includes(r.operation)){console.log(JSON.stringify({ok:true}));break;}}
 process.stdin.destroy();
 `;
   await writeFile(binary, program);
@@ -365,5 +365,127 @@ test("runtime image changes require an explicit backed-up operator update", asyn
     JSON.parse(await readFile(join(f.root, "container.json"), "utf8")).State
       .Running,
     true,
+  );
+});
+
+test("asset compute releases only an idle matching lease and reopens durable workspace without creating project storage", async (t) => {
+  const f = await fixture(t),
+    assetId = "asset1",
+    projectId = "asset-" + assetId;
+  const spec = {
+    projectId,
+    organizationId: "org1",
+    hostId: "local",
+    owner: { kind: "asset" as const, assetId },
+    workspaceLease: 1,
+    scheduleEnabled: false,
+    scheduleMounts: [],
+  };
+  const root = join(f.files, "assets", assetId, "files"),
+    sessionDirectory = join(
+      f.sessions,
+      "org1",
+      projectId,
+      "sessions/thread1/codex/write",
+    );
+  await mkdir(root, { recursive: true });
+  await mkdir(sessionDirectory, { recursive: true });
+  await writeFile(join(root, "retained.txt"), "durable asset");
+  const request = {
+    ...f.request,
+    projectId,
+    assetId,
+    workspaceLease: 1,
+    access: "write" as const,
+    sessionDirectory,
+    mounts: [{ source: root, target: "/workspace", access: "write" as const }],
+    gateway: {
+      ...f.request.gateway,
+      baseUrl: "http://api:4100/enterprise/api/runtime/inference/" + projectId,
+    },
+  };
+  await f.runtime.ensureProject(spec);
+  await f.runtime.execute(request, () => {});
+  assert.ok((await f.commands()).find((c) => c.includes("wme-asset-asset1")));
+  assert.ok(
+    (await f.commands()).some((c) =>
+      c.includes("com.wovenmatter.enterprise.asset=asset1"),
+    ),
+  );
+  await writeFile(
+    join(f.root, "status.json"),
+    JSON.stringify({ ready: true, runIds: ["active-run"], sessions: [] }),
+  );
+  await assert.rejects(f.runtime.releaseAsset(spec), {
+    code: "workspace_busy",
+  });
+  assert.equal((await f.commands()).filter((c) => c[0] === "stop").length, 0);
+  await writeFile(
+    join(f.root, "status.json"),
+    JSON.stringify({
+      ready: true,
+      runIds: [],
+      sessions: [{ activeRun: "active-turn" }],
+    }),
+  );
+  await assert.rejects(f.runtime.releaseAsset(spec), {
+    code: "workspace_busy",
+  });
+  await writeFile(
+    join(f.root, "status.json"),
+    JSON.stringify({ ready: true, runIds: [], sessions: [] }),
+  );
+  await f.runtime.releaseAsset(spec);
+  assert.equal(
+    await readFile(join(root, "retained.txt"), "utf8"),
+    "durable asset",
+  );
+  await assert.rejects(f.runtime.ensureProject(spec), {
+    code: "stale_workspace_lease",
+  });
+  await f.runtime.ensureProject({ ...spec, workspaceLease: 2 });
+  const stops = (await f.commands()).filter((c) => c[0] === "stop").length;
+  await f.runtime.releaseAsset(spec);
+  assert.equal(
+    (await f.commands()).filter((c) => c[0] === "stop").length,
+    stops,
+    "stale release cannot stop newer lease",
+  );
+  await assert.rejects(
+    f.runtime.execute({ ...request, runId: "stale-admission" }, () => {}),
+    { code: "stale_workspace_lease" },
+  );
+  await f.runtime.execute(
+    { ...request, runId: "next-admission", workspaceLease: 2 },
+    () => {},
+  );
+  const restarted = new DockerRuntime(f.options);
+  await restarted.recover();
+  assert.equal(
+    (await f.commands()).filter((c) => c[0] === "create").length,
+    2,
+    "recovery cannot start idle asset compute",
+  );
+  await assert.rejects(f.runtime.releaseAsset(f.spec), { code: "asset_only" });
+});
+
+test("Stop before provisioning and while compute is absent durably fences delayed dispatch across supervisor restart", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.stopSession(f.spec.projectId, f.request.conversationId, 1);
+  assert.equal((await f.commands()).filter((c) => c[0] === "create").length, 0);
+  await f.runtime.ensureProject(f.spec);
+  const restarted = new DockerRuntime(f.options);
+  await assert.rejects(
+    restarted.execute(f.request, () => {}),
+    { code: "authority_revoked" },
+  );
+  await restarted.execute(
+    { ...f.request, runId: "current", generation: 1 },
+    () => {},
+  );
+  await restarted.stopSession(f.spec.projectId, f.request.conversationId, 0);
+  await assert.rejects(
+    restarted.execute({ ...f.request, runId: "late" }, () => {}),
+    { code: "authority_revoked" },
   );
 });
