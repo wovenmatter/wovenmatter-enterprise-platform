@@ -375,8 +375,8 @@ system.inference.proxy = new ProxyClient(
   },
 );
 system.inference.models = async () => [
-  { id: "gpt-test-fixture", name: "Synthetic test model", provider: "openai" },
-  ...["codex", "claude", "grok", "pi"].map((h) => ({
+  { id: "gpt-test-fixture", name: "Synthetic test model", provider: "openai", thinkingLevels: ["off", "low", "high"] },
+  ...["pi"].map((h) => ({
     id: "synthetic-asset-" + h,
     name: "Asset fixture " + h,
     provider: h === "claude" ? "anthropic" : h === "grok" ? "xai" : "openai",

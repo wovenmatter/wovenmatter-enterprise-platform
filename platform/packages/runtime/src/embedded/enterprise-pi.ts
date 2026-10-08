@@ -26,6 +26,7 @@ type EngineRecord = {
   tokenDigest: string;
   optionsKey: string;
   sdkGeneration: string;
+  thinkingOverride?: string;
 };
 
 export type EnterprisePiDependencies = {
@@ -234,6 +235,10 @@ function validatedPiOptions(request: ContainerRequest) {
       "Unsupported Pi thinking level.",
     );
   return { codeMode, subagentConcurrency, thinking };
+}
+
+function defaultThinkingLevel(request: ContainerRequest) {
+  return request.pi?.supportsReasoning === true ? "medium" : "off";
 }
 
 function anthropicModelDefinition(request: ContainerRequest) {
@@ -457,6 +462,7 @@ async function createEngine(
     tokenDigest: tokenDigest(request),
     optionsKey: optionsKey(request),
     sdkGeneration: runtime.generation,
+    thinkingOverride: validatedPiOptions(request).thinking,
   };
 }
 
@@ -555,12 +561,29 @@ export async function runEnterprisePi(
     record.sessionId = sessionId;
     await emit({ type: "native_session", sessionId });
     const options = validatedPiOptions(request);
-    if (options.thinking)
+    if (options.thinking !== undefined) {
       await record.engine.handle(
         "session/set_config_option",
         { sessionId, configId: "thinking", value: options.thinking },
         native.handle,
       );
+      record.thinkingOverride = options.thinking;
+    } else if (
+      record.thinkingOverride !== undefined ||
+      request.resumeId ||
+      retainedSessionId
+    ) {
+      await record.engine.handle(
+        "session/set_config_option",
+        {
+          sessionId,
+          configId: "thinking",
+          value: defaultThinkingLevel(request),
+        },
+        native.handle,
+      );
+      record.thinkingOverride = undefined;
+    }
     steering?.set(async (input) => {
       await record.engine.handle(
         "_session/steering",

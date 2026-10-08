@@ -50,6 +50,7 @@ export type Model = {
   id: string;
   name: string;
   provider: string;
+  thinkingLevels?: string[];
 };
 export type Conversation = {
   id: string;
@@ -205,7 +206,6 @@ export function ConversationsPage({ project }: { project: Project }) {
         <Modal title="New conversation" onClose={() => setCreating(false)}>
           <ConversationForm
             project={project}
-            models={models.data?.items ?? []}
             modelsError={models.error}
             onCancel={() => setCreating(false)}
             onSave={async (body) => {
@@ -301,151 +301,187 @@ function PiSDKSettings({ conversationId }: { conversationId: string }) {
 }
 export function ConversationForm({
   project,
-  models,
-  modelsError,
   conversation,
   onSave,
   onCancel,
 }: {
   project?: Project;
-  models: Model[];
   modelsError?: string;
   conversation?: Conversation;
   onSave: (body: unknown) => Promise<void>;
   onCancel: () => void;
 }) {
-  const [selectedAgent, setSelectedAgent] = useState(
-    conversation?.harness ?? "",
-  );
   return (
     <AsyncForm
-      submitLabel={conversation ? "Save changes" : "Create conversation"}
+      submitLabel={conversation ? "Save changes" : "Start session"}
       onCancel={onCancel}
       onSubmit={async (d) =>
-        onSave({
-          title: d.get("title"),
-          ...(conversation
-            ? {}
-            : {
-                mode: d.get("mode"),
-              }),
-          harness: d.get("harness") || null,
-          model: d.get("model"),
-          ...(["", "pi"].includes(selectedAgent)
+        onSave(
+          conversation
             ? {
+                title: d.get("title"),
                 pi: {
                   codeMode: d.get("codeMode"),
                   subagentConcurrency: Number(d.get("subagentConcurrency")),
-                  ...(d.get("thinking") ? { thinking: d.get("thinking") } : {}),
                 },
               }
-            : {}),
-        })
+            : { mode: d.get("mode") },
+        )
       }
     >
-      <Field label="Title">
-        <input
-          name="title"
-          defaultValue={conversation?.title ?? "New conversation"}
-          maxLength={200}
-          required
-          autoFocus
-        />
-      </Field>
-      <Field
-        label="Session permissions"
-        hint="Access is fixed for this thread. Invited participants share its authority to direct the agent."
-      >
-        <select
-          name="mode"
-          disabled={!!conversation}
-          defaultValue={conversation?.mode ?? "read"}
+      {conversation ? (
+        <>
+          <Field label="Title">
+            <input
+              name="title"
+              defaultValue={conversation.title}
+              maxLength={200}
+              required
+              autoFocus
+            />
+          </Field>
+          <details className="pi-options">
+            <summary>Pi Durable settings</summary>
+            <Field label="Code mode">
+              <select
+                name="codeMode"
+                defaultValue={conversation.pi?.codeMode ?? "on"}
+              >
+                <option value="on">Enabled</option>
+                <option value="only">Code mode only</option>
+                <option value="off">Disabled</option>
+              </select>
+            </Field>
+            <Field label="Concurrent subagents">
+              <input
+                name="subagentConcurrency"
+                type="number"
+                min={2}
+                max={24}
+                step={1}
+                defaultValue={conversation.pi?.subagentConcurrency ?? 8}
+              />
+            </Field>
+          </details>
+          <PiSDKSettings conversationId={conversation.id} />
+        </>
+      ) : (
+        <Field
+          label="Session permissions"
+          hint="Access is fixed for this session."
         >
-          <option value="read">Read-only</option>
-          {project?.access === "write" || conversation?.mode === "write" ? (
-            <option value="write">Full access</option>
-          ) : null}
-        </select>
-      </Field>
-      <Field label="Model">
-        <select name="model" required defaultValue={conversation?.model ?? ""}>
+          <select name="mode" defaultValue="read" autoFocus>
+            <option value="read">Read-only</option>
+            {project?.access === "write" ? (
+              <option value="write">Full access</option>
+            ) : null}
+          </select>
+        </Field>
+      )}
+    </AsyncForm>
+  );
+}
+function ModelControls({
+  conversation,
+  models,
+  disabled,
+  canEdit,
+  onSaving,
+  onSaved,
+  onError,
+}: {
+  conversation?: Conversation;
+  models: Model[];
+  disabled: boolean;
+  canEdit: boolean;
+  onSaving: (saving: boolean) => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const current = conversation?.model ?? "";
+  const currentThinking = conversation?.pi?.thinking ?? "";
+  const [value, setValue] = useState(current);
+  const [thinking, setThinking] = useState(currentThinking);
+  useEffect(() => {
+    setValue(current);
+    setThinking(currentThinking);
+  }, [current, currentThinking]);
+  const levels = models.find((m) => m.id === value)?.thinkingLevels ?? [];
+  async function change(body: unknown) {
+    onSaving(true);
+    onError("");
+    try {
+      const updated = await send<Conversation>(
+        "/enterprise/api/conversations/" + conversation!.id,
+        body,
+        "PATCH",
+      );
+      setValue(updated.model);
+      setThinking(updated.pi?.thinking ?? "");
+      onSaved();
+    } catch (error) {
+      setValue(current);
+      setThinking(currentThinking);
+      onError(errorMessage(error));
+    } finally {
+      onSaving(false);
+    }
+  }
+  return (
+    <div className="composer-model-controls">
+      <label>
+        <span className="sr-only">Model</span>
+        <select
+          aria-label="Conversation model"
+          title="Model"
+          value={value}
+          disabled={disabled || !canEdit || !conversation}
+          onChange={(e) => {
+            const model = e.target.value;
+            setValue(model);
+            setThinking("");
+            void change({ model });
+          }}
+        >
           <option value="" disabled>
             Select a model
           </option>
+          {current && !models.some((m) => m.id === current) ? (
+            <option value={current} disabled>
+              {current} (unavailable)
+            </option>
+          ) : null}
           {models.map((m) => (
-            <option key={`${m.provider}:${m.id}`} value={m.id}>
+            <option key={m.provider + ":" + m.id} value={m.id}>
               {m.name || m.id}
             </option>
           ))}
         </select>
-      </Field>
-      <Field label="Agent">
+      </label>
+      <label>
+        <span className="sr-only">Thinking</span>
         <select
-          name="harness"
-          value={selectedAgent}
-          onChange={(e) => setSelectedAgent(e.target.value)}
+          aria-label="Thinking level"
+          title="Thinking level"
+          value={thinking}
+          disabled={disabled || !canEdit || !conversation || !levels.length}
+          onChange={(e) => {
+            const next = e.target.value;
+            setThinking(next);
+            void change({ pi: { thinking: next || null } });
+          }}
         >
-          <option value="">Pi Durable (default)</option>
-          <option value="codex">Codex</option>
-          <option value="claude">Claude Code</option>
-          <option value="grok">Grok Build</option>
-          <option value="pi">Pi Durable</option>
+          <option value="">Model default</option>
+          {levels.map((level) => (
+            <option key={level} value={level}>
+              {level === "xhigh"
+                ? "Extra high"
+                : level.charAt(0).toUpperCase() + level.slice(1)}
+            </option>
+          ))}
         </select>
-      </Field>
-      {["", "pi"].includes(selectedAgent) ? (
-        <details className="pi-options">
-          <summary>Pi Durable settings</summary>
-          <Field label="Code mode">
-            <select
-              name="codeMode"
-              defaultValue={conversation?.pi?.codeMode ?? "on"}
-            >
-              <option value="on">Enabled</option>
-              <option value="only">Code mode only</option>
-              <option value="off">Disabled</option>
-            </select>
-          </Field>
-          <Field label="Concurrent subagents">
-            <input
-              name="subagentConcurrency"
-              type="number"
-              min={2}
-              max={24}
-              step={1}
-              defaultValue={conversation?.pi?.subagentConcurrency ?? 8}
-            />
-          </Field>
-          <Field
-            label="Thinking"
-            hint="Availability depends on the selected model."
-          >
-            <select
-              name="thinking"
-              defaultValue={conversation?.pi?.thinking ?? ""}
-            >
-              <option value="">Model default</option>
-              <option value="off">Off</option>
-              <option value="minimal">Minimal</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="xhigh">Extra high</option>
-              <option value="max">Maximum</option>
-            </select>
-          </Field>
-        </details>
-      ) : null}
-      {conversation && selectedAgent === "pi" ? (
-        <PiSDKSettings conversationId={conversation.id} />
-      ) : null}
-      {!models.length ? (
-        <p className="muted">
-          No models are available. An administrator needs to connect an
-          inference account.
-        </p>
-      ) : null}
-      <ErrorNotice message={modelsError} />
-    </AsyncForm>
+      </label>
+    </div>
   );
 }
 export function Thread({
@@ -487,6 +523,7 @@ export function Thread({
     restored?.kind ?? "message",
   );
   const [sending, setSending] = useState(false);
+  const [modelSaving, setModelSaving] = useState(false);
   const [uncertain, setUncertain] = useState(Boolean(restored));
   const request = useRef<
     | {
@@ -597,7 +634,11 @@ export function Thread({
           ),
         );
       if (event.type === "tool.completed") setTool("");
-      if (event.type === "members.changed" || event.type === "sdk.changed")
+      if (
+        event.type === "members.changed" ||
+        event.type === "sdk.changed" ||
+        event.type === "settings.changed"
+      )
         detail.reload();
       if (event.type === "asset.saved") assetSaved.current?.();
       if (event.type === "run.queued" || event.type === "run.started")
@@ -638,6 +679,7 @@ export function Thread({
       "message.steering",
       "message.delivery",
       "members.changed",
+      "settings.changed",
       "asset.saved",
       "access.revoked",
     ])
@@ -688,7 +730,11 @@ export function Thread({
     };
   }, [id]);
   async function submit() {
-    if (sending || (!draft.trim() && !request.current)) return;
+    if (sending || modelSaving || (!draft.trim() && !request.current)) return;
+    if (kind === "message" && !active.length && !detail.data?.model) {
+      setError("Select a model before sending a message.");
+      return;
+    }
     setSending(true);
     setError("");
     const pending = request.current ?? {
@@ -758,16 +804,7 @@ export function Thread({
               : detail.data?.mode === "write"
                 ? "Full access"
                 : "Read-only"}{" "}
-            ·{" "}
-            {(
-              {
-                pi: "Pi Durable",
-                codex: "Codex",
-                claude: "Claude Code",
-                grok: "Grok Build",
-              } as Record<string, string>
-            )[detail.data?.harness ?? ""] ?? detail.data?.harness}{" "}
-            · {detail.data?.model}
+            · Pi Durable · {detail.data?.model || "No model selected"}
           </small>
         </div>
         <div className="row-actions">
@@ -1025,6 +1062,20 @@ export function Thread({
                 <option value="comment">Comment</option>
               </select>
             </label>
+            <ModelControls
+              conversation={detail.data}
+              models={models}
+              disabled={
+                active.length > 0 || sending || uncertain || modelSaving
+              }
+              canEdit={creator}
+              onSaving={setModelSaving}
+              onSaved={() => {
+                detail.reload();
+                refresh();
+              }}
+              onError={setError}
+            />
             <span className="connection-state">
               {kind === "comment"
                 ? "Saved for later agent context. "
@@ -1065,7 +1116,9 @@ export function Thread({
                       ? "Send comment"
                       : "Send message"
                 }
-                disabled={sending || (!draft.trim() && !uncertain)}
+                disabled={
+                  sending || modelSaving || (!draft.trim() && !uncertain)
+                }
               >
                 {uncertain ? "Retry" : <ArrowUp size={20} />}
               </button>
@@ -1077,7 +1130,6 @@ export function Thread({
         <Modal title="Conversation settings" onClose={() => setEditing(false)}>
           <ConversationForm
             project={project}
-            models={models}
             conversation={detail.data}
             onCancel={() => setEditing(false)}
             onSave={async (body) => {

@@ -231,7 +231,7 @@ async function fixture(modelEntries?: Record<string, unknown>[]) {
       userId,
       runId: randomUUID(),
       model: "gpt-example",
-      harness: "codex",
+      harness: "pi",
     } satisfies RunScope,
     close: async () => {
       await app.close();
@@ -478,7 +478,7 @@ test("gateway exposes no management endpoint and rejects anonymous requests", as
     await f.close();
   }
 });
-test("model selection verifies the actual catalog and native provider match", async () => {
+test("model selection verifies the actual catalog and rejects non-Pi harnesses", async () => {
   const f = await fixture();
   try {
     assert.equal(await f.service.defaultHarness(f.orgId, "gpt-example"), "pi");
@@ -502,11 +502,11 @@ test("model selection verifies the actual catalog and native provider match", as
       (await f.service.resolvePiModel(f.orgId, "claude-example")).api,
       "anthropic-messages",
     );
-    await f.service.validateSelection(f.orgId, "gpt-example", "codex");
+    await f.service.validateSelection(f.orgId, "gpt-example", "pi");
     await f.service.validateSelection(f.orgId, "claude-example", "pi");
     await assert.rejects(
       () => f.service.validateSelection(f.orgId, "claude-example", "codex"),
-      { code: "harness_model_mismatch" },
+      { code: "invalid_harness" },
     );
     await assert.rejects(
       () => f.service.validateSelection(f.orgId, "imaginary-model", "pi"),

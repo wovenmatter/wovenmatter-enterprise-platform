@@ -114,6 +114,7 @@ export type User = {
   role: "owner" | "admin" | "member";
   enabled: boolean;
   theme: "green" | "cognac";
+  defaultModel?: string | null;
   invitationPending?: boolean;
   libraryAccess?: "read" | "write";
 };

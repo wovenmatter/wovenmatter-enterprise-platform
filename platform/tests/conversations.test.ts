@@ -23,9 +23,11 @@ async function durableRuntime(t: any) {
   const dir = await mkdtemp(join(tmpdir(), "wme-durable-api-")),
     requests: RuntimeRequest[] = [],
     stopped: string[] = [];
+  let starts = 0;
   const turns = new Map<string, { emit: EventSink; finish: () => void }>(),
     attachments = new Map<string, string>();
   const workspace = new WorkspaceService(dir, async (request) => {
+    starts++;
     let close!: () => void, finish: (() => void) | undefined;
     const closed = new Promise<void>((resolve) => {
       close = resolve;
@@ -101,6 +103,9 @@ async function durableRuntime(t: any) {
     workspace,
     requests,
     stopped,
+    get starts() {
+      return starts;
+    },
     rejectAcks(value: boolean) {
       rejectAck = value;
     },
@@ -409,9 +414,16 @@ async function fixture(
     },
     inference: {
       async defaultHarness() {
-        return "codex" as const;
+        return "pi" as const;
       },
       async validateSelection() {},
+      async models() {
+        return [
+          { id: "gpt-test", thinkingLevels: ["off", "low", "high"] },
+          { id: "gpt-test-next", thinkingLevels: [] },
+          { id: "gpt-test-third", thinkingLevels: [] },
+        ];
+      },
       async issueGateway(input: { runId: string }) {
         issued.push(input.runId);
         return {
@@ -460,7 +472,7 @@ async function fixture(
 test("private conversations require current project and thread membership; sharing does not grant project rights", async (t) => {
   const f = await fixture(t),
     c = await f.create();
-  assert.equal(c.harness, "codex");
+  assert.equal(c.harness, "pi");
   assert.deepEqual((await f.service.list(f.users[1], f.project)).items, []);
   await assert.rejects(f.service.get(f.users[1], c.id), {
     statusCode: 404,
@@ -552,6 +564,7 @@ test("active messages steer in server order; idle follow-ups resume persisted na
   assert.equal(f.runtime.steers[0].input.content, "Two");
   assert.equal(f.runtime.requests.length, 1);
   await f.runtime.complete(first.run!.id);
+  await f.service.update(f.users[0], c.id, { model: "gpt-test-next" });
   f.mounts.push({
     source: "/trusted/new-share",
     target: "/workspace/reference",
@@ -565,6 +578,67 @@ test("active messages steer in server order; idle follow-ups resume persisted na
   assert.equal(f.runtime.requests[1].resumeId, `native-${first.run!.id}`);
   assert.equal(f.runtime.requests[1].mounts.length, 2);
   await f.runtime.complete(next.run!.id);
+});
+test("Pi native session stays continuous across model A to B to A", async (t) => {
+  const durable = await durableRuntime(t),
+    f = await fixture(t, 20, {}, durable.runtime),
+    c = await f.create();
+  const first = await f.service.admit(f.users[0], c.id, {
+    content: "Model A sees alpha",
+    requestId: randomUUID(),
+  });
+  await until(() => durable.requests.length === 1);
+  await durable.event(first.run!.id, {
+    type: "assistant_delta",
+    delta: "alpha ",
+  });
+  await durable.event(first.run!.id, { type: "completed" });
+  await until(
+    async () =>
+      (await f.service.runs(f.users[0], c.id)).items[0].status === "completed",
+  );
+  await f.service.update(f.users[0], c.id, { model: "gpt-test-next" });
+  const second = await f.service.admit(f.users[0], c.id, {
+    content: "Model B sees beta after alpha",
+    requestId: randomUUID(),
+  });
+  await until(() => durable.requests.length === 2);
+  assert.equal(durable.requests[1].model, "gpt-test-next");
+  assert.equal(durable.requests[1].resumeId, `native-${c.id}`);
+  await durable.event(second.run!.id, {
+    type: "assistant_delta",
+    delta: "beta ",
+  });
+  await durable.event(second.run!.id, { type: "completed" });
+  await until(
+    async () =>
+      (await f.service.runs(f.users[0], c.id)).items[0].status === "completed",
+  );
+  await f.service.update(f.users[0], c.id, { model: "gpt-test" });
+  const third = await f.service.admit(f.users[0], c.id, {
+    content: "Model A sees gamma after beta",
+    requestId: randomUUID(),
+  });
+  await until(() => durable.requests.length === 3);
+  assert.equal(durable.requests[2].model, "gpt-test");
+  assert.equal(durable.requests[2].resumeId, `native-${c.id}`);
+  assert.equal(durable.starts, 1);
+  await durable.event(third.run!.id, {
+    type: "assistant_delta",
+    delta: "gamma",
+  });
+  await durable.event(third.run!.id, { type: "completed" });
+  await until(
+    async () =>
+      (await f.service.runs(f.users[0], c.id)).items[0].status === "completed",
+  );
+  const assistant = (await f.service.messages(f.users[0], c.id)).items
+    .filter((message) => message.role === "assistant")
+    .map((message) => message.content)
+    .join("");
+  assert.match(assistant, /alpha/);
+  assert.match(assistant, /beta/);
+  assert.match(assistant, /gamma/);
 });
 test("full threads retain their mode and loss of project access cancels active work and inference", async (t) => {
   const f = await fixture(t),
@@ -692,7 +766,7 @@ test("restart marks unknown dispatch interrupted and never repeats it", async (t
         aid,
         "dispatching",
         "read",
-        "codex",
+        "pi",
         "gpt-test",
         stamp,
       ],
@@ -1154,33 +1228,56 @@ test("closing the HTTP server terminates persistent SSE without waiting for a br
   while (!(await reader.read()).done) {}
   await reader.cancel();
 });
-test("provider default uses catalog ownership, and an explicit null resets a custom harness choice", async (t) => {
+test("new conversations are Pi Durable, can start without a model, and keep harness fixed through settings edits", async (t) => {
   const f = await fixture(t);
-  (
-    f.deps
-      .inference as import("../apps/api/src/conversations/types.js").ConversationDependencies["inference"]
-  ).defaultHarness = async () => "pi";
+  f.deps.inference.models = async () => [];
   const c = await f.service.create(f.users[0], f.project, {
-    title: "OpenRouter",
+    title: "No model yet",
     mode: "read",
-    model: "anthropic/claude-test",
   });
   assert.equal(c.harness, "pi");
-  assert.equal(
-    (
-      await f.service.update(f.users[0], c.id, {
-        harness: "claude",
-      })
-    ).harness,
-    "claude",
+  assert.equal(c.model, "");
+  await f.service.admit(f.users[0], c.id, {
+    kind: "comment",
+    content: "Remember this without starting native work",
+    requestId: randomUUID(),
+  });
+  assert.equal(f.runtime.requests.length, 0);
+  await assert.rejects(
+    f.service.admit(f.users[0], c.id, {
+      content: "Start",
+      requestId: randomUUID(),
+    }),
+    { code: "model_required" },
   );
   assert.equal(
     (
       await f.service.update(f.users[0], c.id, {
+        title: "Selected",
+        model: "gpt-test",
         harness: null,
       })
-    ).harness,
-    "pi",
+    ).model,
+    "gpt-test",
+  );
+  await assert.rejects(
+    f.service.create(f.users[0], f.project, {
+      title: "Legacy",
+      mode: "read",
+      model: "gpt-test",
+      harness: "codex",
+    }),
+    { code: "fixed_harness" },
+  );
+  await assert.rejects(
+    f.service.update(f.users[0], c.id, { harness: "claude" }),
+    { code: "fixed_harness" },
+  );
+  assert.equal(
+    (await f.service.events(f.users[0], c.id, 0)).some(
+      (event) => event.type === "settings.changed",
+    ),
+    true,
   );
 });
 test("API restart refuses to release an active run when the supervisor cannot confirm cleanup", async (t) => {
@@ -2020,5 +2117,42 @@ test("approved SDK activation is owner scoped, idle only, fenced and reaches the
     (await f.service.activateSDK(f.users[0], c.id, "approved-one"))
       .selectedGeneration,
     "approved-one",
+  );
+});
+
+test("permission-only launch resolves user defaults and thinking controls respect the selected model", async (t) => {
+  const f = await fixture(t);
+  f.users[0].defaultModel = "gpt-test-next";
+  const c = await f.service.create(f.users[0], f.project, { mode: "read" });
+  assert.equal(c.model, "gpt-test-next");
+  assert.equal(c.mode, "read");
+  assert.equal(c.harness, "pi");
+  assert.equal((await f.service.members(f.users[0], c.id)).items.length, 1);
+  f.users[0].defaultModel = "unavailable";
+  assert.equal(
+    (await f.service.create(f.users[0], f.project, { mode: "read" })).model,
+    "gpt-test",
+  );
+  await assert.rejects(f.service.update(f.users[0], c.id, { mode: "write" }), {
+    code: "fixed_mode",
+  });
+  await f.service.update(f.users[0], c.id, { model: "gpt-test" });
+  await f.service.update(f.users[0], c.id, {
+    pi: { thinking: "high", codeMode: "off" },
+  });
+  const reset = await f.service.update(f.users[0], c.id, {
+    pi: { thinking: null },
+  });
+  assert.equal(reset.pi.thinking, undefined);
+  assert.equal(reset.pi.codeMode, "off");
+  await assert.rejects(
+    f.service.update(f.users[0], c.id, { pi: { thinking: "max" } }),
+    { code: "invalid_pi_options" },
+  );
+  await f.service.update(f.users[0], c.id, { pi: { thinking: "high" } });
+  assert.equal(
+    (await f.service.update(f.users[0], c.id, { model: "gpt-test-next" })).pi
+      .thinking,
+    undefined,
   );
 });

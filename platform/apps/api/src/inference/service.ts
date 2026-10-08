@@ -43,6 +43,7 @@ export type InferenceModel = {
   maxOutputTokens?: number;
   supportsImages?: boolean;
   supportsReasoning?: boolean;
+  thinkingLevels?: string[];
 };
 export type PiProvider =
   | "openai"
@@ -1328,7 +1329,21 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
             item.supportsReasoning ??
             object(item.capabilities).reasoning,
         ),
-      }));
+      }))
+      .map((model) => {
+        const provider = model.provider as PiProvider;
+        const reasoning =
+          model.supportsReasoning ??
+          knownPiCapabilities(provider, model.id)?.supportsReasoning;
+        return {
+          ...model,
+          thinkingLevels: reasoning
+            ? provider === "anthropic"
+              ? ["off", "low", "medium", "high", "max"]
+              : ["off", "minimal", "low", "medium", "high"]
+            : [],
+        };
+      });
   }
   async resolvePiModel(orgId: string, model: string): Promise<ResolvedPiModel> {
     const selected = (await this.models(orgId)).find(
@@ -1367,10 +1382,7 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
       accountAffinity: "proxy-session-affinity",
     };
   }
-  async defaultHarness(
-    orgId: string,
-    model: string,
-  ): Promise<"codex" | "claude" | "grok" | "pi"> {
+  async defaultHarness(orgId: string, model: string): Promise<"pi"> {
     const selected = (await this.models(orgId)).find(
       (item) => item.id === model,
     );
@@ -1388,11 +1400,11 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
     harness: string,
     connectionId?: string,
   ) {
-    if (!["codex", "claude", "grok", "pi"].includes(harness))
+    if (harness !== "pi")
       throw new InferenceError(
         400,
         "invalid_harness",
-        "Choose a supported agent.",
+        "Sessions use Pi Durable.",
       );
     if (connectionId)
       throw new InferenceError(
@@ -1408,17 +1420,6 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
         400,
         "model_unavailable",
         "This model is not available in the organization inference pool.",
-      );
-    const expected: Record<string, string> = {
-      codex: "openai",
-      claude: "anthropic",
-      grok: "xai",
-    };
-    if (harness !== "pi" && selected.provider !== expected[harness])
-      throw new InferenceError(
-        400,
-        "harness_model_mismatch",
-        "Choose the native agent for this model, or choose Pi.",
       );
   }
   async usage(orgId: string) {

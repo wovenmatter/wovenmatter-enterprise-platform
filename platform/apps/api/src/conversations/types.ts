@@ -1,6 +1,6 @@
 import type { Runtime } from "@wovenmatter-enterprise/runtime";
 import type { AppContext, User } from "../context.js";
-export type Harness = "codex" | "claude" | "grok" | "pi";
+export type Harness = "pi";
 export type Mode = "read" | "write";
 export interface ConversationRow {
   pi_options?: string;
@@ -112,6 +112,7 @@ export interface ConversationDependencies {
       harness: string,
       connectionId?: string,
     ): Promise<void>;
+    models?(orgId: string): Promise<Array<{ id: string; thinkingLevels?: string[] }>>;
   };
   recheckIntervalMs?: number;
   maxConcurrentRuns?: number;

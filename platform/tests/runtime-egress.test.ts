@@ -17,7 +17,7 @@ const request: RuntimeRequest = {
   organizationId: "test-org",
   projectId: "test-project",
   conversationId: "test-thread",
-  harness: "codex",
+  harness: "pi",
   model: "test-model",
   prompt: "Synthetic test",
   access: "read",

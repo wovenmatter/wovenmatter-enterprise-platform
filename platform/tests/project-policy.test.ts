@@ -115,7 +115,7 @@ test("thread participant picker includes implicit project admins but excludes ot
     },
     now = new Date().toISOString();
   await f.db.run(
-    "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at) VALUES(?,?,?,?,'Private thread','write','codex','fixture',?,?)",
+    "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at) VALUES(?,?,?,?,'Private thread','write','pi','fixture',?,?)",
     [thread.id, f.orgA, f.projectA, f.users.full.id, now, now],
   );
   await f.db.run(

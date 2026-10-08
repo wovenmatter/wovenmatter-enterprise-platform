@@ -246,8 +246,6 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
     const sessionKey = digest([
       request.conversationId,
       request.harness,
-      request.model,
-      request.connectionId,
       request.access,
       generation,
     ]);
@@ -261,6 +259,9 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
       request.access,
       request.prompt,
       request.resumeId,
+      request.pi,
+      request.gateway,
+      request.egressProxyUrl,
       generation,
       request.userId,
       request.assetId,

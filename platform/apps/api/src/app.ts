@@ -270,6 +270,7 @@ export async function buildApp(
       resolvePiModel: (orgId, model) => inference.resolvePiModel(orgId, model),
       defaultHarness: (orgId, model) => inference.defaultHarness(orgId, model),
       validateSelection: (...args) => inference.validateSelection(...args),
+      models: (orgId) => inference.models(orgId),
     },
   });
   let accessSyncPending = false;

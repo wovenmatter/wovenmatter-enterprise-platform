@@ -232,7 +232,11 @@ function anthropicGateway(t: test.TestContext, scripts?: unknown[][]) {
   t.after(() => {
     globalThis.fetch = original;
   });
-  return { baseUrl: "https://gateway.example.test", requests, nativeFetch: original };
+  return {
+    baseUrl: "https://gateway.example.test",
+    requests,
+    nativeFetch: original,
+  };
 }
 
 function claudeQueryFixture(nativeFetch: typeof fetch) {
@@ -242,7 +246,10 @@ function claudeQueryFixture(nativeFetch: typeof fetch) {
       options: {
         env: Record<string, string>;
         model: string;
-        hooks?: Record<string, Array<{ hooks: Array<(event?: unknown) => unknown> }>>;
+        hooks?: Record<
+          string,
+          Array<{ hooks: Array<(event?: unknown) => unknown> }>
+        >;
       };
     };
     return {
@@ -251,8 +258,9 @@ function claudeQueryFixture(nativeFetch: typeof fetch) {
         for await (const frame of prompt) {
           const text = (
             frame as { message?: { content?: Array<{ text?: string }> } }
-          ).message?.content?.find((block) => typeof block.text === "string")
-            ?.text;
+          ).message?.content?.find(
+            (block) => typeof block.text === "string",
+          )?.text;
           if (text?.startsWith("/compact")) compact = true;
           if (compact) break;
         }
@@ -430,7 +438,7 @@ test("Pi provider metadata maps Anthropic and xAI to native gateway APIs", () =>
       }).provider,
       api: enterprisePiRoute({
         ...base,
-      pi: { provider: "anthropic", api: "anthropic-messages" },
+        pi: { provider: "anthropic", api: "anthropic-messages" },
       }).api,
       baseUrl: enterprisePiRoute({
         ...base,
@@ -504,9 +512,7 @@ test("runPi uses Woven Claude native runtime through scoped Enterprise gateway",
   assert.equal(generation.beta, "fine-grained-tool-streaming-2025-05-14");
   assert.match(JSON.stringify(generation.body), /"model":"claude-fixture"/);
   assert.match(
-    JSON.stringify(
-      events.filter((event) => event.type === "native_records"),
-    ),
+    JSON.stringify(events.filter((event) => event.type === "native_records")),
     /claude-sdk/,
   );
 });
@@ -554,7 +560,8 @@ test("provider compaction uses scoped Enterprise Responses compact gateway", asy
     const body = JSON.parse(String(init?.body ?? "{}"));
     requests.push({
       url: new URL(String(url)).pathname,
-      authorization: new Headers(init?.headers).get("authorization") ?? undefined,
+      authorization:
+        new Headers(init?.headers).get("authorization") ?? undefined,
       body,
     });
     assert.equal(body.model, "gpt-5-fixture");
@@ -664,8 +671,9 @@ test("runPi rejects duplicate run id with different content", async (t) => {
     undefined,
     { sessionDirectory: directory, cwd: directory },
   );
-  const sessionId = firstEvents.find((event) => event.type === "native_session")!
-    .sessionId;
+  const sessionId = firstEvents.find(
+    (event) => event.type === "native_session",
+  )!.sessionId;
   const secondGateway = gateway(t, [textStream("Should not run", "resp_bad")]);
   const secondEvents: RuntimeEvent[] = [];
   await runEnterprisePi(
@@ -683,10 +691,15 @@ test("runPi rejects duplicate run id with different content", async (t) => {
     undefined,
     { sessionDirectory: directory, cwd: directory },
   );
-  assert.equal(secondEvents.at(-1)?.type, "failed", JSON.stringify(secondEvents));
   assert.equal(
-    secondGateway.requests.filter((entry) => entry.url.includes("/v1/responses"))
-      .length,
+    secondEvents.at(-1)?.type,
+    "failed",
+    JSON.stringify(secondEvents),
+  );
+  assert.equal(
+    secondGateway.requests.filter((entry) =>
+      entry.url.includes("/v1/responses"),
+    ).length,
     0,
     JSON.stringify(secondGateway.requests),
   );
@@ -785,9 +798,12 @@ test("runPi refreshes retained gateway token while preserving native session", a
     retained,
     { sessionDirectory: directory, cwd: directory },
   );
-  const sessionId = firstEvents.find((event) => event.type === "native_session")!
-    .sessionId;
-  const secondGateway = gateway(t, [textStream("Second token", "resp_token_2")]);
+  const sessionId = firstEvents.find(
+    (event) => event.type === "native_session",
+  )!.sessionId;
+  const secondGateway = gateway(t, [
+    textStream("Second token", "resp_token_2"),
+  ]);
   const secondEvents: RuntimeEvent[] = [];
   await runEnterprisePi(
     {
@@ -883,8 +899,9 @@ test("runPi reopens native session with stable gateway route across run ids", as
     undefined,
     { sessionDirectory: directory, cwd: directory },
   );
-  const sessionId = firstEvents.find((event) => event.type === "native_session")!
-    .sessionId;
+  const sessionId = firstEvents.find(
+    (event) => event.type === "native_session",
+  )!.sessionId;
   const providerBefore = JSON.stringify(firstGateway.requests).match(
     /local-server-[a-f0-9-]{36}/,
   )?.[0];
@@ -913,9 +930,143 @@ test("runPi reopens native session with stable gateway route across run ids", as
   );
   assert.match(JSON.stringify(secondGateway.requests), /First durable answer/);
   assert.equal(
-    JSON.stringify(secondGateway.requests).match(/local-server-[a-f0-9-]{36}/)?.[0],
+    JSON.stringify(secondGateway.requests).match(
+      /local-server-[a-f0-9-]{36}/,
+    )?.[0],
     providerBefore,
   );
+});
+
+test("runPi keeps one durable session through model A to B to A across worker reopen", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "wme-enterprise-pi-aba-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const firstGateway = gateway(t, [
+    textStream("Alpha from model A", "resp_a1"),
+  ]);
+  const firstEvents: RuntimeEvent[] = [];
+  await runEnterprisePi(
+    {
+      ...request(firstGateway.baseUrl),
+      runId: "10000000-0000-4000-8000-000000000001",
+      model: "fixture-model-a",
+      pi: { provider: "openai", routeIdentity: "route-a" },
+    },
+    (event) => {
+      firstEvents.push(event);
+    },
+    new AbortController().signal,
+    undefined,
+    undefined,
+    { sessionDirectory: directory, cwd: directory },
+  );
+  assert.equal(firstEvents.at(-1)?.type, "completed");
+  const sessionId = firstEvents.find(
+    (event) => event.type === "native_session",
+  )!.sessionId;
+  const secondGateway = gateway(t, [
+    textStream("Beta from model B", "resp_b1"),
+  ]);
+  const secondEvents: RuntimeEvent[] = [];
+  await runEnterprisePi(
+    {
+      ...request(secondGateway.baseUrl),
+      runId: "10000000-0000-4000-8000-000000000002",
+      model: "fixture-model-b",
+      prompt: "Continue on model B",
+      resumeId: sessionId,
+      pi: { provider: "xai", routeIdentity: "route-b" },
+    },
+    (event) => {
+      secondEvents.push(event);
+    },
+    new AbortController().signal,
+    undefined,
+    undefined,
+    { sessionDirectory: directory, cwd: directory },
+  );
+  assert.equal(secondEvents.at(-1)?.type, "completed");
+  assert.equal(
+    secondEvents.find((event) => event.type === "native_session")!.sessionId,
+    sessionId,
+  );
+  assert.match(JSON.stringify(secondGateway.requests), /Alpha from model A/);
+  const thirdGateway = gateway(t, [
+    textStream("Gamma from model A", "resp_a2"),
+  ]);
+  const thirdEvents: RuntimeEvent[] = [];
+  await runEnterprisePi(
+    {
+      ...request(thirdGateway.baseUrl),
+      runId: "10000000-0000-4000-8000-000000000003",
+      model: "fixture-model-a",
+      prompt: "Return to model A",
+      resumeId: sessionId,
+      pi: { provider: "openai", routeIdentity: "route-a" },
+    },
+    (event) => {
+      thirdEvents.push(event);
+    },
+    new AbortController().signal,
+    undefined,
+    undefined,
+    { sessionDirectory: directory, cwd: directory },
+  );
+  assert.equal(thirdEvents.at(-1)?.type, "completed");
+  assert.equal(
+    thirdEvents.find((event) => event.type === "native_session")!.sessionId,
+    sessionId,
+  );
+  const thirdPayload = JSON.stringify(thirdGateway.requests);
+  assert.match(thirdPayload, /Alpha from model A/);
+  assert.match(thirdPayload, /Beta from model B/);
+});
+
+test("runPi clears explicit thinking override back to model default", async (t) => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "wme-enterprise-pi-thinking-"),
+  );
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const retained: { pi?: unknown } = {};
+  const firstGateway = gateway(t, [textStream("High thinking", "resp_high")]);
+  const firstEvents: RuntimeEvent[] = [];
+  await runEnterprisePi(
+    {
+      ...request(firstGateway.baseUrl),
+      runId: "20000000-0000-4000-8000-000000000001",
+      pi: { provider: "openai", supportsReasoning: true, thinking: "high" },
+    },
+    (event) => {
+      firstEvents.push(event);
+    },
+    new AbortController().signal,
+    undefined,
+    retained,
+    { sessionDirectory: directory, cwd: directory },
+  );
+  const sessionId = firstEvents.find(
+    (event) => event.type === "native_session",
+  )!.sessionId;
+  const secondGateway = gateway(t, [
+    textStream("Default thinking", "resp_default"),
+  ]);
+  await runEnterprisePi(
+    {
+      ...request(secondGateway.baseUrl),
+      runId: "20000000-0000-4000-8000-000000000002",
+      prompt: "Clear thinking override",
+      resumeId: sessionId,
+      pi: { provider: "openai", supportsReasoning: true },
+    },
+    async () => {},
+    new AbortController().signal,
+    undefined,
+    retained,
+    { sessionDirectory: directory, cwd: directory },
+  );
+  const payload = JSON.stringify(
+    secondGateway.requests.filter((entry) => entry.url === "/v1/responses"),
+  );
+  assert.match(payload, /medium/);
 });
 
 test("runPi executes embedded read tool and returns tool result to the model", async (t) => {
@@ -948,7 +1099,7 @@ test("runPi executes embedded read tool and returns tool result to the model", a
     events.some(
       (event) =>
         event.type === "native_update" &&
-        JSON.stringify(event.update).includes("\"tool_call\""),
+        JSON.stringify(event.update).includes('"tool_call"'),
     ),
     JSON.stringify(events),
   );
@@ -1002,7 +1153,10 @@ test("runPi executes attached native subagent and retains reports", async (t) =>
     ),
     JSON.stringify(events),
   );
-  assert.ok(JSON.stringify(events).includes("child result"), JSON.stringify(events));
+  assert.ok(
+    JSON.stringify(events).includes("child result"),
+    JSON.stringify(events),
+  );
   assert.ok(
     events.some(
       (event) =>

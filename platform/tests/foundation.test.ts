@@ -221,7 +221,7 @@ test("login uses opaque hashed session identities and logout revokes the session
     await f.close();
   }
 });
-test("personal profile updates only own name and theme", async () => {
+test("personal profile persists own model preference without changing identity or role", async () => {
   const f = await fixture();
   try {
     const update = await f.app.inject({
@@ -234,16 +234,24 @@ test("personal profile updates only own name and theme", async () => {
         role: "owner",
         name: "Admin Renamed",
         theme: "cognac",
+        defaultModel: "preferred-model",
       },
     });
     assert.equal(update.statusCode, 200);
     assert.equal(update.json().name, "Admin Renamed");
     assert.equal(update.json().theme, "cognac");
+    assert.equal(update.json().defaultModel, "preferred-model");
     assert.equal(update.json().email, "admin@test.example");
     assert.equal(update.json().role, "admin");
     const row = await f.db.get("SELECT * FROM users WHERE id=?", [f.admin.id]);
     assert.equal(row.name, "Admin Renamed");
     assert.equal(row.theme, "cognac");
+    assert.equal(row.default_model, "preferred-model");
+    const profile = await f.app.inject({
+      url: "/enterprise/api/me",
+      headers: f.admin.headers,
+    });
+    assert.equal(profile.json().user.defaultModel, "preferred-model");
     assert.equal(row.email, "admin@test.example");
     assert.equal(row.role, "admin");
   } finally {

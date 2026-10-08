@@ -4,12 +4,10 @@ import { createInterface } from "node:readline";
 import { assertIsolation, proxy } from "./process-boundary.js";
 import {
   prepareNativeConfiguration,
-  runCodex,
-  runGrok,
   applyEgressEnvironment,
   type NativeSessionState,
 } from "./native.js";
-import { runClaude, runPi } from "./sdk.js";
+import { runPi } from "./sdk.js";
 import { SteeringChannel } from "./steering.js";
 import {
   RuntimeError,
@@ -35,12 +33,7 @@ async function output(value: unknown) {
 async function turn(request: ContainerRequest) {
   validateContainerRequest(request);
   if (active) throw new Error("Concurrent turn");
-  const signature = JSON.stringify([
-    request.harness,
-    request.model,
-    request.access,
-    request.gateway,
-  ]);
+  const signature = JSON.stringify([request.harness, request.access]);
   if (identity && identity !== signature)
     throw new Error("Environment identity changed");
   identity = signature;
@@ -82,41 +75,13 @@ async function turn(request: ContainerRequest) {
       prepared = true;
     }
     await emit({ type: "started" });
-    if (request.harness === "codex")
-      await runCodex(
-        request,
-        emit,
-        current.controller.signal,
-        undefined,
-        current.channel,
-        retained,
-      );
-    else if (request.harness === "grok")
-      await runGrok(
-        request,
-        emit,
-        current.controller.signal,
-        undefined,
-        current.channel,
-        retained,
-      );
-    else if (request.harness === "claude")
-      await runClaude(
-        request,
-        emit,
-        current.controller.signal,
-        current.channel,
-        undefined,
-        retained,
-      );
-    else
-      await runPi(
-        request,
-        emit,
-        current.controller.signal,
-        current.channel,
-        retained,
-      );
+    await runPi(
+      request,
+      emit,
+      current.controller.signal,
+      current.channel,
+      retained,
+    );
     await current.channel.settle();
     await emit({
       type: current.controller.signal.aborted ? "cancelled" : "completed",

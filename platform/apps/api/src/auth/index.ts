@@ -203,13 +203,21 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         "invalid_request",
         "Theme must be green or cognac",
       );
-    await ctx.db.run("UPDATE users SET name=?,theme=? WHERE id=?", [
+    const defaultModel =
+      body.defaultModel === undefined
+        ? (user.defaultModel ?? null)
+        : body.defaultModel === null || body.defaultModel === ""
+          ? null
+          : stringValue(body.defaultModel, "defaultModel", 240);
+    await ctx.db.run("UPDATE users SET name=?,theme=?,default_model=? WHERE id=?", [
       name,
       theme,
+      defaultModel,
       user.id,
     ]);
     await ctx.audit(user, null, "user.profile_updated", user.id, {
       theme,
+      defaultModel,
     });
     return mapUser(
       await ctx.db.get("SELECT * FROM users WHERE id=?", [user.id]),

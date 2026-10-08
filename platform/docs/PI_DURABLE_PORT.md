@@ -16,7 +16,7 @@ is reimplemented in SQLite, HTTP and React.
 | WovenMatter behavior | Enterprise implementation and proof |
 | --- | --- |
 | Durable native session, admitted inputs, steering, stop and reopen | Embedded DefaultAgentEngine and Pi Durable 1.1.0 retain native history under the existing isolated session. Deterministic engine tests exercise real requests, input receipts, tool use, cancellation, deduplication and reopening. |
-| Native subagents and defaults | Copied subagent orchestration and context ownership; per-conversation Code Mode, concurrency 2–24 and thinking controls. Child runs inherit Enterprise's authorized route and filesystem boundary. Settings apply on the next idle turn. |
+| Native subagents and defaults | Copied subagent orchestration and context ownership; per-conversation Code Mode, concurrency 2–24 and composer thinking controls. Child runs inherit Enterprise's authorized route and filesystem boundary. Settings apply on the next idle turn. |
 | Provider context and compaction | Copied native context, compaction registry, provider continuation and archive contracts, adapted to the scoped Enterprise gateway. Provider-specific tests are separate from live-provider acceptance. |
 | SDK lifecycle | Immutable approved generations contain the engine and complete locked dependency closure. An owner can select an approved generation for an idle conversation, preserving native history. |
 | Chronological commentary and work | Stable native message/tool/thought identities, final snapshot corrections, contiguous work groups, standalone subagent/proposal rows and a final response outside completed work. Failures remain visible when completed work folds. |
@@ -24,15 +24,17 @@ is reimplemented in SQLite, HTTP and React.
 | Large output and reconnect | Compact summaries refresh independently of full detail. Full text is paged lazily; framed replacements become visible atomically. Scrolling up or opening work pauses follow; Latest reply resumes it. |
 | Native history | Original native captures and presentation events are retained independently of the UI projection. Authorized users can search, open individual captures and export NDJSON. |
 
-Pi Durable is the default for newly created project and asset conversations.
-Explicit Codex, Claude Code and Grok Build choices remain available; existing
-conversations keep their selected harness and native history.
+Pi Durable is the only harness for project and asset conversations. Creation
+asks for access only, and model selection lives beside the composer so it can
+change between turns in the same workspace and durable native history. The composer has no tool or permission selector: Read-only versus Full access is fixed Enterprise sandbox authorization chosen at launch, separate from Pi native full-access tools. Omitted models resolve through the user's persisted
+default model, then the first authorized catalog model. When no model is
+available, the session opens with an unselected model and message admission is
+blocked until a valid model is chosen.
 
 Enterprise authorization remains authoritative for project, asset, file, model
 and connection access. The agent receives an ephemeral scoped gateway capability,
 not host provider credentials. Subagents cannot broaden the route or permissions
-of the parent run. Native SDK sign-in and desktop-specific account discovery are
-not part of this port. The central inference pool supplies session affinity; it does not expose a strict upstream account pin. Enterprise preserves the authorized pool/model/session boundary and does not present pool affinity as an individual provider-account guarantee.
+of the parent run. Anthropic runs through the official Claude Agent SDK inside Pi, including native compaction and continuation. Its API key and endpoint come from the scoped central gateway; SDK sign-in and desktop account discovery are not used. The central inference pool supplies session affinity; it does not expose a strict upstream account pin. Enterprise preserves the authorized pool/model/session boundary and does not present pool affinity as an individual provider-account guarantee.
 
 ## Maintaining and adopting SDK updates
 

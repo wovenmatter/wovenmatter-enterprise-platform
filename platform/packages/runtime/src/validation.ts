@@ -22,7 +22,7 @@ export function validateContainerRequest(input: ContainerRequest): void {
   identity(input.projectId);
   if (input.assetId !== undefined) identity(input.assetId);
   if (
-    !["codex", "claude", "grok", "pi"].includes(input.harness) ||
+    input.harness !== "pi" ||
     !["read", "write"].includes(input.access)
   )
     throw new RuntimeError("invalid_request", "Invalid harness or access mode");

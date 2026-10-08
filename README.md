@@ -8,7 +8,7 @@ Managed AI workspaces for expert teams. React and TypeScript provide the browser
 - Assets are created and revised by talking to an agent, with private previews and separate Publish, Versions and Settings. Project assets share their project workspace; standalone assets retain their work while compute rests between sessions.
 - Organization and project files support uploads, folders, move, copy and version history. Organization files can be shared into projects with read-only or full access and revoked later.
 - Conversations are private until project members are added. Runs are durable, ordered and cancellable. Participants direct a fixed thread mode. Messages steer active work; Comment adds context. Durable native histories survive restarts; uncertain work is never automatically replayed.
-- Administrators manage subscription accounts and provider API keys through private per-organization CLIProxyAPI services. Employees select available models without managing credentials.
+- Administrators manage subscription accounts and provider API keys through private per-organization CLIProxyAPI services. New conversations use Pi Durable implicitly; employees select available models beside the composer before a run starts, without managing credentials.
 - Library access is read-only or full per membership. Reports render safe HTML and static images/SVG from current authorized data, with project, organization or public visibility. Generated browser scripts and server code are not accepted.
 
 Ordinary files are usable immediately with the agent's native tools. The application core is TypeScript; the runtime includes Python document-reading tools.

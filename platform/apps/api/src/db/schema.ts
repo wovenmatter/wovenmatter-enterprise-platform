@@ -31,6 +31,10 @@ CREATE INDEX password_reset_tokens_expiry ON password_reset_tokens(expires_at);
 `,
   );
   await db.migrate(
+    "foundation-v4-user-default-model",
+    "ALTER TABLE users ADD COLUMN default_model TEXT;",
+  );
+  await db.migrate(
     "platform-memberships-v1",
     `
 CREATE TABLE organization_memberships(org_id TEXT NOT NULL REFERENCES organizations(id),user_id TEXT NOT NULL REFERENCES users(id),role TEXT NOT NULL CHECK(role IN ('admin','member')),library_access TEXT NOT NULL DEFAULT 'read' CHECK(library_access IN ('read','write')),created_at TEXT NOT NULL,PRIMARY KEY(org_id,user_id));

@@ -23,6 +23,7 @@ export interface User {
   role: "owner" | "admin" | "member";
   enabled: boolean;
   theme: "green" | "cognac";
+  defaultModel?: string | null;
 }
 export interface Project {
   id: string;
@@ -71,6 +72,7 @@ export function mapUser(r: any): User {
     role: r.role,
     enabled: !!r.enabled,
     theme: r.theme === "cognac" ? "cognac" : "green",
+    defaultModel: r.default_model ?? null,
   };
 }
 export function mapProject(r: any, access?: "read" | "write"): Project {

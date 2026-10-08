@@ -13,7 +13,7 @@ const proxyAuthorization =
   );
 function proxyResponse(target, authorization) {
   const match =
-    /^http:\/\/native-proxy-fixture\.invalid\/(codex|grok|claude|pi)$/.exec(
+    /^http:\/\/native-proxy-fixture\.invalid\/(pi)$/.exec(
       target,
     );
   const fixtureCredentials = Buffer.from(
@@ -77,7 +77,7 @@ proxy.on("connect", (request, socket) => {
 });
 if (require.main === module) proxy.listen(4101, "0.0.0.0");
 function nativeTool(input, raw, gatewayPath, token) {
-  const asset = /^synthetic-asset-(codex|claude|grok|pi)$/.exec(
+  const asset = /^synthetic-asset-(pi)$/.exec(
     input.model,
   )?.[1];
   if (asset) {
@@ -122,10 +122,10 @@ function nativeTool(input, raw, gatewayPath, token) {
       };
   }
   const hold = /^synthetic-hold-(a|b)$/.exec(input.model)?.[1];
-  const background = /^synthetic-background-(codex|grok|claude|pi)$/.exec(
+  const background = /^synthetic-background-(pi-a|pi-b)$/.exec(
     input.model,
   )?.[1];
-  const harness = /^synthetic-proxy-(codex|grok|claude|pi)$/.exec(
+  const harness = /^synthetic-proxy-(pi)$/.exec(
     input.model,
   )?.[1];
   if (!harness && !hold && !background && !asset) return {};
@@ -219,7 +219,7 @@ const handler = async (request, response) => {
     response.end("gateway-fixture");
     return;
   }
-  const status = /^\/fixture-status\/(codex|grok|claude|pi)$/.exec(request.url);
+  const status = /^\/fixture-status\/(pi)$/.exec(request.url);
   if (status) {
     response.setHeader("content-type", "application/json");
     response.end(
@@ -232,7 +232,7 @@ const handler = async (request, response) => {
     );
     return;
   }
-  const proof = /^\/native-gateway-proof\/(codex|grok|claude|pi)$/.exec(
+  const proof = /^\/native-gateway-proof\/(pi)$/.exec(
     request.url,
   );
   if (proof) {

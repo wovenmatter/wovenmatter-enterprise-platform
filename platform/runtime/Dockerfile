@@ -18,16 +18,10 @@ COPY platform/packages ./platform/packages
 RUN npm ci --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
 
 FROM node:24.21.0-bookworm-slim
-ARG GROK_VERSION=1.0.41
-ARG GROK_SHA256=9ce03ed23e16ea01072b4496263d6213a27899e1e3e107f008d36edf82e70407
 RUN test "$(dpkg --print-architecture)" = amd64 \
  && apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-venv poppler-utils unzip ripgrep bubblewrap apparmor-utils \
+ && apt-get install -y --no-install-recommends ca-certificates git python3 python3-venv poppler-utils unzip ripgrep bubblewrap apparmor-utils \
  && rm -rf /var/lib/apt/lists/* \
- && curl -fsSL "https://x.ai/cli/grok-${GROK_VERSION}-linux-x86_64" -o /usr/local/bin/grok \
- && echo "${GROK_SHA256}  /usr/local/bin/grok" | sha256sum -c - \
- && chmod 0755 /usr/local/bin/grok \
- && npm install --global --ignore-scripts @openai/codex@0.158.0 \
  && groupadd --gid 10001 agent \
  && useradd --uid 10001 --gid 10001 --home-dir /home/agent --shell /bin/bash agent \
  && mkdir -p /workspace /session /home/agent \

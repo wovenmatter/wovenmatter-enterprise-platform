@@ -197,7 +197,7 @@ p=PdfWriter();p.add_blank_page(width=612,height=792);p.add_metadata({'/Title':'D
 assert PdfReader(root/'sample.pdf').metadata.title=='Durable PDF'
 `;
 async function request(
-  harness,
+  harness = "pi",
   mode = "read",
   thread = harness,
   model = "synthetic-acceptance-model",
@@ -384,7 +384,7 @@ function probe(mode, thread, program) {
     });
     const outer = `import fs from 'node:fs';import assert from 'node:assert/strict';import {prepareSandbox} from '/opt/runtime/src/execution-sandbox.js';import {mkdir,chmod,chown} from 'node:fs/promises';import {spawn} from 'node:child_process';import {once} from 'node:events';
 const broker='/control/probe-${randomUUID()}';await mkdir(broker,{mode:0o750});await chmod(broker,0o750);await chown(broker,0,10001);
-const boundary=await prepareSandbox(${JSON.stringify("sessions/" + thread + "/codex/" + mode)},${JSON.stringify(mode)},[{source:'/library/',target:'/workspace/Shared',access:'read'}],broker);
+const boundary=await prepareSandbox(${JSON.stringify("sessions/" + thread + "/pi/" + mode)},${JSON.stringify(mode)},[{source:'/library/',target:'/workspace/Shared',access:'read'}],broker);
 const args=boundary.args;args.splice(-1,1,'--input-type=module','-e',${JSON.stringify(program)});
 const verify=${verifyOutsideUid.toString()};const child=spawn('bwrap',args,{uid:10001,gid:10001,stdio:['ignore','pipe','inherit',...boundary.fds]});let observed='',checked=false;child.stdout.on('data',data=>{process.stdout.write(data);observed+=data;const marker=observed.split(String.fromCharCode(10)).find(line=>line.startsWith('WME_AGENT_PID:'));if(marker&&!checked){verify(fs,assert,child.pid,Number(marker.slice(14)));checked=true;}});const [code]=await once(child,'close');await boundary.close();assert.ok(checked,'Outer namespace must verify actual kernel UID10001');process.exitCode=code;
 `;
@@ -401,7 +401,7 @@ assert.throws(()=>fs.writeFileSync('/workspace/Shared/reference.txt','changed'))
 const python='import ctypes,errno\\nlibc=ctypes.CDLL(None,use_errno=True)\\nfor flags in [0x20000,0x4000000,0x8000000,0x10000000,0x20000000,0x40000000,0x2000000,0x80]:\\n ctypes.set_errno(0);assert libc.syscall(56,flags|17,0,0,0,0)==-1 and ctypes.get_errno()==errno.EPERM\\nctypes.set_errno(0);assert libc.syscall(435,0,0)==-1 and ctypes.get_errno()==errno.ENOSYS\\nctypes.set_errno(0);assert libc.syscall(272,0x10000000)==-1 and ctypes.get_errno()==errno.EPERM';execFileSync('python3',['-c',python]);
 await new Promise((resolve,reject)=>{const w=new Worker('require("worker_threads").parentPort.postMessage("thread okay")',{eval:true,execArgv:[]});w.once('message',resolve);w.once('error',reject);});
 await (${verifyOwnChildSignal.toString()})(fs,assert,(await import('node:child_process')).spawn);
-assert.equal(fs.readdirSync('/proc').filter(p=>/^\\d+$/.test(p)).length<12,true);assert.throws(()=>fs.readFileSync('/session/../../state/sessions/sibling/codex/write/private'));
+assert.equal(fs.readdirSync('/proc').filter(p=>/^\\d+$/.test(p)).length<12,true);assert.throws(()=>fs.readFileSync('/session/../../state/sessions/sibling/pi/write/private'));
 for(const target of directTargets)await new Promise((resolve,reject)=>{const s=requireNet.connect({host:target.host,port:target.port});s.setTimeout(500,()=>s.destroy(new Error('blocked')));s.on('error',()=>resolve());s.on('connect',()=>{s.destroy();reject(Error('Direct network escaped namespace: '+target.kind));});});
 `;
 try {
@@ -514,7 +514,7 @@ for(const target of ${JSON.stringify(directTargets)}){
     sessions,
     organizationId,
     projectId,
-    "sessions/sibling/codex/write",
+    "sessions/sibling/pi/write",
   );
   await mkdir(sibling, {
     recursive: true,
@@ -542,7 +542,7 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     "shared edit",
   );
   const nativeIds = new Map();
-  for (const harness of ["codex", "grok", "claude", "pi"]) {
+  for (const harness of ["pi"]) {
     const input = await request(harness),
       nativeId = await native(input);
     assert.ok(nativeId);
@@ -577,53 +577,53 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     );
   }
   const backgrounds = await Promise.all(
-    ["codex", "grok", "claude", "pi"].map((harness) =>
+    ["pi-a", "pi-b"].map((name) =>
       request(
-        harness,
+        "pi",
         "write",
-        "background-" + harness,
-        "synthetic-background-" + harness,
+        "background-" + name,
+        "synthetic-background-" + name,
       ),
     ),
   );
-  // Pair admission establishes shared-workspace cross-adapter concurrency without saturating the host.
-  for (let i = 0; i < backgrounds.length; i += 2)
-    await Promise.all(
-      backgrounds
-        .slice(i, i + 2)
-        .map((input) => native(input, "BACKGROUND_WORK_STARTED")),
-    );
+  await Promise.all(
+    backgrounds.map((input) => native(input, "BACKGROUND_WORK_STARTED")),
+  );
   const before = await Promise.all(
-    backgrounds.map((input) => waitForFile("background-" + input.harness)),
+    backgrounds.map((input) => waitForFile(input.conversationId)),
   );
   await pause(700);
   for (const [index, input] of backgrounds.entries())
     assert.notEqual(
-      await readFile(join(workspace, "background-" + input.harness), "utf8"),
+      await readFile(join(workspace, input.conversationId), "utf8"),
       before[index],
       "Background work died after ordinary turn completion",
     );
   await runtime.stopSession(projectId, backgrounds[0].conversationId, 1);
   const firstStopped = await readFile(
-      join(workspace, "background-codex"),
-      "utf8",
-    ),
-    peerBefore = await readFile(join(workspace, "background-pi"), "utf8");
+    join(workspace, backgrounds[0].conversationId),
+    "utf8",
+  );
+  const peerBefore = await readFile(
+    join(workspace, backgrounds[1].conversationId),
+    "utf8",
+  );
   await pause(700);
   assert.equal(
-    await readFile(join(workspace, "background-codex"), "utf8"),
+    await readFile(join(workspace, backgrounds[0].conversationId), "utf8"),
     firstStopped,
   );
   assert.notEqual(
-    await readFile(join(workspace, "background-pi"), "utf8"),
+    await readFile(join(workspace, backgrounds[1].conversationId), "utf8"),
     peerBefore,
+    "Stopping one Pi session must preserve sibling background work",
   );
-  const resume = await request("codex", "read", "codex");
-  await runtime.stopSession(projectId, "codex", 1);
-  await native({ ...resume, generation: 1, resumeId: nativeIds.get("codex") });
+  const resume = await request("pi", "read", "pi");
+  await runtime.stopSession(projectId, "pi", 1);
+  await native({ ...resume, generation: 1, resumeId: nativeIds.get("pi") });
   const held = await Promise.all([
-    request("codex", "write", "cancel-a", "synthetic-hold-a"),
-    request("codex", "write", "cancel-b", "synthetic-hold-b"),
+    request("pi", "write", "cancel-a", "synthetic-hold-a"),
+    request("pi", "write", "cancel-b", "synthetic-hold-b"),
   ]);
   const observers = held.map(() => new AbortController());
   const observed = [[], []];
@@ -692,7 +692,7 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     true,
   );
   const interruptedInput = await request(
-    "codex",
+    "pi",
     "write",
     "restart-interruption",
     "synthetic-hold-a",
@@ -732,7 +732,7 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
         sessions,
         organizationId,
         projectId,
-        "sessions/writer/codex/write/private",
+        "sessions/writer/pi/write/private",
       ),
       "utf8",
     ),

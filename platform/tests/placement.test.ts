@@ -220,7 +220,7 @@ test("two real mTLS supervisors authenticate separately, verify actual storage a
         projectId,
         organizationId: "org",
         conversationId: "t",
-        harness: "codex",
+        harness: "pi",
         model: "synthetic",
         prompt: "Synthetic",
         access: "read",
@@ -324,10 +324,22 @@ test("two real mTLS supervisors authenticate separately, verify actual storage a
   // Exercise the real API's own file/session/trash paths through selected host2.
   system = await platformFixture(t, {
     stateDir: storage,
-    runtime: runtime.runtime,
+    runtime: {
+      ...runtime.runtime,
+      sdkCatalog: async () => ({
+        bundledGeneration: "synthetic-sdk",
+        defaultGeneration: "synthetic-sdk",
+        selectedGeneration: "synthetic-sdk",
+        pending: false,
+        items: [],
+      }),
+    },
   });
   const f = system;
   f.inference.validateSelection = async () => {};
+  f.inference.models = async () => [
+    { id: "synthetic", name: "Synthetic", provider: "openai" },
+  ];
   f.inference.issueGateway = async () => ({
     baseUrl: "http://fixture.invalid",
     token: "synthetic-scoped-fixture",
@@ -374,7 +386,6 @@ test("two real mTLS supervisors authenticate separately, verify actual storage a
     {
       title: "Host thread",
       model: "synthetic",
-      harness: "codex",
       mode: "write",
     },
   );

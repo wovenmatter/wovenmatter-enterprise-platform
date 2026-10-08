@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Folder, PanelLeftClose } from "lucide-react";
 import {
+  api,
   errorMessage,
   send,
   useResource,
@@ -45,6 +46,33 @@ export function PersonalSettings({
   const current = profile.data?.user ?? user;
   const organizations = profile.data?.organizations ?? [];
   const projects = profile.data?.projects ?? [];
+  const organizationIds = organizations.map((org) => org.id).join(",");
+  const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
+  const [modelsError, setModelsError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    setModelsError("");
+    const ids = organizationIds ? organizationIds.split(",") : [];
+    void Promise.allSettled(
+      ids.map((id) =>
+        api<{ items: Array<{ id: string; name: string }> }>(
+          "/enterprise/api/organizations/" + id + "/inference/models",
+          { signal: controller.signal },
+        ),
+      ),
+    ).then((results) => {
+      if (controller.signal.aborted) return;
+      const available = results.flatMap((result) =>
+        result.status === "fulfilled" ? result.value.items : [],
+      );
+      setModels([
+        ...new Map(available.map((model) => [model.id, model])).values(),
+      ]);
+      if (results.some((result) => result.status === "rejected"))
+        setModelsError("Some organization models could not be loaded.");
+    });
+    return () => controller.abort();
+  }, [organizationIds]);
   const location = useLocation();
   const requestedReturn = new URLSearchParams(location.search).get("returnTo");
   const returnTo = requestedReturn?.startsWith("/organizations/")
@@ -66,12 +94,16 @@ export function PersonalSettings({
       <ErrorNotice message={profile.error} />
       <div className="settings-form">
         <AsyncForm
-          key={`${current.id}:${current.name}:${current.theme}`}
+          key={`${current.id}:${current.name}:${current.theme}:${current.defaultModel ?? ""}`}
           submitLabel="Save profile"
           onSubmit={async (data) => {
             const updated = await send<User>(
               "/enterprise/api/me",
-              { name: data.get("name"), theme: data.get("theme") },
+              {
+                name: data.get("name"),
+                theme: data.get("theme"),
+                defaultModel: data.get("defaultModel") || null,
+              },
               "PATCH",
             );
             onUserChange(updated);
@@ -87,6 +119,30 @@ export function PersonalSettings({
               defaultValue={current.name}
             />
           </Field>
+          <Field label="Default model">
+            <select
+              name="defaultModel"
+              defaultValue={current.defaultModel ?? ""}
+            >
+              <option value="">First available model</option>
+              {current.defaultModel &&
+              !models.some((model) => model.id === current.defaultModel) ? (
+                <option value={current.defaultModel}>
+                  {current.defaultModel} (unavailable)
+                </option>
+              ) : null}
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+            <small>
+              New sessions use this model when it is available. You can switch
+              models in the conversation.
+            </small>
+          </Field>
+          <ErrorNotice message={modelsError} />
           <Field label="Theme">
             <select name="theme" defaultValue={current.theme}>
               <option value="green">Green</option>

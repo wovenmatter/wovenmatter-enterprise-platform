@@ -618,28 +618,38 @@ test("durable conversation streams and can add a project colleague", async ({
     })
     .first()
     .click();
-  await page
-    .getByLabel("Title", {
-      exact: true,
-    })
-    .fill("Browser conversation");
-  await page
-    .getByLabel("Model", {
-      exact: true,
-    })
-    .selectOption("gpt-test-fixture");
+  await expect(page.getByRole("dialog").locator("select")).toHaveCount(1);
+  await expect(
+    page.getByRole("dialog").getByLabel("Session permissions"),
+  ).toHaveValue("read");
+  await expect(
+    page.getByRole("dialog").getByLabel("Title", { exact: true }),
+  ).toHaveCount(0);
   await page
     .getByRole("button", {
-      name: "Create conversation",
+      name: "Start session",
       exact: true,
     })
     .click();
   await expect(
+    page.getByLabel("Conversation model", { exact: true }),
+  ).toHaveValue("gpt-test-fixture");
+  await page.getByLabel("Thinking level", { exact: true }).selectOption("high");
+  await expect(page.getByLabel("Thinking level", { exact: true })).toHaveValue(
+    "high",
+  );
+  await expect(
     page.getByRole("heading", {
-      name: "Browser conversation",
+      name: "New conversation",
       exact: true,
     }),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Conversation settings", exact: true })
+    .click();
+  await page.getByLabel("Title", { exact: true }).fill("Browser conversation");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByLabel("Message mode").selectOption("comment");
   await page.getByLabel("Message your agent").fill("Background comment only");
   await page
@@ -662,6 +672,11 @@ test("durable conversation streams and can add a project colleague", async ({
     ),
   ).toHaveCount(0);
   await page.getByLabel("Message mode").selectOption("message");
+  await page
+    .getByLabel("Conversation model", {
+      exact: true,
+    })
+    .selectOption("gpt-test-fixture");
   await page.getByLabel("Message your agent").fill("Test durable delivery");
   await page
     .getByRole("button", {
@@ -1383,7 +1398,6 @@ test("invited read-only collaborators direct a full-access thread without gainin
         title: "Read-only collaboration",
         mode: "write",
         model: "gpt-test-fixture",
-        harness: "codex",
       },
     },
   );
@@ -2077,10 +2091,16 @@ test("organization assets start without projects from Files and Assets, remain p
   await expect(page.getByLabel("Belongs to")).toHaveValue("");
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
   await page
-    .getByLabel("Model", { exact: true })
-    .selectOption("synthetic-asset-codex");
+    .getByLabel("Session permissions", { exact: true })
+    .selectOption("write");
   await page
-    .getByLabel("Message", { exact: true })
+    .getByRole("button", { name: "Start session", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation model", { exact: true })
+    .selectOption("synthetic-asset-pi");
+  await page
+    .getByLabel("Message your agent", { exact: true })
     .fill("Prepare an overview with a useful generated data table.");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(
@@ -2354,16 +2374,20 @@ test("native streaming retains chronological work, task progress, full copy and 
     .first()
     .click();
   await page
-    .getByLabel("Title", { exact: true })
-    .fill("Native streaming review");
-  await page
-    .getByLabel("Model", { exact: true })
-    .selectOption("gpt-test-fixture");
-  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue("");
-  await page
-    .getByRole("button", { name: "Create conversation", exact: true })
+    .getByRole("button", { name: "Start session", exact: true })
     .click();
   await expect(page.locator(".thread-header")).toContainText("Pi Durable");
+  await page
+    .getByRole("button", { name: "Conversation settings", exact: true })
+    .click();
+  await page
+    .getByLabel("Title", { exact: true })
+    .fill("Native streaming review");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page
+    .getByLabel("Conversation model", { exact: true })
+    .selectOption("gpt-test-fixture");
   await page
     .getByLabel("Message your agent")
     .fill("[native-stream] Inspect the record.");

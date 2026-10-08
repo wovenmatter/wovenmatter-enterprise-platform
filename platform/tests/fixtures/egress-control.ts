@@ -99,9 +99,10 @@ export async function createEgressControlFixture(options: {
         },
       },
     );
+    system.inference.models = async () => [{ id: "fixture", name: "Synthetic model", provider: "openai" }];
     // The fixture never requests a model catalog or inference from an actual provider.
     system.inference.validateSelection = async (_org, model, harness) => {
-      if (model !== "fixture" || harness !== "codex")
+      if (model !== "fixture" || harness !== "pi")
         throw new Error("Unexpected fixture model");
     };
     const { port } = await network.start();
@@ -129,13 +130,26 @@ export async function createEgressControlFixture(options: {
       },
     ]);
     const actor = await system.conversations.user(user);
-    const conversation = await system.conversations.create(actor, project, {
-      title: "Synthetic public GET acceptance",
-      mode: "read",
-      harness: "codex",
-      model: "fixture",
-    });
-    const admitted = await system.conversations.admit(actor, conversation.id, {
+    const conversationId = randomUUID();
+    await system.ctx.db.batch([
+      {
+        sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at) VALUES(?,?,?,?,?,'read','pi','fixture',?,?)",
+        params: [
+          conversationId,
+          org,
+          project,
+          user,
+          "Synthetic public GET acceptance",
+          now,
+          now,
+        ],
+      },
+      {
+        sql: "INSERT INTO conversation_members(conversation_id,user_id,added_by,created_at) VALUES(?,?,?,?)",
+        params: [conversationId, user, user, now],
+      },
+    ]);
+    const admitted = await system.conversations.admit(actor, conversationId, {
       content: "Synthetic GET-only network acceptance; no customer content",
       requestId: randomUUID(),
     });
@@ -160,7 +174,7 @@ export async function createEgressControlFixture(options: {
       org,
       user,
       project,
-      conversation: conversation.id,
+      conversation: conversationId,
       run: request.runId,
       token: request.gateway.token,
       boundary: await options.networkBoundary(),
@@ -174,7 +188,7 @@ export async function createEgressControlFixture(options: {
         await system!.inference.revokeGateway(request.runId);
         await system!.conversations.cancel(
           actor,
-          conversation.id,
+          conversationId,
           request.runId,
         );
       },

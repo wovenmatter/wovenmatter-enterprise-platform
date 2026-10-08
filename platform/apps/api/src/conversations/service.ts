@@ -51,6 +51,8 @@ const field = (v: unknown, name: string, max: number) => {
     );
   return v.trim();
 };
+const optionalModel = (v: unknown) =>
+  v === undefined || v === null || v === "" ? "" : field(v, "Model", 240);
 function piOptions(
   value: unknown,
   stored = false,
@@ -117,11 +119,10 @@ function executionLimit(value: unknown, name: string): number {
 }
 const hidden = () =>
   new AppError(404, "conversation_not_found", "Conversation not found.");
-const harnesses = new Set(["codex", "claude", "grok", "pi"]);
-function selectedHarness(value: unknown): Harness {
-  if (typeof value !== "string" || !harnesses.has(value))
-    throw new AppError(400, "invalid_harness", "Choose a supported agent.");
-  return value as Harness;
+function fixedHarness(value: unknown): Harness {
+  if (value !== undefined && value !== null && value !== "" && value !== "pi")
+    throw new AppError(409, "fixed_harness", "Sessions use Pi Durable.");
+  return "pi";
 }
 function selectedMode(value: unknown): Mode {
   if (value === "read" || value === "write") return value;
@@ -370,20 +371,27 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     );
     return run ? runView(run) : null;
   }
+  private async defaultModel(user: User, orgId: string) {
+    const catalog = await this.dependencies.inference.models?.(orgId);
+    if (!catalog?.length) return "";
+    if (
+      user.defaultModel &&
+      catalog.some((item) => item.id === user.defaultModel)
+    )
+      return user.defaultModel;
+    return catalog[0]!.id;
+  }
   async create(user: User, projectId: string, input: Record<string, unknown>) {
     const mode = selectedMode(input.mode),
       project = await this.ctx.requireProject(user, projectId, mode);
-    const model = field(input.model, "Model", 200),
-      harness =
-        input.harness === undefined || input.harness === null
-          ? await this.dependencies.inference.defaultHarness(
-              project.orgId,
-              model,
-            )
-          : selectedHarness(input.harness),
+    const model =
+        input.model === undefined
+          ? await this.defaultModel(user, project.orgId)
+          : optionalModel(input.model),
+      harness = fixedHarness(input.harness),
       title = field(input.title ?? "New conversation", "Title", 200);
     const options = piOptions(input.pi);
-    if (harness === "pi" && this.dependencies.runtime.sdkCatalog)
+    if (this.dependencies.runtime.sdkCatalog)
       options.sdkGeneration = (
         await this.dependencies.runtime.sdkCatalog(projectId)
       ).defaultGeneration;
@@ -391,12 +399,13 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       input.connectionId === undefined
         ? undefined
         : field(input.connectionId, "Connection", 100);
-    await this.dependencies.inference.validateSelection(
-      project.orgId,
-      model,
-      harness,
-      connectionId,
-    );
+    if (model)
+      await this.dependencies.inference.validateSelection(
+        project.orgId,
+        model,
+        harness,
+        connectionId,
+      );
     const id = randomUUID(),
       timestamp = now();
     await this.ctx.db.batch([
@@ -434,15 +443,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     const title =
         input.title === undefined ? c.title : field(input.title, "Title", 200),
       mode = input.mode === undefined ? c.mode : selectedMode(input.mode),
-      model =
-        input.model === undefined ? c.model : field(input.model, "Model", 200),
-      harness =
-        input.harness === null ||
-        (input.harness === undefined && model !== c.model)
-          ? await this.dependencies.inference.defaultHarness(c.org_id, model)
-          : input.harness === undefined
-            ? c.harness
-            : selectedHarness(input.harness),
+      model = input.model === undefined ? c.model : optionalModel(input.model),
+      harness = fixedHarness(input.harness),
       connectionId =
         input.connectionId === undefined
           ? c.connection_id
@@ -456,12 +458,13 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "Thread access is fixed at creation. Create a new thread to use a different mode.",
       );
     if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!);
-    await this.dependencies.inference.validateSelection(
-      c.org_id,
-      model,
-      harness,
-      connectionId ?? undefined,
-    );
+    if (model)
+      await this.dependencies.inference.validateSelection(
+        c.org_id,
+        model,
+        harness,
+        connectionId ?? undefined,
+      );
     if (await this.latestActive(id))
       throw new AppError(
         409,
@@ -469,18 +472,36 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "Wait for queued work to finish before changing conversation settings.",
       );
     const previousPi = piOptions(JSON.parse(c.pi_options ?? "{}"), true);
-    const options =
+    const supplied =
       input.pi === undefined
-        ? (c.pi_options ?? "{}")
-        : JSON.stringify({
-            ...piOptions(input.pi),
-            ...(previousPi.sdkGeneration
-              ? { sdkGeneration: previousPi.sdkGeneration }
-              : {}),
-          });
+        ? undefined
+        : (input.pi as Record<string, unknown>);
+    const clearThinking = supplied?.thinking === null || model !== c.model;
+    const updates =
+      supplied?.thinking === null
+        ? { ...supplied, thinking: undefined }
+        : supplied;
+    const nextPi = { ...previousPi, ...piOptions(updates) };
+    if (clearThinking) delete nextPi.thinking;
+    if (nextPi.thinking && this.dependencies.inference.models) {
+      const selected = (
+        await this.dependencies.inference.models(c.org_id)
+      ).find((m) => m.id === model);
+      if (
+        selected?.thinkingLevels &&
+        !selected.thinkingLevels.includes(nextPi.thinking)
+      )
+        throw new AppError(
+          400,
+          "invalid_pi_options",
+          "This thinking level is unavailable for the selected model.",
+        );
+    }
+    const options = JSON.stringify(nextPi);
+    const timestamp = now();
     const changed = await this.ctx.db.run(
       "UPDATE conversations SET title=?,mode=?,harness=?,model=?,connection_id=?,updated_at=?,pi_options=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling'))",
-      [title, mode, harness, model, connectionId, now(), options, id, id],
+      [title, mode, harness, model, connectionId, timestamp, options, id, id],
     );
     if (!changed.changes)
       throw new AppError(
@@ -488,6 +509,16 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "conversation_busy",
         "Wait for queued work to finish before changing conversation settings.",
       );
+    await this.ctx.db.run(
+      "INSERT INTO conversation_events(conversation_id,run_id,type,data,created_at) VALUES(?,?,?,?,?)",
+      [
+        id,
+        null,
+        "settings.changed",
+        JSON.stringify({ title, model, harness }),
+        timestamp,
+      ],
+    );
     return this.get(user, id);
   }
   async remove(user: User, id: string) {
@@ -816,6 +847,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "queue_full",
           "Wait for pending input delivery before sending more messages.",
         );
+      if (kind === "message" && !current && !c.model)
+        throw new AppError(
+          400,
+          "model_required",
+          "Select a model before sending a message.",
+        );
       if (c.asset_id && !c.project_id && kind === "message" && !current)
         await this.dependencies.assets!.initializeWorkspace(user, c.asset_id);
       const messageId = randomUUID(),
@@ -1037,7 +1074,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   private async mounts(user: User, row: ConversationRow | RunRow) {
     if (row.asset_id)
-      return this.dependencies.assets!.mounts(user, row.asset_id);
+      return (await this.dependencies.assets!.mounts(user, row.asset_id)).map(
+        (mount) => ({
+          ...mount,
+          readOnly: row.mode === "read" || mount.readOnly,
+        }),
+      );
     return this.dependencies.files.resolveProjectMounts(
       this.ctx,
       user,
@@ -1064,21 +1106,24 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         [assetId],
       );
       if (existing) return this.get(user, existing.id);
-      const model = field(input.model, "Model", 200),
-        harness =
-          input.harness == null
-            ? await this.dependencies.inference.defaultHarness(a.org_id, model)
-            : selectedHarness(input.harness);
+      const model =
+          input.model === undefined
+            ? await this.defaultModel(user, a.org_id)
+            : optionalModel(input.model),
+        harness = fixedHarness(input.harness);
+      const mode = selectedMode(input.mode ?? "write");
+      const options = piOptions(input.pi);
       const connectionId =
         input.connectionId == null
           ? null
           : field(input.connectionId, "Connection", 100);
-      await this.dependencies.inference.validateSelection(
-        a.org_id,
-        model,
-        harness,
-        connectionId ?? undefined,
-      );
+      if (model)
+        await this.dependencies.inference.validateSelection(
+          a.org_id,
+          model,
+          harness,
+          connectionId ?? undefined,
+        );
       await this.dependencies.assets!.require(
         await this.user(user.id),
         assetId,
@@ -1086,19 +1131,21 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       const id = randomUUID(),
         time = now();
       await this.ctx.db.run(
-        "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,asset_id) VALUES(?,?,?,?,?,'write',?,?,?,?,?,?)",
+        "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,asset_id,pi_options) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [
           id,
           a.org_id,
           a.project_id,
           user.id,
           a.name,
+          mode,
           harness,
           model,
           connectionId,
           time,
           time,
           a.id,
+          JSON.stringify(options),
         ],
       );
       return this.get(user, id);
@@ -1461,23 +1508,10 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "Access was revoked before execution.",
       );
     const prior = await this.ctx.db.get<RunRow>(
-      "SELECT * FROM conversation_runs WHERE conversation_id=? AND id<>? AND native_session_id IS NOT NULL AND harness=? AND model=? AND mode=? AND connection_id IS ? ORDER BY rowid DESC LIMIT 1",
-      [
-        run.conversation_id,
-        run.id,
-        run.harness,
-        run.model,
-        run.mode,
-        run.connection_id,
-      ],
+      "SELECT * FROM conversation_runs WHERE conversation_id=? AND id<>? AND native_session_id IS NOT NULL AND mode=? ORDER BY rowid DESC LIMIT 1",
+      [run.conversation_id, run.id, run.mode],
     );
-    const resumeId =
-      prior &&
-      prior.harness === run.harness &&
-      prior.model === run.model &&
-      prior.mode === run.mode
-        ? (prior.native_session_id ?? undefined)
-        : undefined;
+    const resumeId = prior?.native_session_id ?? undefined;
     const message = (await this.ctx.db.get<MessageRow>(
       "SELECT * FROM conversation_messages WHERE id=?",
       [run.user_message_id],
@@ -1616,27 +1650,14 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       "UPDATE conversation_runs SET runtime_initial=? WHERE id=?",
       [JSON.stringify(execution.initialMessages ?? []), run.id],
     );
-    const piRoute =
-      run.harness === "pi"
-        ? await this.dependencies.inference.resolvePiModel?.(
-            run.org_id,
-            run.model,
-          )
-        : undefined;
-    const configuredPi =
-      run.harness === "pi"
-        ? piOptions(
-            JSON.parse(
-              (
-                await this.ctx.db.get<{ pi_options: string }>(
-                  "SELECT pi_options FROM conversations WHERE id=?",
-                  [run.conversation_id],
-                )
-              )?.pi_options ?? "{}",
-            ),
-            true,
-          )
-        : undefined;
+    const piRoute = await this.dependencies.inference.resolvePiModel?.(
+      run.org_id,
+      run.model,
+    );
+    const configuredPi = piOptions(
+      JSON.parse(conversation.pi_options ?? "{}"),
+      true,
+    );
     if (
       configuredPi &&
       !configuredPi.sdkGeneration &&

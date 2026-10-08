@@ -1780,3 +1780,15 @@ button.secondary:hover:not(:disabled) { background: var(--hover); }
 .pi-options > summary { cursor: pointer; color: var(--muted); margin-bottom: 12px; }
 
 .native-completed-work.is-active > summary { display: none; }
+
+/* WovenMatter-style model controls belong to the composer, not session setup. */
+.composer-controls { flex-wrap: wrap; gap: 8px 12px; }
+.composer-model-controls { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; }
+.composer-model-controls label { min-width: 0; }
+.composer-model-controls select { max-width: 240px; padding: 5px 22px 5px 8px; min-height: 30px; font-size: 12px; border-color: transparent; background-color: transparent; text-overflow: ellipsis; }
+.composer-controls .row-actions { margin-left: auto; }
+@media (max-width: 600px) {
+  .composer-model-controls { flex: 1 1 100%; }
+  .composer-model-controls label:first-child { flex: 1; }
+  .composer-model-controls select { width: 100%; max-width: 100%; }
+}

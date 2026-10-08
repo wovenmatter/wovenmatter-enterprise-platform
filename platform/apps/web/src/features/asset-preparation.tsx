@@ -2,7 +2,6 @@ import { useCallback, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { send, useResource, errorMessage, type List } from "../api";
 import { useWorkspace } from "../workspace";
-import { clearPendingMessage, savePendingMessage } from "../conversation-state";
 import { AsyncForm, ErrorNotice, Field, Loading } from "../components/ui";
 import { Thread, type Conversation, type Model } from "./conversations";
 import type { Asset } from "./library";
@@ -19,7 +18,7 @@ export function AssetPreparation({
   asset: Asset;
   onSaved: () => void;
 }) {
-  const { org, orgBase, user } = useWorkspace();
+  const { org } = useWorkspace();
   const agent = useResource<Agent>(
     `/enterprise/api/assets/${asset.id}/agent`,
     5000,
@@ -27,10 +26,8 @@ export function AssetPreparation({
   const models = useResource<List<Model>>(
     `/enterprise/api/organizations/${org.id}/inference/models`,
   );
-  const [draft, setDraft] = useState(""),
-    [model, setModel] = useState(""),
-    [harness, setHarness] = useState(""),
-    [sending, setSending] = useState(false),
+  const [mode, setMode] = useState("read"),
+    [starting, setStarting] = useState(false),
     [error, setError] = useState("");
   const refresh = useCallback(() => {
     agent.reload();
@@ -38,34 +35,21 @@ export function AssetPreparation({
   const saved = useCallback(() => {
     onSaved();
     agent.reload();
-  }, [onSaved, agent.reload]);
+  }, [agent.reload, onSaved]);
   async function start() {
-    if (sending || !draft.trim()) return;
-    setSending(true);
+    if (starting) return;
+    setStarting(true);
     setError("");
     try {
-      const c = await send<Conversation>(
-        `/enterprise/api/assets/${asset.id}/agent`,
-        { model: model || models.data?.items[0]?.id, harness: harness || null },
+      await send<Conversation>(
+        "/enterprise/api/assets/" + asset.id + "/agent",
+        { mode },
       );
-      const pending = {
-          id: crypto.randomUUID(),
-          content: draft,
-          kind: "message" as const,
-        },
-        key = `wme:pending:${user.id}:${c.id}`;
-      savePendingMessage(key, pending);
-      await send(`/enterprise/api/conversations/${c.id}/messages`, {
-        requestId: pending.id,
-        content: pending.content,
-      });
-      clearPendingMessage(key);
-      setDraft("");
+      agent.reload();
     } catch (e) {
       setError(errorMessage(e));
     } finally {
-      setSending(false);
-      agent.reload();
+      setStarting(false);
     }
   }
   return (
@@ -94,62 +78,22 @@ export function AssetPreparation({
               void start();
             }}
           >
-            <h3>What would you like to create?</h3>
-            <p>
-              Describe your asset. Your agent prepares the draft here, and you
-              can ask for changes before publishing.
-            </p>
-            <Field label="Model">
-              <select
-                value={model || models.data?.items[0]?.id || ""}
-                onChange={(e) => setModel(e.target.value)}
-                required
-              >
-                <option value="" disabled>
-                  Select a model
-                </option>
-                {models.data?.items.map((m) => (
-                  <option key={`${m.provider}:${m.id}`} value={m.id}>
-                    {m.name || m.id}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Agent">
-              <select
-                value={harness}
-                onChange={(e) => setHarness(e.target.value)}
-              >
-                <option value="">Pi Durable (default)</option>
-                <option value="codex">Codex</option>
-                <option value="claude">Claude Code</option>
-                <option value="grok">Grok Build</option>
-                <option value="pi">Pi Durable</option>
-              </select>
-            </Field>
-            <ErrorNotice message={models.error} />
-            {!models.loading && !models.data?.items.length ? (
-              <p>
-                No models are available. Ask an administrator to configure a
-                connection in <a href={`${orgBase}/connections`}>Connections</a>
-                .
-              </p>
-            ) : null}
-            <Field label="Message">
-              <textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                rows={5}
-                maxLength={100000}
-                placeholder="Create a summary of…"
-                disabled={sending}
-              />
-            </Field>
-            <button
-              className="primary"
-              disabled={sending || !draft.trim() || !models.data?.items.length}
+            <h3>Start a session</h3>
+            <Field
+              label="Session permissions"
+              hint="Access is fixed for this session."
             >
-              {sending ? "Starting…" : "Send message"}
+              <select
+                value={mode}
+                onChange={(e) => setMode(e.target.value)}
+                disabled={starting}
+              >
+                <option value="read">Read-only</option>
+                <option value="write">Full access</option>
+              </select>
+            </Field>
+            <button className="primary" disabled={starting}>
+              {starting ? "Starting…" : "Start session"}
             </button>
           </form>
         )}

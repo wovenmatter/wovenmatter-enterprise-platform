@@ -38,7 +38,7 @@ async function organization(page, name, project = false) {
   }
   return { origin, headers, org, project: workspace };
 }
-async function create(page, f, name, harness, project = false) {
+async function create(page, f, name, project = false) {
   await page.goto(`/enterprise/organizations/${f.org.id}/library`);
   await expect(
     page.getByRole("heading", { name: "Library", exact: true }),
@@ -48,9 +48,14 @@ async function create(page, f, name, harness, project = false) {
   if (project) await page.getByLabel("Belongs to").selectOption(f.project.id);
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
   await page
-    .getByLabel("Model", { exact: true })
-    .selectOption("synthetic-asset-" + harness);
-  await page.getByLabel("Agent", { exact: true }).selectOption(harness);
+    .getByLabel("Session permissions", { exact: true })
+    .selectOption("write");
+  await page
+    .getByRole("button", { name: "Start session", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation model", { exact: true })
+    .selectOption("synthetic-asset-pi");
 }
 function errors(page) {
   const values = [];
@@ -85,7 +90,7 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
     },
   });
   expect(upload.status()).toBe(200);
-  await create(page, f, "Resumable asset", "codex");
+  await create(page, f, "Resumable asset");
   await page.getByText("Library sources (0)", { exact: true }).click();
   await page
     .getByRole("button", { name: "Open folder Read-only inputs" })
@@ -98,7 +103,7 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
     page.getByText("Library sources (1)", { exact: true }),
   ).toBeVisible();
   await page
-    .getByLabel("Message", { exact: true })
+    .getByLabel("Message your agent", { exact: true })
     .fill("Prepare an asset from the selected source.");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(page.getByPlaceholder("Message your agent…")).toBeVisible();
@@ -210,12 +215,12 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
   expect(failures).toEqual([]);
 });
 
-test("Claude Grok and Pi asset conversations share one project and keep independent drafts", async ({
+test("Pi asset conversations share one project and keep independent drafts", async ({
   page,
 }) => {
   test.setTimeout(180000);
   const failures = errors(page),
-    f = await organization(page, "Concurrent adapter fixture", true);
+    f = await organization(page, "Concurrent Pi fixture", true);
   const pages = [
     page,
     await page.context().newPage(),
@@ -224,11 +229,11 @@ test("Claude Grok and Pi asset conversations share one project and keep independ
   for (const other of pages.slice(1))
     other.on("pageerror", (e) => failures.push(e.message));
   await Promise.all(
-    ["claude", "grok", "pi"].map(async (h, i) => {
+    ["alpha", "beta", "gamma"].map(async (h, i) => {
       const p = pages[i];
-      await create(p, f, "Asset " + h, h, true);
+      await create(p, f, "Asset " + h, true);
       await p
-        .getByLabel("Message", { exact: true })
+        .getByLabel("Message your agent", { exact: true })
         .fill("Prepare this independent asset in our shared workspace.");
       await p
         .getByRole("button", { name: "Send message", exact: true })

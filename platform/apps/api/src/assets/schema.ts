@@ -23,7 +23,7 @@ export async function migrateAssetConversations(ctx: AppContext) {
 CREATE TABLE conversations_next (
  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES organizations(id), project_id TEXT REFERENCES projects(id),
  creator_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('read','write')),
- harness TEXT NOT NULL CHECK(harness IN ('codex','claude','grok','pi')), model TEXT NOT NULL, connection_id TEXT,
+ harness TEXT NOT NULL CHECK(harness = 'pi'), model TEXT NOT NULL, connection_id TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT,runtime_generation INTEGER NOT NULL DEFAULT 0,
  asset_id TEXT UNIQUE REFERENCES reports(id),CHECK(project_id IS NOT NULL OR asset_id IS NOT NULL)
 );

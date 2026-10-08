@@ -90,6 +90,9 @@ test("API restart reattaches an accepted asset turn without resubmission; worksp
   const configure = (
     system: typeof f | Awaited<ReturnType<typeof buildApp>>,
   ) => {
+    system.inference.models = async () => [
+      { id: "fixture", name: "Fixture", provider: "openai" },
+    ];
     system.inference.validateSelection = async () => {};
     system.inference.options.registry.resolve = async () => ({
       baseUrl: "http://provider.example.test",
@@ -111,7 +114,6 @@ test("API restart reattaches an accepted asset turn without resubmission; worksp
     const c = (
       await f.request("admin", "POST", `/enterprise/api/assets/${a.id}/agent`, {
         model: "fixture",
-        harness: "codex",
       })
     ).json();
     const input = {

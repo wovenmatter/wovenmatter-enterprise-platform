@@ -1,5 +1,5 @@
 import type { MountEvidence } from "./mount-evidence.ts";
-export type Harness = "codex" | "claude" | "grok" | "pi";
+export type Harness = "pi";
 export type Access = "read" | "write";
 export type RuntimeEvent = { sequence?: number } & (
   | { type: "attached"; terminal?: boolean }
