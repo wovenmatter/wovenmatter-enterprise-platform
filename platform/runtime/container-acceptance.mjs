@@ -740,12 +740,12 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
   );
   assert.equal(recovered.at(-1)?.code, "workspace_restarted");
   const stoppedByRestart = await readFile(
-    join(workspace, "background-pi"),
+    join(workspace, backgrounds[1].conversationId),
     "utf8",
   );
   await pause(700);
   assert.equal(
-    await readFile(join(workspace, "background-pi"), "utf8"),
+    await readFile(join(workspace, backgrounds[1].conversationId), "utf8"),
     stoppedByRestart,
     "Restart unexpectedly replayed background work",
   );
