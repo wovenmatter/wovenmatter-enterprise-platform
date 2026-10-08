@@ -1,5 +1,6 @@
 import { setGlobalProxyFromEnv } from "node:http";
-import { mkdir } from "node:fs/promises";
+import { readdir, rmdir } from "node:fs/promises";
+import { openDirectory } from "./sandbox.js";
 import type { ContainerRequest } from "./types.ts";
 
 export const agentInstructions =
@@ -75,10 +76,41 @@ export function applyEgressEnvironment(request: ContainerRequest): () => void {
   };
 }
 
+/**
+ * Only called once by a freshly admitted namespace, before opening any Pi store.
+ * The workspace owner fences replacement until the previous namespace is gone.
+ * Stop kills that whole namespace (including detached tools), so proper-lockfile
+ * cannot release its heartbeat directory. Recover only those empty owner markers;
+ * durable records are untouched and normal in-process ownership stays enforced.
+ */
+export async function recoverPiStoreLocks(sessionDirectory: string) {
+  let directory;
+  try {
+    directory = await openDirectory(sessionDirectory, "pi-enterprise/durable");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    const path = `/proc/self/fd/${directory.fd}`;
+    for (const name of await readdir(path)) {
+      if (
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.lock$/i.test(
+          name,
+        )
+      )
+        // Non-recursive rmdir refuses symlinks, files and nonempty directories.
+        await rmdir(`${path}/${name}`);
+    }
+  } finally {
+    await directory.close();
+  }
+}
+
 export async function prepareNativeConfiguration(
   _request: ContainerRequest,
 ): Promise<void> {
-  await mkdir("/session/pi", { recursive: true, mode: 0o700 });
+  await recoverPiStoreLocks("/session");
 }
 
 /** One retained Pi native environment inside a thread namespace. */

@@ -20,7 +20,7 @@ RUN npm ci --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runti
 FROM node:24.21.0-bookworm-slim
 RUN test "$(dpkg --print-architecture)" = amd64 \
  && apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git python3 python3-venv poppler-utils unzip ripgrep bubblewrap apparmor-utils \
+ && apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-venv poppler-utils unzip ripgrep bubblewrap apparmor-utils \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 10001 agent \
  && useradd --uid 10001 --gid 10001 --home-dir /home/agent --shell /bin/bash agent \

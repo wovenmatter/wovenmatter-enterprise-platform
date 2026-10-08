@@ -362,3 +362,34 @@ test("Pi workspace session is conversation-owned across model changes and Pi opt
   );
   await service.close();
 });
+
+test("replacement waits for confirmed namespace death even when Stop is delayed", async (t) => {
+  const { service, workers } = await fixture(t);
+  await service.admit(request("first"));
+  await workers[0]!.emit!({ type: "completed" });
+  workers[0]!.completion!.resolve();
+  // Let turn finalization release the lane, while the environment remains alive.
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(service.admit(request("unfenced", "thread-a", 1)), {
+    code: "authority_changed",
+  });
+  const stopping = deferred(),
+    release = deferred();
+  const stop = workers[0]!.worker.stop;
+  workers[0]!.worker.stop = async () => {
+    stopping.resolve();
+    await release.promise;
+    await stop();
+  };
+  const stopped = service.stopSession("thread-a", 1);
+  await stopping.promise;
+  await assert.rejects(service.admit(request("too-early", "thread-a", 1)), {
+    code: "session_stopping",
+  });
+  assert.equal(workers.length, 1);
+  release.resolve();
+  await stopped;
+  await service.admit(request("replacement", "thread-a", 1));
+  assert.equal(workers.length, 2);
+  await service.close();
+});

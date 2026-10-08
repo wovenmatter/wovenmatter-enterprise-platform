@@ -305,8 +305,13 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
           ) >= this.limits.replayBytes
         )
           throw failure("journal_full");
+        const previousOwner = [...this.sessions.values()].find(
+          (value) => value.conversationId === request.conversationId,
+        );
+        if (previousOwner?.stopped) throw failure("session_stopping");
+        if (previousOwner && previousOwner.key !== sessionKey)
+          throw failure("authority_changed");
         let session = this.sessions.get(sessionKey);
-        if (session?.stopped) throw failure("session_stopping");
         if (session && session.signature !== signature)
           throw failure("authority_changed");
         if (!session) {
@@ -535,7 +540,7 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
     if (!Number.isSafeInteger(generation) || generation < 0)
       throw failure("invalid_generation");
     // Persist the fence before touching processes, including when stop must be retried.
-    await this.lane(conversationId, async () => {
+    const victims = await this.lane(conversationId, async () => {
       this.fences.set(
         conversationId,
         Math.max(generation, this.fences.get(conversationId) ?? 0),
@@ -545,12 +550,14 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
           "INSERT INTO fences(conversation,generation) VALUES(?,?) ON CONFLICT(conversation) DO UPDATE SET generation=MAX(generation,excluded.generation)",
         )
         .run(conversationId, this.fences.get(conversationId)!);
+      const victims = [...this.sessions.values()].filter(
+        (session) =>
+          session.conversationId === conversationId &&
+          session.generation < generation,
+      );
+      for (const session of victims) session.stopped = true;
+      return victims;
     });
-    const victims = [...this.sessions.values()].filter(
-      (session) =>
-        session.conversationId === conversationId &&
-        session.generation < generation,
-    );
     await Promise.all(
       victims.map(async (session) => {
         session.stopped = true;

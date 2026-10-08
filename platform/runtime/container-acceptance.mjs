@@ -224,6 +224,16 @@ async function request(
     userId: "synthetic-user",
     harness,
     model,
+    pi: {
+      provider: "openai",
+      api: "openai-responses",
+      supportsReasoning: true,
+      supportsNativeCompaction: true,
+      thinking: "high",
+      codeMode: "off",
+      subagentConcurrency: 3,
+      routeIdentity: "synthetic-openai:" + model,
+    },
     prompt: "Reply SYNTHETIC_RUNTIME_ACCEPTANCE",
     access: mode,
     mounts: [
@@ -257,6 +267,23 @@ async function native(input, answer = "SYNTHETIC_RUNTIME_ACCEPTANCE") {
     events.some((e) => e.type === "input_accepted"),
     "Missing actual input receipt",
   );
+  if (input.pi) {
+    const options = events
+      .filter((e) => e.type === "native_update")
+      .flatMap((e) => e.update.configOptions ?? []);
+    assert.ok(
+      options.some(
+        (o) => o.id === "model" && o.currentValue === "openai/" + input.model,
+      ),
+      "Pi provider route was dropped at the container boundary",
+    );
+    assert.ok(
+      options.some(
+        (o) => o.id === "thinking" && o.currentValue === input.pi.thinking,
+      ),
+      "Pi thinking preference was dropped at the container boundary",
+    );
+  }
   assert.equal(
     events
       .filter((e) => e.type === "assistant_delta")

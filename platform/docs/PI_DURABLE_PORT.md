@@ -106,3 +106,11 @@ do not install its host policies on a shared deployment host. Human acceptance
 still covers real provider entitlement, native continuation/compaction with the
 configured connections, concurrent subagents, steering/cancellation, SDK update
 and rollback, and the private deployed build.
+
+
+A session Stop retains Enterprise's immediate capability withdrawal and complete
+namespace teardown, including detached processes. A replacement namespace is
+admitted only after the prior owner has closed; its startup removes only empty
+Pi UUID owner-lock directories through a pinned, no-symlink directory lookup.
+The durable journal is retained. This adapts WovenMatter's heartbeat lock to
+Enterprise's forced namespace termination without shortening its ownership lease.

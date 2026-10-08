@@ -207,6 +207,7 @@ export async function launchWorkspaceWorker(
         projectId: next.projectId,
         harness: next.harness,
         model: next.model,
+        ...(next.pi ? { pi: next.pi } : {}),
         prompt: next.prompt,
         access: next.access,
         mountEvidence: sandbox.attestations,
