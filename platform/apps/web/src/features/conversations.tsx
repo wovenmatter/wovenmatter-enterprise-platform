@@ -72,6 +72,7 @@ export type Conversation = {
 };
 type Message = {
   id: string;
+  requestId?: string;
   role: "user" | "assistant";
   authorId: string;
   authorName: string;
@@ -534,6 +535,29 @@ export function Thread({
     | undefined
   >(restored);
   const [error, setError] = useState("");
+  // A navigation can lose the POST acknowledgement after durable admission.
+  // Reconcile only this user's exact receipt; never replay an uncertain input.
+  useEffect(() => {
+    const pending = request.current;
+    if (
+      !uncertain ||
+      !pending ||
+      !messages.data?.items.some(
+        (message) =>
+          message.role === "user" &&
+          message.authorId === user.id &&
+          message.requestId === pending.id &&
+          message.content === pending.content.trim() &&
+          (message.kind ?? "message") === (pending.kind ?? "message"),
+      )
+    )
+      return;
+    request.current = undefined;
+    clearPendingMessage(pendingKey);
+    setUncertain(false);
+    setDraft((current) => (current === pending.content ? "" : current));
+    setError("");
+  }, [messages.data, uncertain, pendingKey, user.id]);
   const [streamState, setStreamState] = useState("Connecting…");
   const [initialCursor, setInitialCursor] = useState<number>();
   const [tool, setTool] = useState("");
@@ -760,6 +784,7 @@ export function Thread({
       follow.current = true;
       setFollowing(true);
     } catch (e) {
+      if (request.current !== pending) return;
       const known = e instanceof ApiError && e.status < 500;
       if (known) {
         request.current = undefined;

@@ -44,6 +44,7 @@ export interface RunRow {
 }
 export interface MessageRow {
   id: string;
+  request_id?: string;
   conversation_id: string;
   run_id: string;
   role: "user" | "assistant";
@@ -112,7 +113,9 @@ export interface ConversationDependencies {
       harness: string,
       connectionId?: string,
     ): Promise<void>;
-    models?(orgId: string): Promise<Array<{ id: string; thinkingLevels?: string[] }>>;
+    models?(
+      orgId: string,
+    ): Promise<Array<{ id: string; thinkingLevels?: string[] }>>;
   };
   recheckIntervalMs?: number;
   maxConcurrentRuns?: number;
@@ -159,6 +162,7 @@ export function runView(r: RunRow) {
 export function messageView(m: MessageRow) {
   return {
     id: m.id,
+    requestId: m.request_id,
     conversationId: m.conversation_id,
     runId: m.run_id,
     role: m.role,

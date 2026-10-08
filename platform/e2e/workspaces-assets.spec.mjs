@@ -105,7 +105,15 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
   await page
     .getByLabel("Message your agent", { exact: true })
     .fill("Prepare an asset from the selected source.");
+  const sending = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      /\/api\/conversations\/[^/]+\/messages$/.test(
+        new URL(request.url()).pathname,
+      ),
+  );
   await page.getByRole("button", { name: "Send message", exact: true }).click();
+  const submitted = (await sending).postDataJSON();
   await expect(page.getByPlaceholder("Message your agent…")).toBeVisible();
   const list = await (
       await page.request.get(`/enterprise/api/organizations/${f.org.id}/assets`)
@@ -115,6 +123,22 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
     await page.request.get(`/enterprise/api/assets/${asset.id}/agent`)
   ).json();
   expect(first.conversation).toBeTruthy();
+  const session = await (
+    await page.request.get("/enterprise/api/session")
+  ).json();
+  // Restore the tab state left by a lost POST acknowledgement, even when this
+  // fast fixture already delivered it. Reopening must reconcile, never resend.
+  await page.evaluate(
+    ({ key, pending }) => sessionStorage.setItem(key, JSON.stringify(pending)),
+    {
+      key: `wme:pending:${session.user.id}:${first.conversation.id}`,
+      pending: {
+        id: submitted.requestId,
+        content: submitted.content,
+        kind: submitted.kind,
+      },
+    },
+  );
   await page.reload();
   await page.getByRole("button", { name: "Assets", exact: true }).click();
   await page

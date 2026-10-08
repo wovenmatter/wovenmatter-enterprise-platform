@@ -748,7 +748,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     const rows = await this.ctx.db.all<MessageRow>(
       `SELECT m.id,m.conversation_id,m.run_id,m.role,m.author_id,m.citations,m.created_at,m.kind,
       ${compact ? "CASE WHEN m.role='assistant' AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN substr(m.content,1,500) ELSE m.content END" : "m.content"} content,
-      u.name author_name,i.delivery,i.sequence,i.error FROM conversation_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? ${before ? "AND m.rowid<(SELECT rowid FROM conversation_messages WHERE id=? AND conversation_id=?)" : ""} ORDER BY m.rowid DESC LIMIT 201`,
+      u.name author_name,i.request_id,i.delivery,i.sequence,i.error FROM conversation_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? ${before ? "AND m.rowid<(SELECT rowid FROM conversation_messages WHERE id=? AND conversation_id=?)" : ""} ORDER BY m.rowid DESC LIMIT 201`,
       before ? [id, before, id] : [id],
     );
     const hasMore = rows.length > 200;
