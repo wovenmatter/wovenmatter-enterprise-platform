@@ -120,11 +120,11 @@ export function AssetPreparation({
                 value={harness}
                 onChange={(e) => setHarness(e.target.value)}
               >
-                <option value="">Provider default</option>
+                <option value="">Pi Durable (default)</option>
                 <option value="codex">Codex</option>
-                <option value="claude">Claude</option>
+                <option value="claude">Claude Code</option>
                 <option value="grok">Grok Build</option>
-                <option value="pi">Pi</option>
+                <option value="pi">Pi Durable</option>
               </select>
             </Field>
             <ErrorNotice message={models.error} />

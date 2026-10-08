@@ -40,7 +40,7 @@ const load=file=>JSON.parse(fs.readFileSync(file,'utf8'));const save=(file,data)
 if(a[0]==='volume'&&a[1]==='inspect'){const roots=${JSON.stringify([files, sessions, journal])};const r=roots.find(r=>'wme-storage-'+crypto.createHash('sha256').update(r).digest('hex').slice(0,32)===a[2]);console.log(JSON.stringify([{Driver:'local',Options:{type:'none',o:'bind',device:r}}]));}
 if(a[0]==='network'&&a[1]==='ls'&&fs.existsSync(network))console.log('net1');
 if(a[0]==='network'&&a[1]==='create')save(network,{Id:'net1',Internal:true,Labels:labels(),Containers:{}});
-if(a[1]==='inspect'&&['container','network'].includes(a[0])){const file=a[0]==='container'?container:network;if(!fs.existsSync(file)){console.error(a[0]==='network'&&fs.existsSync(root+'/network-error')?fs.readFileSync(root+'/network-error','utf8'):'No such '+a[0]);process.exit(1);}console.log(JSON.stringify([load(file)]));}
+if(a[1]==='inspect'&&['container','network'].includes(a[0])){const file=a[0]==='container'?container:network;if(!fs.existsSync(file)){fs.writeSync(2,a[0]==='network'&&fs.existsSync(root+'/network-error')?fs.readFileSync(root+'/network-error','utf8'):'No such '+a[0]);process.exit(1);}console.log(JSON.stringify([load(file)]));}
 if(a[0]==='create')save(container,{Id:'container1',Config:{Labels:labels(),Image:'fixture:runtime'},State:{Running:false}});
 if(['start','stop'].includes(a[0])){const c=load(container);c.State.Running=a[0]==='start';save(container,c);}
 if(a[0]==='rm')fs.rmSync(container,{force:true});

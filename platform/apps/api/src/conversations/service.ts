@@ -1,3 +1,13 @@
+import {
+  activitySchema,
+  projectNativeUpdate,
+  captureNativeBatch,
+  settleActivity,
+  readActivities,
+  readActivityDetail,
+  nativeArchivePage,
+  nativeArchiveRecord,
+} from "./activity.js";
 import { migrateAssets } from "../library/assets.js";
 import { migrateAssetConversations, workspaceId } from "../assets/schema.js";
 import type { Statement } from "../db/index.js";
@@ -41,6 +51,61 @@ const field = (v: unknown, name: string, max: number) => {
     );
   return v.trim();
 };
+function piOptions(
+  value: unknown,
+  stored = false,
+): {
+  codeMode?: "on" | "only" | "off";
+  subagentConcurrency?: number;
+  thinking?: string;
+  sdkGeneration?: string;
+} {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new AppError(
+      400,
+      "invalid_pi_options",
+      "Invalid Pi Durable settings.",
+    );
+  const v = value as Record<string, unknown>;
+  if (
+    Object.keys(v).some(
+      (key) =>
+        ![
+          "codeMode",
+          "subagentConcurrency",
+          "thinking",
+          ...(stored ? ["sdkGeneration"] : []),
+        ].includes(key),
+    ) ||
+    (v.codeMode !== undefined &&
+      !["on", "only", "off"].includes(String(v.codeMode))) ||
+    (v.subagentConcurrency !== undefined &&
+      (!Number.isInteger(v.subagentConcurrency) ||
+        Number(v.subagentConcurrency) < 2 ||
+        Number(v.subagentConcurrency) > 24)) ||
+    (v.thinking !== undefined &&
+      !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+        String(v.thinking),
+      ))
+  )
+    throw new AppError(
+      400,
+      "invalid_pi_options",
+      "Choose supported Pi Durable settings.",
+    );
+  if (
+    v.sdkGeneration !== undefined &&
+    (typeof v.sdkGeneration !== "string" ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(v.sdkGeneration))
+  )
+    throw new AppError(
+      400,
+      "invalid_sdk_generation",
+      "Select an approved Pi Durable version.",
+    );
+  return v as ReturnType<typeof piOptions>;
+}
 function executionLimit(value: unknown, name: string): number {
   const parsed =
     typeof value === "number" || typeof value === "string"
@@ -138,6 +203,14 @@ CREATE TRIGGER conversation_fixed_mode BEFORE UPDATE OF mode ON conversations WH
     await this.initializeWorkspaceSchema();
     await migrateAssets(this.ctx);
     await migrateAssetConversations(this.ctx);
+    await this.ctx.db.migrate(
+      "conversation-native-activity-v1",
+      activitySchema,
+    );
+    await this.ctx.db.migrate(
+      "conversation-pi-options-v1",
+      "ALTER TABLE conversations ADD COLUMN pi_options TEXT NOT NULL DEFAULT '{}';",
+    );
   }
   private async initializeWorkspaceSchema() {
     await this.ctx.db.migrate(
@@ -309,6 +382,11 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             )
           : selectedHarness(input.harness),
       title = field(input.title ?? "New conversation", "Title", 200);
+    const options = piOptions(input.pi);
+    if (harness === "pi" && this.dependencies.runtime.sdkCatalog)
+      options.sdkGeneration = (
+        await this.dependencies.runtime.sdkCatalog(projectId)
+      ).defaultGeneration;
     const connectionId =
       input.connectionId === undefined
         ? undefined
@@ -323,7 +401,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       timestamp = now();
     await this.ctx.db.batch([
       {
-        sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,pi_options) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         params: [
           id,
           project.orgId,
@@ -336,6 +414,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           connectionId ?? null,
           timestamp,
           timestamp,
+          JSON.stringify(options),
         ],
       },
       {
@@ -389,9 +468,19 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "conversation_busy",
         "Wait for queued work to finish before changing conversation settings.",
       );
+    const previousPi = piOptions(JSON.parse(c.pi_options ?? "{}"), true);
+    const options =
+      input.pi === undefined
+        ? (c.pi_options ?? "{}")
+        : JSON.stringify({
+            ...piOptions(input.pi),
+            ...(previousPi.sdkGeneration
+              ? { sdkGeneration: previousPi.sdkGeneration }
+              : {}),
+          });
     const changed = await this.ctx.db.run(
-      "UPDATE conversations SET title=?,mode=?,harness=?,model=?,connection_id=?,updated_at=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling'))",
-      [title, mode, harness, model, connectionId, now(), id, id],
+      "UPDATE conversations SET title=?,mode=?,harness=?,model=?,connection_id=?,updated_at=?,pi_options=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling'))",
+      [title, mode, harness, model, connectionId, now(), options, id, id],
     );
     if (!changed.changes)
       throw new AppError(
@@ -482,10 +571,153 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       "Thread participants cannot be removed individually. Project or organization access can be revoked by an administrator.",
     );
   }
-  async messages(user: User, id: string, before?: string) {
+  async sdkCatalog(user: User, id: string) {
+    const c = await this.requireConversation(user, id);
+    if (!this.dependencies.runtime.sdkCatalog)
+      throw new AppError(
+        503,
+        "sdk_catalog_unavailable",
+        "SDK version inventory is unavailable on this host.",
+      );
+    const catalog = await this.dependencies.runtime.sdkCatalog(workspaceId(c));
+    const selected = piOptions(
+      JSON.parse(c.pi_options ?? "{}"),
+      true,
+    ).sdkGeneration;
+    return {
+      ...catalog,
+      selectedGeneration: selected ?? catalog.defaultGeneration,
+      pending: Boolean(
+        await this.ctx.db.get(
+          "SELECT 1 FROM conversation_runtime_stops WHERE conversation_id=?",
+          [id],
+        ),
+      ),
+    };
+  }
+  async activateSDK(user: User, id: string, generation: unknown) {
+    if (
+      typeof generation !== "string" ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(generation)
+    )
+      throw new AppError(
+        400,
+        "invalid_sdk_generation",
+        "Select an approved Pi Durable version.",
+      );
+    const changed = await this.serial(id, async () => {
+      const c = await this.requireConversation(user, id, true);
+      if (c.harness !== "pi")
+        throw new AppError(
+          409,
+          "agent_mismatch",
+          "Choose Pi Durable before updating its SDK.",
+        );
+      const catalog = await this.sdkCatalog(user, id);
+      if (!catalog.items.some((item) => item.id === generation))
+        throw new AppError(
+          400,
+          "invalid_sdk_generation",
+          "This SDK generation has not been approved on this host.",
+        );
+      const options = piOptions(JSON.parse(c.pi_options ?? "{}"), true);
+      if (options.sdkGeneration === generation) return undefined;
+      if (await this.latestActive(id))
+        throw new AppError(
+          409,
+          "conversation_busy",
+          "Wait for this conversation's work to finish before applying an SDK update.",
+        );
+      if (!this.dependencies.runtime.stopSession)
+        throw new AppError(
+          503,
+          "runtime_unavailable",
+          "This host cannot safely replace the conversation runtime.",
+        );
+      const next = (c.runtime_generation ?? 0) + 1;
+      try {
+        await this.ctx.db.batch([
+          {
+            sql: "UPDATE conversations SET pi_options=?,runtime_generation=?,updated_at=? WHERE id=? AND runtime_generation=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling')) AND NOT EXISTS(SELECT 1 FROM conversation_runtime_stops WHERE conversation_id=?)",
+            params: [
+              JSON.stringify({ ...options, sdkGeneration: generation }),
+              next,
+              now(),
+              id,
+              c.runtime_generation ?? 0,
+              id,
+              id,
+            ],
+            expectChanges: 1,
+          },
+          {
+            sql: "INSERT INTO conversation_runtime_stops(conversation_id,project_id,generation) VALUES(?,?,?)",
+            params: [id, workspaceId(c), next],
+          },
+          eventInsert(id, null, "sdk.changed", { generation }),
+        ]);
+      } catch {
+        throw new AppError(
+          409,
+          "conversation_busy",
+          "Conversation state changed. Refresh before applying this update.",
+        );
+      }
+      await this.ctx.audit(user, c.org_id, "conversation.sdk_selected", id, {
+        generation,
+      });
+      return { project_id: workspaceId(c), generation: next };
+    });
+    if (changed) await this.completeThreadStop(id, changed, "sdk_updated");
+    return this.sdkCatalog(user, id);
+  }
+  async activities(user: User, id: string, after?: string, before?: number) {
+    await this.requireConversation(user, id);
+    return readActivities(this.ctx.db, id, after, before);
+  }
+  async activityDetail(
+    user: User,
+    id: string,
+    runId: string,
+    key: string,
+    offset: number,
+    revision?: number,
+  ) {
+    await this.requireConversation(user, id);
+    const detail = await readActivityDetail(
+      this.ctx.db,
+      id,
+      runId,
+      key,
+      offset,
+      revision,
+    );
+    if (!detail) throw new AppError(404, "not_found", "Activity not found.");
+    return detail;
+  }
+  async archive(
+    user: User,
+    id: string,
+    after: number,
+    query = "",
+    runId?: string,
+    full = true,
+  ) {
+    await this.requireConversation(user, id);
+    return nativeArchivePage(this.ctx.db, id, after, query, runId, full);
+  }
+  async archiveRecord(user: User, id: string, ordinal: number) {
+    await this.requireConversation(user, id);
+    const record = await nativeArchiveRecord(this.ctx.db, id, ordinal);
+    if (!record) throw new AppError(404, "not_found", "Capture not found.");
+    return record;
+  }
+  async messages(user: User, id: string, before?: string, compact = false) {
     await this.requireConversation(user, id);
     const rows = await this.ctx.db.all<MessageRow>(
-      `SELECT m.*,u.name author_name,i.delivery,i.sequence,i.error FROM conversation_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? ${before ? "AND m.rowid<(SELECT rowid FROM conversation_messages WHERE id=? AND conversation_id=?)" : ""} ORDER BY m.rowid DESC LIMIT 201`,
+      `SELECT m.id,m.conversation_id,m.run_id,m.role,m.author_id,m.citations,m.created_at,m.kind,
+      ${compact ? "CASE WHEN m.role='assistant' AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN substr(m.content,1,500) ELSE m.content END" : "m.content"} content,
+      u.name author_name,i.delivery,i.sequence,i.error FROM conversation_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? ${before ? "AND m.rowid<(SELECT rowid FROM conversation_messages WHERE id=? AND conversation_id=?)" : ""} ORDER BY m.rowid DESC LIMIT 201`,
       before ? [id, before, id] : [id],
     );
     const hasMore = rows.length > 200;
@@ -1058,9 +1290,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       );
       const stillOwned = Boolean(
         this.dependencies.runtime.attach &&
-        durable &&
-        ["dispatching", "running", "cancelling"].includes(durable.status) &&
-        !execution.cancelReason,
+          durable &&
+          ["dispatching", "running", "cancelling"].includes(durable.status) &&
+          !execution.cancelReason,
       );
       try {
         if (!stillOwned)
@@ -1384,6 +1616,40 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       "UPDATE conversation_runs SET runtime_initial=? WHERE id=?",
       [JSON.stringify(execution.initialMessages ?? []), run.id],
     );
+    const piRoute =
+      run.harness === "pi"
+        ? await this.dependencies.inference.resolvePiModel?.(
+            run.org_id,
+            run.model,
+          )
+        : undefined;
+    const configuredPi =
+      run.harness === "pi"
+        ? piOptions(
+            JSON.parse(
+              (
+                await this.ctx.db.get<{ pi_options: string }>(
+                  "SELECT pi_options FROM conversations WHERE id=?",
+                  [run.conversation_id],
+                )
+              )?.pi_options ?? "{}",
+            ),
+            true,
+          )
+        : undefined;
+    if (
+      configuredPi &&
+      !configuredPi.sdkGeneration &&
+      this.dependencies.runtime.sdkCatalog
+    ) {
+      configuredPi.sdkGeneration = (
+        await this.dependencies.runtime.sdkCatalog(workspaceId(run))
+      ).defaultGeneration;
+      await this.ctx.db.run(
+        "UPDATE conversations SET pi_options=? WHERE id=?",
+        [JSON.stringify(configuredPi), run.conversation_id],
+      );
+    }
     execution.dispatched = true;
     execution.cleanupNeeded = true;
     await this.dependencies.runtime.execute(
@@ -1400,6 +1666,18 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         connectionId: run.connection_id ?? undefined,
         harness: run.harness,
         model: run.model,
+        ...(configuredPi
+          ? {
+              pi: {
+                ...configuredPi,
+                ...Object.fromEntries(
+                  Object.entries(piRoute ?? {}).filter(
+                    ([key]) => key !== "model",
+                  ),
+                ),
+              },
+            }
+          : {}),
         prompt,
         access: run.mode,
         mounts: mounts.map((m) => ({
@@ -1440,6 +1718,58 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   ) {
     const { run } = execution;
     switch (event.type) {
+      case "native_update": {
+        const metadata = event.update._meta as
+          | Record<string, unknown>
+          | undefined;
+        const fragmentedSnapshot =
+          (metadata?.wovenAssistantSnapshot ||
+            metadata?.wovenThoughtSnapshot) &&
+          metadata?.wovenSnapshotEnd === false;
+        const textReplacement =
+          event.update.sessionUpdate === "agent_message_chunk" &&
+          (metadata?.wovenAssistantSnapshot ||
+            metadata?.nativeMessageSnapshot) &&
+          !fragmentedSnapshot;
+        await commit([
+          ...(await projectNativeUpdate(
+            this.ctx.db,
+            run,
+            event.update,
+            event.sequence,
+          )),
+          ...(textReplacement
+            ? [
+                {
+                  sql: "UPDATE conversation_messages SET content=(SELECT COALESCE(group_concat(content,''),'') FROM (SELECT c.content FROM conversation_activity a JOIN conversation_activity_content c ON c.run_id=a.run_id AND c.activity_key=a.activity_key WHERE a.run_id=? AND a.kind IN ('message','final') ORDER BY a.ordinal)) WHERE id=?",
+                  params: [run.id, run.assistant_message_id],
+                },
+              ]
+            : []),
+          ...(fragmentedSnapshot
+            ? []
+            : [
+                eventInsert(run.conversation_id, run.id, "activity.changed", {
+                  runId: run.id,
+                }),
+              ]),
+        ]);
+        break;
+      }
+      case "native_records":
+        await commit(captureNativeBatch(run, event.batch));
+        break;
+      case "assistant_snapshot":
+        await commit([
+          {
+            sql: "UPDATE conversation_messages SET content=? WHERE id=?",
+            params: [event.text, run.assistant_message_id],
+          },
+          eventInsert(run.conversation_id, run.id, "assistant.snapshot", {
+            messageId: run.assistant_message_id,
+          }),
+        ]);
+        break;
       case "attached":
         setImmediate(
           () =>
@@ -1493,16 +1823,6 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         break;
       case "assistant_delta": {
         if (typeof event.delta !== "string" || !event.delta) return;
-        const existing = await this.ctx.db.get<{
-          length: number;
-        }>(
-          "SELECT length(content) length FROM conversation_messages WHERE id=?",
-          [run.assistant_message_id],
-        );
-        if ((existing?.length ?? 0) + event.delta.length > 2_000_000) {
-          await this.cancelExecution(execution, "output_limit");
-          return;
-        }
         await commit([
           {
             sql: "UPDATE conversation_messages SET content=content||? WHERE id=?",
@@ -1712,6 +2032,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         params: [status, code ?? null, message ?? null, now(), run.id],
         expectChanges: 1,
       },
+      ...settleActivity(run, status),
       eventInsert(run.conversation_id, run.id, `run.${status}`, {
         runId: run.id,
         messageId: run.assistant_message_id,

@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   codexConfig,
   grokConfig,
@@ -253,19 +256,22 @@ test("Codex resumes native identity and emits actual ordered deltas", async () =
       return rpc as unknown as JsonRpcProcess;
     },
   );
-  assert.deepEqual(events, [
-    {
-      type: "native_session",
-      sessionId: "thread1",
-    },
-    {
-      type: "assistant_delta",
-      delta: "Observed answer",
-    },
-    {
-      type: "input_accepted",
-    },
-  ]);
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ["native_session", "native_update", "assistant_delta", "input_accepted"],
+  );
+  assert.equal(events[0].type, "native_session");
+  assert.equal(events[0].sessionId, "thread1");
+  assert.equal(events[1].type, "native_update");
+  assert.deepEqual(events[1].update, {
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "Observed answer" },
+    _meta: { harness: "codex" },
+  });
+  assert.deepEqual(events[2], {
+    type: "assistant_delta",
+    delta: "Observed answer",
+  });
   assert.deepEqual(
     rpc.calls.map((c) => c.method),
     ["initialize", "thread/resume", "turn/start"],
@@ -278,8 +284,8 @@ test("Codex resumes native identity and emits actual ordered deltas", async () =
     ),
   );
 });
-test("Claude SDK query and Pi SDK session survive successive completed turns", async (t) => {
-  const { runClaude, drivePiSession } = await import("../src/sdk.js");
+test("Claude SDK query survives successive completed turns", async (t) => {
+  const { runClaude } = await import("../src/sdk.js");
   const { mkdtemp, rm } = await import("node:fs/promises"),
     { tmpdir } = await import("node:os"),
     { join } = await import("node:path");
@@ -331,34 +337,6 @@ test("Claude SDK query and Pi SDK session survive successive completed turns", a
   assert.equal(closed, 0);
   retained.claude!.input.end();
   await retained.claude!.iterator.return?.();
-  let prompts = 0,
-    disposed = 0;
-  const session = {
-    sessionId: "pi-retained",
-    subscribe() {
-      return () => {};
-    },
-    async prompt(_text: string, options: any) {
-      prompts++;
-      await options.onInputAccepted?.();
-    },
-    async abort() {},
-    clearQueue() {},
-    dispose() {
-      disposed++;
-    },
-  };
-  for (let i = 0; i < 2; i++)
-    await drivePiSession(
-      session as any,
-      { ...request, harness: "pi" },
-      async () => {},
-      new AbortController().signal,
-      undefined,
-      true,
-    );
-  assert.equal(prompts, 2);
-  assert.equal(disposed, 0);
 });
 test("Codex failure is not converted into an answer or retried", async () => {
   const rpc = new FixtureRpc();
@@ -583,11 +561,22 @@ test("normalized events reject unknown fields and bound tool metadata", () => {
   );
 });
 test("real stdio transport supports interleaved notifications and responses", async () => {
-  const program = `process.stdin.setEncoding('utf8');let b='';process.stdin.on('data',c=>{b+=c;let n;while((n=b.indexOf('\\n'))>=0){let m=JSON.parse(b.slice(0,n));b=b.slice(n+1);process.stdout.write(JSON.stringify({method:'notice',params:{value:m.params.value}})+'\\n');process.stdout.write(JSON.stringify({id:m.id,result:{ok:true}})+'\\n')}});`;
+  const childEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+  const directory = await mkdtemp(join(tmpdir(), "wme-rpc-test-"));
+  const script = join(directory, "rpc-fixture.cjs");
+  await writeFile(
+    script,
+    "const nl=String.fromCharCode(10);process.stdin.setEncoding('utf8');let b='';process.stdin.on('data',c=>{b+=c;let n;while((n=b.indexOf(nl))>=0){let m=JSON.parse(b.slice(0,n));b=b.slice(n+1);process.stdout.write(JSON.stringify({method:'notice',params:{value:m.params.value}})+nl);process.stdout.write(JSON.stringify({id:m.id,result:{ok:true}})+nl)}});\n",
+  );
   const rpc = new JsonRpcProcess(
     process.execPath,
-    ["-e", program],
+    [script],
     {
+      ...childEnv,
       PATH: process.env.PATH ?? "",
     },
     process.cwd(),
@@ -609,20 +598,28 @@ test("real stdio transport supports interleaved notifications and responses", as
     assert.deepEqual(events, [4]);
   } finally {
     rpc.close();
+    await rm(directory, { recursive: true, force: true });
   }
 });
 test("real stdio transport rejects oversized native protocol data", async () => {
-  const rpc = new JsonRpcProcess(
-    process.execPath,
-    [
-      "-e",
-      `process.stdout.write('x'.repeat(1048577));setTimeout(()=>{},10000);`,
-    ],
-    {},
-    process.cwd(),
+  const childEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
   );
-  await assert.rejects(rpc.closed, /exceeds limit/);
-  rpc.close();
+  const directory = await mkdtemp(join(tmpdir(), "wme-rpc-limit-"));
+  const script = join(directory, "rpc-limit.cjs");
+  await writeFile(
+    script,
+    "process.stdout.write('x'.repeat(1048577));setTimeout(()=>{},10000);\n",
+  );
+  const rpc = new JsonRpcProcess(process.execPath, [script], childEnv, process.cwd());
+  try {
+    await assert.rejects(rpc.closed, /exceeds limit/);
+  } finally {
+    rpc.close();
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 test("Codex active steering uses expectedTurnId and does not launch a second turn", async () => {
   const { SteeringChannel } = await import("../src/steering.js"),
@@ -862,154 +859,4 @@ test("Claude owns late admitted input through its matching result, not merely it
         e.type === "assistant_delta" && e.delta === "Steering work completed",
     ),
   );
-});
-test("Pi retains its native subscription through steering preflight and a late continuation", async () => {
-  const { drivePiSession } = await import("../src/sdk.js"),
-    { SteeringChannel } = await import("../src/steering.js"),
-    channel = new SteeringChannel();
-  let finishInitial!: () => void,
-    releasePreflight!: () => void,
-    finishContinuation!: () => void,
-    notify: (e: any) => void = () => {},
-    disposed = false,
-    unsubscribed = false,
-    finished = false;
-  const initial = new Promise<void>((r) => (finishInitial = r)),
-    preflight = new Promise<void>((r) => (releasePreflight = r)),
-    continuation = new Promise<void>((r) => (finishContinuation = r)),
-    events: RuntimeEvent[] = [];
-  let calls = 0;
-  const session = {
-    sessionId: "pi-durable",
-    subscribe(cb: any) {
-      notify = cb;
-      return () => {
-        unsubscribed = true;
-      };
-    },
-    async prompt(text: string, options: any) {
-      if (++calls === 1) {
-        options.preflightResult(true);
-        await initial;
-      } else {
-        assert.equal(options.streamingBehavior, "steer");
-        assert.match(text, /Named author/);
-        await preflight;
-        options.preflightResult(true);
-        await continuation;
-        notify({
-          type: "message_update",
-          assistantMessageEvent: {
-            type: "text_delta",
-            delta: "Late work",
-          },
-        });
-      }
-    },
-    async abort() {
-      finishInitial();
-      finishContinuation();
-    },
-    clearQueue() {},
-    dispose() {
-      disposed = true;
-    },
-  };
-  const run = drivePiSession(
-    session as any,
-    {
-      ...request,
-      harness: "pi",
-    },
-    (e) => {
-      events.push(e);
-    },
-    new AbortController().signal,
-    channel,
-  ).then(() => {
-    finished = true;
-  });
-  const receipt = channel.submit({
-    id: "pi-input",
-    sequence: 2,
-    authorId: "person",
-    authorName: "Named author",
-    content: "Steer",
-  });
-  await new Promise((r) => setImmediate(r));
-  finishInitial();
-  await new Promise((r) => setImmediate(r));
-  assert.equal(unsubscribed, false);
-  assert.equal(finished, false);
-  releasePreflight();
-  await receipt;
-  assert.equal(disposed, false);
-  finishContinuation();
-  await run;
-  assert.equal(unsubscribed, true);
-  assert.ok(
-    events.some((e) => e.type === "assistant_delta" && e.delta === "Late work"),
-  );
-});
-test("Pi Stop crossing steering preflight clears queued native input and does not report acceptance", async () => {
-  const { drivePiSession } = await import("../src/sdk.js"),
-    { SteeringChannel } = await import("../src/steering.js"),
-    channel = new SteeringChannel(),
-    abort = new AbortController();
-  let release!: () => void,
-    finish!: () => void,
-    calls = 0,
-    cleared = 0,
-    performed = false;
-  const initial = new Promise<void>((r) => (finish = r)),
-    gate = new Promise<void>((r) => (release = r));
-  const session = {
-    sessionId: "pi-stop",
-    subscribe() {
-      return () => {};
-    },
-    async prompt(_text: string, options: any) {
-      if (++calls === 1) {
-        options.preflightResult(true);
-        await initial;
-      } else {
-        await gate;
-        options.preflightResult(true);
-        performed = true;
-      }
-    },
-    async abort() {
-      finish();
-    },
-    clearQueue() {
-      cleared++;
-    },
-    dispose() {},
-  };
-  const run = drivePiSession(
-    session as any,
-    {
-      ...request,
-      harness: "pi",
-    },
-    () => {},
-    abort.signal,
-    channel,
-  );
-  void run.catch(() => {});
-  const receipt = channel.submit({
-    id: "pi-stop-input",
-    sequence: 2,
-    authorId: "person",
-    authorName: "Person",
-    content: "Do not replay",
-  });
-  void receipt.catch(() => {});
-  await new Promise((r) => setImmediate(r));
-  abort.abort();
-  release();
-  await assert.rejects(receipt);
-  await assert.rejects(run);
-  assert.equal(cleared, 1);
-  assert.equal(performed, false);
 });

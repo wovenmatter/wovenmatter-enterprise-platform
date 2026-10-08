@@ -7,6 +7,7 @@ import {
   RuntimeError,
   type ContainerRequest,
   type EventSink,
+  type RuntimeEvent,
 } from "./types.ts";
 export const agentInstructions =
   "You are the WovenMatter Enterprise Platform project assistant. Work with the files in /workspace. " +
@@ -80,6 +81,84 @@ export function applyEgressEnvironment(request: ContainerRequest): () => void {
   };
 }
 const quoted = (value: string) => JSON.stringify(value);
+function textUpdate(
+  harness: "codex" | "claude" | "grok",
+  text: string,
+  id?: string,
+  snapshot = false,
+): RuntimeEvent {
+  return {
+    type: "native_update",
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+      _meta: {
+        harness,
+        ...(id ? { nativeMessageID: id } : {}),
+        ...(snapshot ? { nativeMessageSnapshot: true } : {}),
+      },
+    },
+  };
+}
+function toolUpdate(
+  harness: "codex" | "claude" | "grok",
+  phase: "tool_call" | "tool_call_update",
+  tool: string,
+  toolId: string,
+  status?: string,
+  native?: Record<string, any>,
+): RuntimeEvent {
+  const output =
+    native?.aggregatedOutput ??
+    native?.output ??
+    (Array.isArray(native?.result?.content)
+      ? native.result.content.map((part: any) => part.text ?? "").join("\n")
+      : native?.result !== undefined
+        ? JSON.stringify(native.result, null, 2)
+        : native?.error !== undefined
+          ? JSON.stringify(native.error, null, 2)
+          : native?.changes !== undefined && phase === "tool_call_update"
+            ? JSON.stringify(native.changes, null, 2)
+            : undefined);
+  return {
+    type: "native_update",
+    update: {
+      sessionUpdate: phase,
+      toolCallId: toolId,
+      title:
+        tool === "commandExecution"
+          ? (native?.command ?? "Command")
+          : (native?.tool ?? tool),
+      kind: tool === "commandExecution" ? "execute" : tool,
+      ...(status ? { status } : {}),
+      ...(native
+        ? phase === "tool_call"
+          ? {
+              rawInput:
+                native.command ??
+                native.arguments ??
+                native.query ??
+                native.path ??
+                native,
+            }
+          : {
+              rawOutput: native,
+              ...(typeof output === "string"
+                ? {
+                    content: [
+                      {
+                        type: "content",
+                        content: { type: "text", text: output },
+                      },
+                    ],
+                  }
+                : {}),
+            }
+        : {}),
+      _meta: { harness },
+    },
+  };
+}
 export function codexConfig(request: ContainerRequest): string {
   return (
     [
@@ -193,7 +272,7 @@ export async function runCodex(
   const done = completion();
   let threadId = "",
     turnId = "";
-  const streamedItems = new Set<string>();
+  const streamedItems = new Map<string, string>();
   rpc.onMessage = async (message: RpcMessage) => {
     const p = message.params ?? {};
     if (message.id !== undefined && message.method) {
@@ -218,7 +297,11 @@ export async function runCodex(
       message.method === "item/agentMessage/delta" &&
       typeof p.delta === "string"
     ) {
-      streamedItems.add(p.itemId ?? "unknown");
+      streamedItems.set(
+        p.itemId ?? "unknown",
+        (streamedItems.get(p.itemId ?? "unknown") ?? "") + p.delta,
+      );
+      await emit(textUpdate("codex", p.delta, p.itemId));
       await emit({
         type: "assistant_delta",
         delta: p.delta,
@@ -227,12 +310,91 @@ export async function runCodex(
     if (
       message.method === "item/completed" &&
       p.item?.type === "agentMessage" &&
-      typeof p.item.text === "string" &&
-      !streamedItems.has(p.item.id ?? "unknown")
+      typeof p.item.text === "string"
+    ) {
+      const id = p.item.id ?? "unknown",
+        previous = streamedItems.get(id);
+      if (previous === undefined) {
+        streamedItems.set(id, p.item.text);
+        await emit(textUpdate("codex", p.item.text, id));
+        await emit({ type: "assistant_delta", delta: p.item.text });
+      } else if (previous !== p.item.text) {
+        streamedItems.set(id, p.item.text);
+        await emit(textUpdate("codex", p.item.text, id, true));
+      }
+      await emit({
+        type: "native_update",
+        update: { sessionUpdate: "woven_assistant_boundary" },
+      });
+    }
+    if (
+      ["item/reasoning/summaryTextDelta", "item/reasoning/textDelta"].includes(
+        message.method ?? "",
+      ) &&
+      typeof p.delta === "string"
+    ) {
+      const part =
+        message.method === "item/reasoning/summaryTextDelta"
+          ? "summary"
+          : "text";
+      const id =
+        String(p.itemId) +
+        ":" +
+        part +
+        ":" +
+        String(p.summaryIndex ?? p.contentIndex ?? 0);
+      await emit({
+        type: "native_update",
+        update: {
+          sessionUpdate: "agent_thought_chunk",
+          content: { type: "text", text: p.delta },
+          _meta: { harness: "codex", wovenThoughtID: id },
+        },
+      });
+    }
+    if (message.method === "item/completed" && p.item?.type === "reasoning") {
+      for (const [part, values] of [
+        ["summary", p.item.summary],
+        ["text", p.item.content],
+      ] as const) {
+        if (!Array.isArray(values)) continue;
+        for (const [index, value] of values.entries()) {
+          const text =
+            typeof value === "string"
+              ? value
+              : typeof value?.text === "string"
+                ? value.text
+                : "";
+          if (!text) continue;
+          const id = String(p.item.id) + ":" + part + ":" + index;
+          await emit({
+            type: "native_update",
+            update: {
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text },
+              _meta: {
+                harness: "codex",
+                wovenThoughtID: id,
+                wovenThoughtSnapshot: true,
+                wovenThoughtStatus: "completed",
+              },
+            },
+          });
+        }
+      }
+    }
+    if (
+      message.method === "item/commandExecution/outputDelta" &&
+      typeof p.delta === "string"
     )
       await emit({
-        type: "assistant_delta",
-        delta: p.item.text,
+        type: "native_update",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: String(p.itemId),
+          rawOutput: { output: { append: p.delta } },
+          _meta: { harness: "codex" },
+        },
       });
     if (
       (message.method === "item/started" ||
@@ -245,6 +407,16 @@ export async function runCodex(
         "imageView",
       ].includes(p.item?.type)
     ) {
+      await emit(
+        toolUpdate(
+          "codex",
+          message.method === "item/started" ? "tool_call" : "tool_call_update",
+          p.item.type,
+          String(p.item.id),
+          p.item.status,
+          p.item,
+        ),
+      );
       await emit({
         type: message.method === "item/started" ? "tool_start" : "tool_end",
         tool: p.item.type,
@@ -448,30 +620,35 @@ export async function runGrok(
     if (message.method !== "session/update" || p.sessionId !== sessionId)
       return;
     const u = p.update;
+    if (u && typeof u === "object" && typeof u.sessionUpdate === "string")
+      await emit({ type: "native_update", update: u });
     if (
       u?.sessionUpdate === "agent_message_chunk" &&
       u.content?.type === "text"
-    )
+    ) {
       await emit({
         type: "assistant_delta",
         delta: u.content.text,
       });
-    if (u?.sessionUpdate === "tool_call")
+    }
+    if (u?.sessionUpdate === "tool_call") {
       await emit({
         type: "tool_start",
         tool: u.title ?? u.kind ?? "tool",
         toolId: u.toolCallId,
       });
+    }
     if (
       u?.sessionUpdate === "tool_call_update" &&
       ["completed", "failed"].includes(u.status)
-    )
+    ) {
       await emit({
         type: "tool_end",
         tool: u.title ?? u.kind ?? "tool",
         toolId: u.toolCallId,
         status: u.status,
       });
+    }
   };
   const abort = () => {
     if (sessionId)

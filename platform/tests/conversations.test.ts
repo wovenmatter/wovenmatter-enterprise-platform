@@ -1830,3 +1830,195 @@ test("overlapping Stop completion must not cancel work admitted after the comple
   );
   await durable.event(next.run!.id, { type: "completed" });
 });
+
+test("native activity details and canonical export follow current conversation authorization", async (t) => {
+  const f = await fixture(t),
+    c = await f.create();
+  const receipt = await f.service.admit(f.users[0], c.id, {
+    content: "Inspect",
+    requestId: randomUUID(),
+  });
+  const runId = receipt.run!.id;
+  await until(() => f.runtime.pending.has(runId));
+  const text = "Retained response 🌿 ".repeat(4000);
+  await f.runtime.event(runId, {
+    type: "native_update",
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+    },
+  });
+  await f.runtime.event(runId, { type: "assistant_snapshot", text });
+  await f.runtime.event(runId, {
+    type: "native_records",
+    batch: {
+      sourceID: "native",
+      nativeSessionID: "n1",
+      records: [
+        {
+          id: "one",
+          revision: 1,
+          kind: "entry",
+          text: "searchable record",
+          payload: "exact native payload",
+        },
+      ],
+    },
+  });
+  await f.runtime.complete(runId);
+  await until(
+    async () =>
+      (await f.service.runs(f.users[0], c.id)).items[0].status === "completed",
+  );
+  const compact = await f.service.messages(f.users[0], c.id, undefined, true);
+  assert.ok(
+    [...compact.items.find((m) => m.role === "assistant")!.content].length <=
+      500,
+  );
+  const activities = await f.service.activities(f.users[0], c.id);
+  assert.equal(activities.items[0].kind, "final");
+  let recovered = "",
+    offset = 0;
+  for (;;) {
+    const page = await f.service.activityDetail(
+      f.users[0],
+      c.id,
+      runId,
+      activities.items[0].key,
+      offset,
+      activities.items[0].revision,
+    );
+    assert.equal(page.stale, false);
+    recovered += page.text;
+    if (!page.hasMore) break;
+    offset = page.nextOffset!;
+  }
+  assert.equal(recovered, text);
+  const archive = await f.service.archive(f.users[0], c.id, 0, "searchable");
+  assert.equal(archive.items.length, 1);
+  assert.match(archive.items[0].payload, /exact native payload/);
+  const app = Fastify();
+  let current = f.users[0];
+  f.ctx.requireUser = async () => current;
+  await registerConversations(app, f.ctx, f.service);
+  t.after(() => app.close());
+  const base = "/enterprise/api/conversations/" + c.id;
+  const exported = await app.inject({ url: base + "/archive/export" });
+  assert.equal(exported.statusCode, 200);
+  assert.match(exported.body, /exact native payload/);
+  assert.equal(
+    (await app.inject({ url: base + "/activities?after=Infinity" })).statusCode,
+    400,
+  );
+  assert.equal(
+    (await app.inject({ url: base + "/archive?after=-1" })).statusCode,
+    400,
+  );
+  current = f.users[1];
+  for (const path of [
+    "/activities",
+    "/activities/" + runId + "/message%3A0",
+    "/archive",
+    "/archive/export",
+    "/archive/" + archive.items[0].ordinal,
+  ])
+    assert.equal((await app.inject({ url: base + path })).statusCode, 404);
+  await f.service.addMember(f.users[0], c.id, current.id);
+  assert.equal(
+    (await app.inject({ url: base + "/activities" })).statusCode,
+    200,
+  );
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [current.id]);
+  assert.equal(
+    (await app.inject({ url: base + "/archive/export" })).statusCode,
+    404,
+  );
+});
+
+test("approved SDK activation is owner scoped, idle only, fenced and reaches the next runtime request", async (t) => {
+  const stopped: string[] = [];
+  const catalog = {
+    bundledGeneration: "approved-one",
+    defaultGeneration: "approved-one",
+    items: ["approved-one", "approved-two"].map((id) => ({
+      id,
+      label: id,
+      piVersion: "1.1.0",
+      status: "approved" as const,
+      integrity: { algorithm: "sha256" as const, manifest: "0".repeat(64) },
+    })),
+  };
+  const f = await fixture(
+    t,
+    100_000,
+    {},
+    {
+      sdkCatalog: async () => catalog,
+      stopSession: async (_project, id) => {
+        stopped.push(id);
+      },
+    },
+  );
+  const c = await f.service.create(f.users[0], f.project, {
+    title: "Pi updates",
+    mode: "read",
+    model: "gpt-test",
+    harness: "pi",
+    pi: { codeMode: "off", subagentConcurrency: 3 },
+  });
+  assert.equal(c.pi.sdkGeneration, "approved-one");
+  await f.service.addMember(f.users[0], c.id, f.users[1].id);
+  await assert.rejects(f.service.activateSDK(f.users[1], c.id, "approved-two"));
+  await assert.rejects(
+    f.service.activateSDK(f.users[0], c.id, "../untrusted"),
+    { code: "invalid_sdk_generation" },
+  );
+  await assert.rejects(
+    f.service.update(f.users[0], c.id, {
+      pi: { sdkGeneration: "approved-two" },
+    }),
+    { code: "invalid_pi_options" },
+  );
+  const first = await f.service.admit(f.users[0], c.id, {
+    content: "Work",
+    requestId: randomUUID(),
+  });
+  await until(() => f.runtime.pending.has(first.run!.id));
+  assert.equal(f.runtime.requests[0].pi?.sdkGeneration, "approved-one");
+  assert.equal(f.runtime.requests[0].pi?.subagentConcurrency, 3);
+  await assert.rejects(
+    f.service.activateSDK(f.users[0], c.id, "approved-two"),
+    { code: "conversation_busy" },
+  );
+  assert.equal(stopped.length, 0);
+  await f.runtime.complete(first.run!.id);
+  await until(
+    async () =>
+      (await f.service.runs(f.users[0], c.id)).items[0].status === "completed",
+  );
+  const selected = await f.service.activateSDK(
+    f.users[0],
+    c.id,
+    "approved-two",
+  );
+  assert.equal(selected.selectedGeneration, "approved-two");
+  assert.equal(selected.pending, false);
+  assert.deepEqual(stopped, [c.id]);
+  const second = await f.service.admit(f.users[0], c.id, {
+    content: "Continue",
+    requestId: randomUUID(),
+  });
+  await until(() => f.runtime.pending.has(second.run!.id));
+  assert.equal(f.runtime.requests[1].pi?.sdkGeneration, "approved-two");
+  assert.equal(f.runtime.requests[1].resumeId, "native-" + first.run!.id);
+  await f.runtime.complete(second.run!.id);
+  await until(
+    async () =>
+      (await f.service.runs(f.users[0], c.id)).items[0].status === "completed",
+  );
+  assert.equal(
+    (await f.service.activateSDK(f.users[0], c.id, "approved-one"))
+      .selectedGeneration,
+    "approved-one",
+  );
+});

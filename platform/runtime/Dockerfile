@@ -37,6 +37,8 @@ COPY platform/runtime/document-requirements.txt /opt/document-requirements.txt
 RUN python3 -m venv /opt/document-tools \
  && /opt/document-tools/bin/pip install --no-cache-dir --no-deps -r /opt/document-requirements.txt
 COPY --from=dependencies /opt/runtime/node_modules ./node_modules
+# The coordinator, supervisor and runner identify the same bundled SDK generation.
+COPY package-lock.json ./package-lock.json
 COPY --from=build /build/platform/dist/packages/runtime/src ./src
 RUN chmod 0755 /opt/runtime/src/background-cli.js && ln -s /opt/runtime/src/background-cli.js /usr/local/bin/wme-background
 RUN chmod 0755 /opt/runtime/src/asset-cli.js && ln -s /opt/runtime/src/asset-cli.js /usr/local/bin/wme-asset

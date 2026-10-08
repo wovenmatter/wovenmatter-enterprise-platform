@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  ConversationRunWork,
+  NativeChecklist,
+  NativeHistory,
+  useConversationActivities,
+} from "./ConversationWork";
+import type { Activity } from "../activity-state";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUp,
   MessageSquare,
@@ -50,6 +57,12 @@ export type Conversation = {
   mode: "read" | "write";
   effectiveMode?: "read" | "write";
   harness: string;
+  pi?: {
+    codeMode?: string;
+    subagentConcurrency?: number;
+    thinking?: string;
+    sdkGeneration?: string;
+  };
   model: string;
   createdBy: string;
   lastEventId?: number;
@@ -83,6 +96,8 @@ type Run = {
     message: string;
   } | null;
   createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
 };
 type Messages = List<Message> & {
   hasMore: boolean;
@@ -208,6 +223,82 @@ export function ConversationsPage({ project }: { project: Project }) {
     </div>
   );
 }
+function PiSDKSettings({ conversationId }: { conversationId: string }) {
+  const catalog = useResource<{
+    defaultGeneration: string;
+    selectedGeneration: string;
+    pending: boolean;
+    items: { id: string; label: string; piVersion: string }[];
+  }>("/enterprise/api/conversations/" + conversationId + "/sdk-catalog");
+  const [selected, setSelected] = useState(""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  useEffect(() => {
+    if (catalog.data) setSelected(catalog.data.selectedGeneration);
+  }, [catalog.data]);
+  return (
+    <div className="pi-sdk-settings">
+      <Field
+        label="Pi Durable version"
+        hint="Updates are published and verified by your platform maintainer. Applying one stops this conversation's idle background work and keeps its history."
+      >
+        <select
+          value={selected}
+          disabled={busy || !catalog.data}
+          onChange={(e) => setSelected(e.target.value)}
+        >
+          {catalog.data?.items.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.piVersion} · {item.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <div className="row-actions">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy}
+          onClick={catalog.reload}
+        >
+          Check for updates
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={
+            busy || !selected || selected === catalog.data?.selectedGeneration
+          }
+          onClick={async () => {
+            setBusy(true);
+            setError("");
+            try {
+              await send(
+                "/enterprise/api/conversations/" +
+                  conversationId +
+                  "/sdk-generation",
+                { generation: selected },
+              );
+              catalog.reload();
+            } catch (e) {
+              setError(errorMessage(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Applying…" : "Apply version"}
+        </button>
+      </div>
+      {catalog.data?.pending ? (
+        <p className="muted">
+          The selected update is waiting for the previous runtime to stop.
+        </p>
+      ) : null}
+      <ErrorNotice message={error || catalog.error} />
+    </div>
+  );
+}
 export function ConversationForm({
   project,
   models,
@@ -223,6 +314,9 @@ export function ConversationForm({
   onSave: (body: unknown) => Promise<void>;
   onCancel: () => void;
 }) {
+  const [selectedAgent, setSelectedAgent] = useState(
+    conversation?.harness ?? "",
+  );
   return (
     <AsyncForm
       submitLabel={conversation ? "Save changes" : "Create conversation"}
@@ -237,6 +331,15 @@ export function ConversationForm({
               }),
           harness: d.get("harness") || null,
           model: d.get("model"),
+          ...(["", "pi"].includes(selectedAgent)
+            ? {
+                pi: {
+                  codeMode: d.get("codeMode"),
+                  subagentConcurrency: Number(d.get("subagentConcurrency")),
+                  ...(d.get("thinking") ? { thinking: d.get("thinking") } : {}),
+                },
+              }
+            : {}),
         })
       }
     >
@@ -277,14 +380,64 @@ export function ConversationForm({
         </select>
       </Field>
       <Field label="Agent">
-        <select name="harness" defaultValue={conversation?.harness ?? ""}>
-          <option value="">Provider default</option>
+        <select
+          name="harness"
+          value={selectedAgent}
+          onChange={(e) => setSelectedAgent(e.target.value)}
+        >
+          <option value="">Pi Durable (default)</option>
           <option value="codex">Codex</option>
-          <option value="claude">Claude</option>
+          <option value="claude">Claude Code</option>
           <option value="grok">Grok Build</option>
-          <option value="pi">Pi</option>
+          <option value="pi">Pi Durable</option>
         </select>
       </Field>
+      {["", "pi"].includes(selectedAgent) ? (
+        <details className="pi-options">
+          <summary>Pi Durable settings</summary>
+          <Field label="Code mode">
+            <select
+              name="codeMode"
+              defaultValue={conversation?.pi?.codeMode ?? "on"}
+            >
+              <option value="on">Enabled</option>
+              <option value="only">Code mode only</option>
+              <option value="off">Disabled</option>
+            </select>
+          </Field>
+          <Field label="Concurrent subagents">
+            <input
+              name="subagentConcurrency"
+              type="number"
+              min={2}
+              max={24}
+              step={1}
+              defaultValue={conversation?.pi?.subagentConcurrency ?? 8}
+            />
+          </Field>
+          <Field
+            label="Thinking"
+            hint="Availability depends on the selected model."
+          >
+            <select
+              name="thinking"
+              defaultValue={conversation?.pi?.thinking ?? ""}
+            >
+              <option value="">Model default</option>
+              <option value="off">Off</option>
+              <option value="minimal">Minimal</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="xhigh">Extra high</option>
+              <option value="max">Maximum</option>
+            </select>
+          </Field>
+        </details>
+      ) : null}
+      {conversation && selectedAgent === "pi" ? (
+        <PiSDKSettings conversationId={conversation.id} />
+      ) : null}
       {!models.length ? (
         <p className="muted">
           No models are available. An administrator needs to connect an
@@ -316,8 +469,9 @@ export function Thread({
   const detail = useResource<Conversation>(
     `/enterprise/api/conversations/${id}`,
   );
+  const activity = useConversationActivities(id);
   const messages = useResource<Messages>(
-    `/enterprise/api/conversations/${id}/messages`,
+    `/enterprise/api/conversations/${id}/messages?compact=1`,
   );
   const runs = useResource<List<Run>>(
     `/enterprise/api/conversations/${id}/runs`,
@@ -351,6 +505,33 @@ export function Thread({
   const [deleting, setDeleting] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
+  const [following, setFollowing] = useState(true);
+  const inspectWork = useCallback(() => {
+    follow.current = false;
+    setFollowing(false);
+  }, []);
+  const previousActivity = useRef(new Map<string, Activity[]>());
+  const activityByRun = useMemo(() => {
+    const map = new Map<string, Activity[]>();
+    for (const item of activity.items) {
+      if (item.deleted) continue;
+      const items = map.get(item.runId) ?? [];
+      items.push(item);
+      map.set(item.runId, items);
+    }
+    for (const [runId, items] of map) {
+      const previous = previousActivity.current.get(runId);
+      if (
+        previous?.length === items.length &&
+        items.every((item, index) => item === previous[index])
+      )
+        map.set(runId, previous);
+    }
+    previousActivity.current = map;
+    return map;
+  }, [activity.items]);
+  const indexedRuns = useRef(new Set<string>());
+  indexedRuns.current = new Set(activityByRun.keys());
   const active =
     runs.data?.items.filter((r) => activeStatuses.has(r.status)) ?? [];
   const creator = !!asset || detail.data?.createdBy === user.id;
@@ -376,6 +557,7 @@ export function Thread({
       if (disposed) return;
       let event: {
         type: string;
+        runId?: string;
         data?: Record<string, unknown>;
       };
       try {
@@ -389,6 +571,21 @@ export function Thread({
         refresh();
         return;
       }
+      if (event.type === "activity.changed") {
+        activity.reload();
+        return;
+      }
+      if (
+        event.runId &&
+        indexedRuns.current.has(event.runId) &&
+        [
+          "assistant.delta",
+          "assistant.snapshot",
+          "tool.started",
+          "tool.completed",
+        ].includes(event.type)
+      )
+        return;
       if (event.type === "files.reconciliation_failed")
         setError(
           String(event.data?.message ?? "File updates could not be refreshed."),
@@ -400,7 +597,8 @@ export function Thread({
           ),
         );
       if (event.type === "tool.completed") setTool("");
-      if (event.type === "members.changed") detail.reload();
+      if (event.type === "members.changed" || event.type === "sdk.changed")
+        detail.reload();
       if (event.type === "asset.saved") assetSaved.current?.();
       if (event.type === "run.queued" || event.type === "run.started")
         detail.reload();
@@ -409,6 +607,7 @@ export function Thread({
         !["run.queued", "run.started", "run.session"].includes(event.type)
       ) {
         setTool("");
+        activity.reload();
         detail.reload();
         refresh();
       }
@@ -424,6 +623,9 @@ export function Thread({
       "run.stopping",
       "run.session",
       "assistant.delta",
+      "assistant.snapshot",
+      "activity.changed",
+      "sdk.changed",
       "assistant.citation",
       "files.reconciliation_failed",
       "tool.started",
@@ -442,6 +644,7 @@ export function Thread({
       source.addEventListener(name, update);
     source.onopen = () => {
       setStreamState("Connected");
+      activity.reload();
       reload();
       assetSaved.current?.();
     };
@@ -451,11 +654,39 @@ export function Thread({
       if (timer) clearTimeout(timer);
       source.close();
     };
-  }, [id, initialCursor, messages.reload, runs.reload, detail.reload, refresh]);
+  }, [
+    id,
+    initialCursor,
+    messages.reload,
+    runs.reload,
+    detail.reload,
+    refresh,
+    activity.reload,
+  ]);
   useEffect(() => {
     if (follow.current && scroll.current)
       scroll.current.scrollTop = scroll.current.scrollHeight;
-  }, [messages.data, tool]);
+  }, [messages.data, tool, activity.items]);
+  useEffect(() => {
+    const node = scroll.current;
+    if (!node) return;
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (follow.current) node.scrollTop = node.scrollHeight;
+      });
+    });
+    observer.observe(node, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [id]);
   async function submit() {
     if (sending || (!draft.trim() && !request.current)) return;
     setSending(true);
@@ -481,6 +712,7 @@ export function Thread({
       runs.reload();
       refresh();
       follow.current = true;
+      setFollowing(true);
     } catch (e) {
       const known = e instanceof ApiError && e.status < 500;
       if (known) {
@@ -501,7 +733,7 @@ export function Thread({
   async function loadOlder() {
     try {
       const page = await api<Messages>(
-        `/enterprise/api/conversations/${id}/messages?before=${encodeURIComponent(before ?? messages.data?.nextBefore ?? "")}`,
+        `/enterprise/api/conversations/${id}/messages?compact=1&before=${encodeURIComponent(before ?? messages.data?.nextBefore ?? "")}`,
       );
       setOlder((prev) => [...page.items, ...prev]);
       setBefore(page.nextBefore);
@@ -526,7 +758,16 @@ export function Thread({
               : detail.data?.mode === "write"
                 ? "Full access"
                 : "Read-only"}{" "}
-            · {detail.data?.harness} · {detail.data?.model}
+            ·{" "}
+            {(
+              {
+                pi: "Pi Durable",
+                codex: "Codex",
+                claude: "Claude Code",
+                grok: "Grok Build",
+              } as Record<string, string>
+            )[detail.data?.harness ?? ""] ?? detail.data?.harness}{" "}
+            · {detail.data?.model}
           </small>
         </div>
         <div className="row-actions">
@@ -563,16 +804,24 @@ export function Thread({
         </div>
       </header>
       <ErrorNotice
-        message={detail.error || messages.error || runs.error || error}
+        message={
+          detail.error ||
+          messages.error ||
+          runs.error ||
+          activity.error ||
+          error
+        }
       />
       <div
         className="transcript"
         ref={scroll}
         onScroll={() => {
           const el = scroll.current;
-          if (el)
+          if (el) {
             follow.current =
               el.scrollHeight - el.scrollTop - el.clientHeight < 90;
+            setFollowing(follow.current);
+          }
         }}
       >
         {(olderLoaded ? before : messages.data?.hasMore) ? (
@@ -581,6 +830,17 @@ export function Thread({
             onClick={() => void loadOlder()}
           >
             Load earlier messages
+          </button>
+        ) : null}
+        {activity.hasOlder ? (
+          <button
+            className="text-button load-older"
+            onClick={() => {
+              inspectWork();
+              void activity.loadOlder().catch((e) => setError(errorMessage(e)));
+            }}
+          >
+            Load earlier activity
           </button>
         ) : null}
         {messages.loading && !messages.data ? (
@@ -604,7 +864,25 @@ export function Thread({
               </div>
               <div className="message-content">
                 {m.role === "assistant" ? (
-                  m.content ? (
+                  activityByRun.has(m.runId) ? (
+                    <ConversationRunWork
+                      id={id}
+                      items={activityByRun.get(m.runId)!}
+                      status={
+                        runs.data?.items.find((run) => run.id === m.runId)
+                          ?.status
+                      }
+                      startedAt={
+                        runs.data?.items.find((run) => run.id === m.runId)
+                          ?.startedAt
+                      }
+                      completedAt={
+                        runs.data?.items.find((run) => run.id === m.runId)
+                          ?.completedAt
+                      }
+                      onInspect={inspectWork}
+                    />
+                  ) : m.content ? (
                     <RichText>{m.content}</RichText>
                   ) : (
                     <span className="muted">
@@ -686,6 +964,24 @@ export function Thread({
           ))}
       </div>
       <div className="composer-area">
+        {!following ? (
+          <button
+            className="text-button latest-reply"
+            onClick={() => {
+              follow.current = true;
+              setFollowing(true);
+              if (scroll.current)
+                scroll.current.scrollTop = scroll.current.scrollHeight;
+            }}
+          >
+            Latest reply ↓
+          </button>
+        ) : null}
+        <NativeChecklist
+          items={activity.items}
+          activeRunIds={new Set(active.map((run) => run.id))}
+        />
+        <NativeHistory id={id} />
         <form
           onSubmit={(e) => {
             e.preventDefault();

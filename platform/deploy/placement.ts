@@ -137,6 +137,10 @@ export function placedRuntime(
     };
   }
   const runtime: Runtime = {
+    async sdkCatalog(projectId) {
+      const spec = await lookup(projectId);
+      return target(spec).client.runtime.sdkCatalog!(projectId);
+    },
     async releaseAsset(spec) {
       await target(spec).client.runtime.releaseAsset!(spec);
     },

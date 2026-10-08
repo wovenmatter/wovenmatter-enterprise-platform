@@ -83,6 +83,11 @@ async function relay(
                   req.headers["content-type"] ?? "application/json",
                 ),
                 authorization: `Bearer ${token}`,
+                ...(typeof req.headers["anthropic-beta"] === "string" &&
+                req.headers["anthropic-beta"].length <= 512 &&
+                /^[A-Za-z0-9,._ =:-]+$/.test(req.headers["anthropic-beta"])
+                  ? { "anthropic-beta": req.headers["anthropic-beta"] }
+                  : {}),
               },
             },
             (reply) => {

@@ -7,6 +7,9 @@ export type RuntimeEvent = { sequence?: number } & (
   | { type: "input_accepted" }
   | { type: "native_session"; sessionId: string }
   | { type: "assistant_delta"; delta: string }
+  | { type: "assistant_snapshot"; text: string }
+  | { type: "native_update"; update: Record<string, unknown> }
+  | { type: "native_records"; batch: Record<string, unknown> }
   | {
       type: "citation";
       fileId: string;
@@ -54,6 +57,21 @@ export interface RuntimeRequest {
   /** Trusted credential-free internal proxy origin. Omit to disable public egress. */
   egressProxyUrl?: string;
   resumeId?: string;
+  pi?: {
+    codeMode?: "on" | "only" | "off";
+    subagentConcurrency?: number;
+    thinking?: string;
+    sdkGeneration?: string;
+    provider?: "openai" | "anthropic" | "xai" | "openrouter" | "custom";
+    api?: "openai-responses" | "anthropic-messages" | "openai-compatible";
+    contextWindow?: number;
+    maxOutputTokens?: number;
+    supportsNativeCompaction?: boolean;
+    supportsImages?: boolean;
+    supportsReasoning?: boolean;
+    routeIdentity?: string;
+    accountAffinity?: "proxy-session-affinity";
+  };
 }
 /** The only values sent to the isolated container. No host paths or management secrets. */
 export type ContainerRequest = Pick<
@@ -68,6 +86,7 @@ export type ContainerRequest = Pick<
   | "egressProxyUrl"
   | "resumeId"
   | "assetId"
+  | "pi"
 > & { mountEvidence?: MountEvidence[] };
 export interface SteeringInput {
   id: string;
@@ -88,7 +107,29 @@ export interface ProjectRuntimeSpec {
   scheduleEnabled?: boolean;
   scheduleMounts?: RuntimeMount[];
 }
+export type RuntimeSDKCatalogDTO = {
+  bundledGeneration: string;
+  defaultGeneration: string;
+  items: Array<{
+    id: string;
+    label: string;
+    piVersion: string;
+    status: "approved";
+    bundled?: boolean;
+    provenance?: {
+      sourceCommit?: string;
+      builtAt?: string;
+      builder?: string;
+    };
+    integrity: {
+      algorithm: "sha256";
+      manifest: string;
+    };
+  }>;
+};
 export interface Runtime {
+  /** Read approved Pi SDK generations for a placed project without starting its container. */
+  sdkCatalog?(projectId: string): Promise<RuntimeSDKCatalogDTO>;
   /** Release only idle asset compute, conditional on the current workspace lease. Keep durable state. */
   releaseAsset?(spec: ProjectRuntimeSpec): Promise<void>;
   ensureProject?(spec: ProjectRuntimeSpec): Promise<void>;

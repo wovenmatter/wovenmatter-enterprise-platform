@@ -30,6 +30,29 @@ const native = process.env.WME_E2E_AGENT_IMAGE
 const webRoot = join(stateDir, "web");
 await cp(resolve("platform/apps/web/dist"), webRoot, { recursive: true });
 const runtime = native?.runtime ?? {
+  async sdkCatalog() {
+    return {
+      bundledGeneration: "fixture-sdk-one",
+      defaultGeneration: "fixture-sdk-one",
+      items: [
+        {
+          id: "fixture-sdk-one",
+          label: "Bundled fixture",
+          piVersion: "1.1.0",
+          status: "approved",
+          bundled: true,
+          integrity: { algorithm: "sha256", manifest: "0".repeat(64) },
+        },
+        {
+          id: "fixture-sdk-two",
+          label: "Approved test fixture",
+          piVersion: "1.1.0",
+          status: "approved",
+          integrity: { algorithm: "sha256", manifest: "1".repeat(64) },
+        },
+      ],
+    };
+  },
   async ensureProject() {},
   async releaseAsset() {},
   async stopSession() {},
@@ -40,6 +63,108 @@ const runtime = native?.runtime ?? {
   async execute(request, emit, signal) {
     await emit({ type: "started" });
     await emit({ type: "input_accepted" });
+    if (request.prompt.includes("[native-stream]")) {
+      const native = (update) => emit({ type: "native_update", update });
+      const message = async (text) => {
+        await native({
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        });
+        await emit({ type: "assistant_delta", delta: text });
+      };
+      await native({
+        sessionUpdate: "plan",
+        entries: [
+          {
+            id: "read",
+            content: "Inspect the retained record",
+            status: "in_progress",
+          },
+          { id: "verify", content: "Verify the result", status: "pending" },
+        ],
+        _meta: { wovenPlanKind: "checklist", wovenPlanOperation: "replace" },
+      });
+      await native({
+        sessionUpdate: "agent_thought_chunk",
+        content: {
+          type: "text",
+          text: "Checking the source and its preserved history.",
+        },
+        _meta: { wovenThoughtID: "fixture-thought" },
+      });
+      await message("I will inspect the record and verify the result.");
+      await native({ sessionUpdate: "woven_assistant_boundary" });
+      await native({
+        sessionUpdate: "tool_call",
+        toolCallId: "fixture-read",
+        title: "Read retained record",
+        kind: "read",
+        status: "in_progress",
+        rawInput: { path: "record.txt" },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 6000));
+      if (signal?.aborted) {
+        await emit({ type: "cancelled" });
+        return;
+      }
+      await native({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "fixture-read",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "text",
+              text:
+                "Complete tool output. " +
+                "retained row\n".repeat(4000) +
+                "FINAL RETAINED ROW",
+            },
+          },
+        ],
+      });
+      await native({
+        sessionUpdate: "woven_subagents",
+        subagents: [
+          {
+            id: 1,
+            name: "Verify record",
+            state: "completed",
+            modelID: request.model,
+            result: "The retained record is complete.",
+          },
+        ],
+      });
+      await native({
+        sessionUpdate: "plan",
+        entries: [],
+        _meta: { wovenPlanKind: "checklist", wovenPlanOperation: "clear" },
+      });
+      await message(
+        "The record is complete.\n\nAll retained output remains available after reopening this conversation.",
+      );
+      await native({ sessionUpdate: "woven_assistant_boundary" });
+      await emit({
+        type: "native_records",
+        batch: {
+          schemaVersion: 1,
+          sourceID: "fixture",
+          nativeSessionID: "fixture-session",
+          records: [
+            {
+              id: "fixture-record",
+              revision: "1",
+              kind: "message",
+              text: "Complete fixture archive",
+              payload: "Preserved canonical fixture.",
+            },
+          ],
+        },
+      });
+      await emit({ type: "completed" });
+      return;
+    }
     if (request.assetId) {
       const operation = async (payload) => {
         const r = await system.app.inject({

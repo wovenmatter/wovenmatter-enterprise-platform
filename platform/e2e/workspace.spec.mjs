@@ -2333,3 +2333,139 @@ test("denied, expired and unavailable remote sign-ins offer a fresh attempt with
   }
   expect(errors).toEqual([]);
 });
+
+test("native streaming retains chronological work, task progress, full copy and reopen history", async ({
+  page,
+}) => {
+  const f = await ensureFixture(page);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const detailRequests = [];
+  page.on("request", (request) => {
+    if (/\/activities\/[^/?]+\/[^/?]+/.test(request.url()))
+      detailRequests.push(request.url());
+  });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(
+    "/enterprise/organizations/" + f.orgId + "/projects/" + f.projectId,
+  );
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .first()
+    .click();
+  await page
+    .getByLabel("Title", { exact: true })
+    .fill("Native streaming review");
+  await page
+    .getByLabel("Model", { exact: true })
+    .selectOption("gpt-test-fixture");
+  await expect(page.getByLabel("Agent", { exact: true })).toHaveValue("");
+  await page
+    .getByRole("button", { name: "Create conversation", exact: true })
+    .click();
+  await expect(page.locator(".thread-header")).toContainText("Pi Durable");
+  await page
+    .getByLabel("Message your agent")
+    .fill("[native-stream] Inspect the record.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".native-task-badge")).toContainText(
+    "Inspect the retained record",
+  );
+  await expect(page.locator(".native-commentary")).toContainText(
+    "I will inspect",
+  );
+  expect(
+    detailRequests.some((url) => url.includes("tool%3Afixture-read")),
+  ).toBe(false);
+  await page
+    .locator(".native-work-group > summary")
+    .filter({ hasText: "Using 1 tool" })
+    .click();
+  await page
+    .locator(".native-work-item > summary")
+    .filter({ hasText: "Read retained record" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Latest reply" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: evidence + "/native-streaming-desktop.png",
+    fullPage: true,
+  });
+  await expect(page.locator(".native-final")).toContainText(
+    "All retained output remains available",
+    { timeout: 15000 },
+  );
+  await expect(page.locator(".native-task-badge")).toHaveCount(0);
+  await expect(page.locator(".native-completed-work")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await page.getByRole("button", { name: "Copy response" }).click();
+  await expect(page.locator(".response-actions")).toContainText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "The record is complete.\n\nAll retained output remains available after reopening this conversation.",
+  );
+  await page.reload();
+  await page.getByRole("button", { name: /Native streaming review/ }).click();
+  await expect(page.locator(".native-final")).toContainText(
+    "All retained output remains available",
+  );
+  await page.locator(".native-completed-work > summary").click();
+  await page
+    .locator(".native-work-group > summary")
+    .filter({ hasText: "Used 1 tool" })
+    .click();
+  await page
+    .locator(".native-work-item > summary")
+    .filter({ hasText: "Read retained record" })
+    .click();
+  await expect(page.locator(".native-work-detail")).toContainText(
+    "Complete tool output.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Load more details" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Load more details" }).click();
+  await expect(page.locator(".native-work-detail")).toContainText(
+    "FINAL RETAINED ROW",
+  );
+  await page
+    .getByRole("button", { name: "Native history", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Search history" }).click();
+  await expect(page.locator(".native-history-results")).toContainText(
+    "message",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: evidence + "/native-streaming-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page.getByRole("button", { name: "Conversation settings" }).click();
+  await expect(
+    page.getByLabel("Pi Durable version", { exact: true }),
+  ).toHaveValue("fixture-sdk-one");
+  await page
+    .getByLabel("Pi Durable version", { exact: true })
+    .selectOption("fixture-sdk-two");
+  await page
+    .getByRole("button", { name: "Apply version", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Apply version", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Check for updates", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Pi Durable version", { exact: true }),
+  ).toHaveValue("fixture-sdk-two");
+  expect(errors).toEqual([]);
+});

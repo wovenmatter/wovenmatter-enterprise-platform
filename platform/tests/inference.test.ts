@@ -18,7 +18,7 @@ import {
   discoverProviderModels,
 } from "../apps/api/src/inference/discovery.js";
 
-async function fixture() {
+async function fixture(modelEntries?: Record<string, unknown>[]) {
   const db = await createDatabase(":memory:");
   await migrateFoundation(db);
   const orgId = randomUUID(),
@@ -149,9 +149,19 @@ async function fixture() {
       });
     if (url.pathname === "/v1/models")
       return Response.json({
-        data: [
-          { id: "gpt-example", owned_by: "openai" },
-          { id: "claude-example", owned_by: "anthropic" },
+        data: modelEntries ?? [
+          {
+            id: "gpt-example",
+            owned_by: "openai",
+            context_window: 128000,
+            max_output_tokens: 16384,
+            capabilities: { images: true, reasoning: true },
+          },
+          {
+            id: "claude-example",
+            owned_by: "anthropic",
+            context_window: 200000,
+          },
         ],
       });
     if (url.pathname === "/v1/responses")
@@ -471,6 +481,27 @@ test("gateway exposes no management endpoint and rejects anonymous requests", as
 test("model selection verifies the actual catalog and native provider match", async () => {
   const f = await fixture();
   try {
+    assert.equal(await f.service.defaultHarness(f.orgId, "gpt-example"), "pi");
+    assert.equal(
+      await f.service.defaultHarness(f.orgId, "claude-example"),
+      "pi",
+    );
+    assert.deepEqual(await f.service.resolvePiModel(f.orgId, "gpt-example"), {
+      model: "gpt-example",
+      provider: "openai",
+      api: "openai-responses",
+      contextWindow: 128000,
+      maxOutputTokens: 16384,
+      supportsNativeCompaction: true,
+      supportsImages: true,
+      supportsReasoning: true,
+      routeIdentity: "openai:openai-responses:gpt-example",
+      accountAffinity: "proxy-session-affinity",
+    });
+    assert.equal(
+      (await f.service.resolvePiModel(f.orgId, "claude-example")).api,
+      "anthropic-messages",
+    );
     await f.service.validateSelection(f.orgId, "gpt-example", "codex");
     await f.service.validateSelection(f.orgId, "claude-example", "pi");
     await assert.rejects(
@@ -725,6 +756,43 @@ test("API shutdown aborts an active inference stream before waiting for HTTP dra
   } finally {
     await reader?.cancel();
     await closing;
+    await f.close();
+  }
+});
+
+test("Pi capabilities use exact installed model metadata and preserve explicit false", async () => {
+  const f = await fixture([
+    { id: "gpt-4o", owned_by: "openai" },
+    {
+      id: "gpt-5",
+      owned_by: "openai",
+      context_window: 123456,
+      capabilities: { images: false, reasoning: false },
+    },
+    { id: "gpt-5-not-a-catalog-model", owned_by: "openai" },
+  ]);
+  try {
+    const { getBuiltinModels } = await import(
+      "@earendil-works/pi-ai/providers/all"
+    );
+    const expected = getBuiltinModels("openai").find(
+      (model) => model.id === "gpt-4o",
+    )!;
+    const known = await f.service.resolvePiModel(f.orgId, "gpt-4o");
+    assert.equal(known.contextWindow, expected.contextWindow);
+    assert.equal(known.maxOutputTokens, expected.maxTokens);
+    assert.equal(known.supportsReasoning, false);
+    const explicit = await f.service.resolvePiModel(f.orgId, "gpt-5");
+    assert.equal(explicit.contextWindow, 123456);
+    assert.equal(explicit.supportsImages, false);
+    assert.equal(explicit.supportsReasoning, false);
+    const unknown = await f.service.resolvePiModel(
+      f.orgId,
+      "gpt-5-not-a-catalog-model",
+    );
+    assert.equal(unknown.contextWindow, undefined);
+    assert.equal(unknown.supportsReasoning, undefined);
+  } finally {
     await f.close();
   }
 });

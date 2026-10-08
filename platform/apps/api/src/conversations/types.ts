@@ -3,6 +3,7 @@ import type { AppContext, User } from "../context.js";
 export type Harness = "codex" | "claude" | "grok" | "pi";
 export type Mode = "read" | "write";
 export interface ConversationRow {
+  pi_options?: string;
   runtime_generation?: number;
   id: string;
   org_id: string;
@@ -84,6 +85,14 @@ export interface ConversationDependencies {
     ): Promise<{ fileId: string; path: string; versionId: string }[]>;
   };
   inference: {
+    resolvePiModel?(
+      orgId: string,
+      model: string,
+    ): Promise<
+      NonNullable<
+        import("../../../../packages/runtime/src/types.js").RuntimeRequest["pi"]
+      >
+    >;
     defaultHarness(orgId: string, model: string): Promise<Harness>;
     issueGateway(input: {
       orgId: string;
@@ -118,6 +127,7 @@ export function conversationView(c: ConversationRow) {
     title: c.title,
     mode: c.mode,
     harness: c.harness,
+    pi: JSON.parse(c.pi_options ?? "{}"),
     model: c.model,
     connectionId: c.connection_id,
     createdAt: c.created_at,

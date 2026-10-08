@@ -194,6 +194,14 @@ export function createSupervisorClient(options: SupervisorClientOptions) {
       );
   }
   const runtime: Runtime = {
+    async sdkCatalog(projectId) {
+      return json(
+        `/v1/projects/${encodeURIComponent(projectId)}/sdk-catalog`,
+        "GET",
+        undefined,
+        30_000,
+      );
+    },
     async releaseAsset(spec) {
       await json(
         `/v1/projects/${encodeURIComponent(spec.projectId)}/release-asset`,

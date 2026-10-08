@@ -1,3 +1,4 @@
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import { setTimeout as wait } from "node:timers/promises";
 import { discoverProviderModels } from "./discovery.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -38,6 +39,32 @@ export type InferenceModel = {
   id: string;
   name: string;
   provider: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  supportsImages?: boolean;
+  supportsReasoning?: boolean;
+};
+export type PiProvider =
+  | "openai"
+  | "anthropic"
+  | "xai"
+  | "openrouter"
+  | "custom";
+export type PiGatewayApi =
+  | "openai-responses"
+  | "anthropic-messages"
+  | "openai-compatible";
+export type ResolvedPiModel = {
+  model: string;
+  provider: PiProvider;
+  api: PiGatewayApi;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  supportsNativeCompaction: boolean;
+  supportsImages?: boolean;
+  supportsReasoning?: boolean;
+  routeIdentity: string;
+  accountAffinity: "proxy-session-affinity";
 };
 type ApiProvider = "openai" | "anthropic" | "openrouter" | "xai" | "custom";
 type SubscriptionProvider = "openai" | "anthropic" | "xai";
@@ -133,6 +160,25 @@ function familyProvider(value: unknown): string {
   if (name === "claude" || name === "anthropic") return "anthropic";
   if (name === "xai" || name === "grok") return "xai";
   return name === "openrouter" ? "openrouter" : "custom";
+}
+function optionalCount(value: unknown): number | undefined {
+  const numeric = count(value);
+  return numeric > 0 ? numeric : undefined;
+}
+function optionalBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+function knownPiCapabilities(provider: PiProvider, id: string) {
+  if (provider === "custom") return undefined;
+  const model = getBuiltinModels(provider).find((model) => model.id === id);
+  return model
+    ? {
+        contextWindow: model.contextWindow,
+        maxOutputTokens: model.maxTokens,
+        supportsImages: model.input.includes("image"),
+        supportsReasoning: model.reasoning,
+      }
+    : undefined;
 }
 /** A single API process owns proxy configuration writes; worker jobs call this owner. */
 export class InferenceService {
@@ -1259,7 +1305,67 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
         provider:
           configuredProviders.get(String(item.owned_by ?? item.provider)) ??
           familyProvider(item.owned_by ?? item.provider),
+        contextWindow: optionalCount(
+          item.context_window ??
+            item.contextWindow ??
+            item.context_length ??
+            item.contextLength,
+        ),
+        maxOutputTokens: optionalCount(
+          item.max_output_tokens ??
+            item.maxOutputTokens ??
+            item.max_tokens ??
+            item.maxTokens,
+        ),
+        supportsImages: optionalBoolean(
+          item.supports_images ??
+            item.supportsImages ??
+            object(item.capabilities).images ??
+            object(item.capabilities).vision,
+        ),
+        supportsReasoning: optionalBoolean(
+          item.supports_reasoning ??
+            item.supportsReasoning ??
+            object(item.capabilities).reasoning,
+        ),
       }));
+  }
+  async resolvePiModel(orgId: string, model: string): Promise<ResolvedPiModel> {
+    const selected = (await this.models(orgId)).find(
+      (item) => item.id === model,
+    );
+    if (!selected)
+      throw new InferenceError(
+        400,
+        "model_unavailable",
+        "This model is not available in the organization inference pool.",
+      );
+    const provider = (
+      ["openai", "anthropic", "xai", "openrouter"].includes(selected.provider)
+        ? selected.provider
+        : "custom"
+    ) as PiProvider;
+    const fallback = knownPiCapabilities(provider, selected.id);
+    const api: PiGatewayApi =
+      provider === "anthropic"
+        ? "anthropic-messages"
+        : provider === "openai" || provider === "xai"
+          ? "openai-responses"
+          : "openai-compatible";
+    return {
+      model: selected.id,
+      provider,
+      api,
+      contextWindow: selected.contextWindow ?? fallback?.contextWindow,
+      maxOutputTokens: selected.maxOutputTokens ?? fallback?.maxOutputTokens,
+      supportsNativeCompaction:
+        provider === "openai" || provider === "anthropic" || provider === "xai",
+      supportsImages: selected.supportsImages ?? fallback?.supportsImages,
+      supportsReasoning:
+        selected.supportsReasoning ?? fallback?.supportsReasoning,
+      routeIdentity: `${provider}:${api}:${selected.id}`,
+      accountAffinity: "proxy-session-affinity",
+    };
   }
   async defaultHarness(
     orgId: string,
@@ -1274,13 +1380,7 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
         "model_unavailable",
         "This model is not available in the organization inference pool.",
       );
-    return selected.provider === "openai"
-      ? "codex"
-      : selected.provider === "anthropic"
-        ? "claude"
-        : selected.provider === "xai"
-          ? "grok"
-          : "pi";
+    return "pi";
   }
   async validateSelection(
     orgId: string,

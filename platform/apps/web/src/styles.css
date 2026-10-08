@@ -1743,3 +1743,40 @@ button.secondary:hover:not(:disabled) { background: var(--hover); }
 
 .source-picker-row, .asset-sources nav { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .asset-sources nav { margin-bottom: .75rem; overflow-wrap: anywhere; }
+
+/* Durable work stays compact; expanded details are loaded separately. */
+.native-transcript { min-width: 0; }
+.native-response { user-select: text; overflow-wrap: anywhere; }
+.native-commentary { color: var(--muted); margin: 12px 0; }
+.native-final { margin-top: 16px; }
+.response-actions { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--muted); }
+.native-completed-work > summary, .native-work-group > summary, .native-work-item > summary { cursor: pointer; color: var(--muted); padding: 8px 0; }
+.native-work-group { margin: 6px 0; }
+.native-work-group > summary { display: flex; align-items: center; gap: 8px; }
+.native-work-item { border-left: 1px solid var(--line); margin-left: 8px; padding-left: 12px; }
+.native-work-item > summary small { margin-left: 10px; }
+.native-work-detail { max-height: 420px; overflow: auto; }
+.native-work-detail pre, .native-history pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; user-select: text; }
+.native-working { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.native-task-badge { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 8px; padding: 8px 12px; font-size: 13px; }
+.native-task-badge summary { display: flex; justify-content: space-between; gap: 12px; cursor: pointer; }
+.native-task-badge ul { list-style: none; padding: 0; margin: 10px 0 0; }
+.native-task-badge li { display: flex; gap: 8px; padding: 4px 0; }
+.native-task-badge li[data-status=completed] { color: var(--muted); }
+.native-history { font-size: 12px; color: var(--muted); margin: 4px 0 8px; }
+.native-history summary { cursor: pointer; }
+.native-history form { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+.native-history pre { max-height: 320px; overflow: auto; }
+.latest-reply { display: block; margin: 0 auto 8px; }
+@media (max-width: 600px) {
+  .native-work-detail { max-height: 280px; }
+  .native-history form { flex-wrap: wrap; }
+  .native-work-item > summary small { display: inline-block; }
+}
+
+.native-history-results { max-height: 50vh; overflow: auto; margin-top: 12px; }
+.native-history-results pre { max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pi-options { margin-bottom: 14px; }
+.pi-options > summary { cursor: pointer; color: var(--muted); margin-bottom: 12px; }
+
+.native-completed-work.is-active > summary { display: none; }

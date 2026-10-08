@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { SteeringChannel, steeringText } from "./steering.js";
-import { mkdir, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import {
   agentInstructions,
   runtimeEnvironment,
@@ -14,6 +13,73 @@ import {
   type EventSink,
   type RuntimeEvent,
 } from "./types.ts";
+import { runEnterprisePi } from "./embedded/enterprise-pi.ts";
+
+function textUpdate(
+  harness: "claude",
+  text: string,
+  id?: string,
+  snapshot = false,
+): RuntimeEvent {
+  return {
+    type: "native_update",
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+      _meta: {
+        harness,
+        ...(id ? { nativeMessageID: id } : {}),
+        ...(snapshot ? { nativeMessageSnapshot: true } : {}),
+      },
+    },
+  };
+}
+
+function toolUpdate(
+  harness: "claude",
+  phase: "tool_call" | "tool_call_update",
+  tool: string,
+  toolId: string,
+  status?: string,
+  native?: Record<string, any>,
+): RuntimeEvent {
+  return {
+    type: "native_update",
+    update: {
+      sessionUpdate: phase,
+      toolCallId: toolId,
+      title: tool,
+      kind: tool === "Bash" ? "execute" : tool,
+      ...(status ? { status } : {}),
+      ...(native
+        ? phase === "tool_call"
+          ? { rawInput: native.input }
+          : {
+              rawOutput: native,
+              content: [
+                {
+                  type: "content",
+                  content: {
+                    type: "text",
+                    text:
+                      typeof native.content === "string"
+                        ? native.content
+                        : Array.isArray(native.content)
+                          ? native.content
+                              .map((part: any) =>
+                                typeof part.text === "string" ? part.text : "",
+                              )
+                              .join("\n")
+                          : "",
+                  },
+                },
+              ],
+            }
+        : {}),
+      _meta: { harness },
+    },
+  };
+}
 
 export async function runClaude(
   request: ContainerRequest,
@@ -45,7 +111,7 @@ export async function runClaude(
   };
   let finished = false;
   const toolNames = new Map<string, string>();
-  const streamedMessages = new Set<string>();
+  const streamedMessages = new Map<string, string>();
   let currentMessageId = "";
   const { PassThrough } = await import("node:stream");
   const inputStream =
@@ -151,40 +217,109 @@ export async function runClaude(
         if (event.type === "message_start") currentMessageId = event.message.id;
         if (
           event.type === "content_block_delta" &&
+          event.delta.type === "thinking_delta"
+        )
+          await emit({
+            type: "native_update",
+            update: {
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text: event.delta.thinking },
+              _meta: {
+                harness: "claude",
+                wovenThoughtID: currentMessageId + ":" + event.index,
+              },
+            },
+          });
+        if (
+          event.type === "content_block_delta" &&
           event.delta.type === "text_delta"
         ) {
-          streamedMessages.add(currentMessageId);
+          streamedMessages.set(
+            currentMessageId,
+            (streamedMessages.get(currentMessageId) ?? "") + event.delta.text,
+          );
+          await emit(textUpdate("claude", event.delta.text, currentMessageId));
           await emit({ type: "assistant_delta", delta: event.delta.text });
         }
       }
-      if (message.type === "assistant")
-        for (const block of message.message.content) {
+      if (message.type === "assistant") {
+        const id = message.message.id;
+        const text = message.message.content
+          .filter((block: any) => block.type === "text")
+          .map((block: any) => block.text)
+          .join("");
+        const previous = streamedMessages.get(id);
+        if (text || previous !== undefined) {
+          streamedMessages.set(id, text);
+          if (previous === undefined) {
+            await emit(textUpdate("claude", text, id));
+            await emit({ type: "assistant_delta", delta: text });
+          } else if (previous !== text) {
+            await emit(textUpdate("claude", text, id, true));
+          }
+        }
+        for (const [index, block] of message.message.content.entries()) {
+          if (block.type === "thinking" && typeof block.thinking === "string")
+            await emit({
+              type: "native_update",
+              update: {
+                sessionUpdate: "agent_thought_chunk",
+                content: { type: "text", text: block.thinking },
+                _meta: {
+                  harness: "claude",
+                  wovenThoughtID: id + ":" + index,
+                  wovenThoughtSnapshot: true,
+                  wovenThoughtStatus: "completed",
+                },
+              },
+            });
           if (block.type === "tool_use") {
             toolNames.set(block.id, block.name);
+            await emit(
+              toolUpdate(
+                "claude",
+                "tool_call",
+                block.name,
+                block.id,
+                undefined,
+                block,
+              ),
+            );
             await emit({
               type: "tool_start",
               tool: block.name,
               toolId: block.id,
             });
           }
-          if (
-            block.type === "text" &&
-            !streamedMessages.has(message.message.id)
-          )
-            await emit({ type: "assistant_delta", delta: block.text });
         }
+        await emit({
+          type: "native_update",
+          update: { sessionUpdate: "woven_assistant_boundary" },
+        });
+      }
       if (
         message.type === "user" &&
         typeof message.message.content !== "string"
       )
         for (const block of message.message.content) {
-          if (block.type === "tool_result")
+          if (block.type === "tool_result") {
+            await emit(
+              toolUpdate(
+                "claude",
+                "tool_call_update",
+                toolNames.get(block.tool_use_id) ?? "tool",
+                block.tool_use_id,
+                block.is_error ? "failed" : "completed",
+                block,
+              ),
+            );
             await emit({
               type: "tool_end",
               tool: toolNames.get(block.tool_use_id) ?? "tool",
               toolId: block.tool_use_id,
               status: block.is_error ? "failed" : "completed",
             });
+          }
         }
       if (message.type === "result") {
         if (message.subtype !== "success" || message.is_error)
@@ -252,247 +387,5 @@ export async function runPi(
   steering?: SteeringChannel,
   retained?: NativeSessionState,
 ): Promise<void> {
-  if (retained?.pi) {
-    const session = retained.pi as PiSession;
-    try {
-      return await drivePiSession(
-        session,
-        request,
-        emit,
-        signal,
-        steering,
-        true,
-      );
-    } catch (error) {
-      delete retained.pi;
-      session.dispose();
-      throw error;
-    }
-  }
-  const {
-    ModelRuntime,
-    SessionManager,
-    SettingsManager,
-    DefaultResourceLoader,
-    createAgentSession,
-  } = await import("@earendil-works/pi-coding-agent");
-  await mkdir("/session/pi", { recursive: true, mode: 0o700 });
-  const runtime = await ModelRuntime.create({
-    modelsPath: null,
-    modelsStorePath: "/session/pi/models.json",
-    refreshOnCreate: false,
-    allowModelNetwork: false,
-    credentials: {
-      async read() {
-        return undefined;
-      },
-      async list() {
-        return [];
-      },
-      async modify() {
-        throw new Error("Central credentials cannot be changed from a project");
-      },
-      async delete() {
-        throw new Error("Central credentials cannot be changed from a project");
-      },
-    },
-  });
-  runtime.registerProvider("wovenmatter-enterprise", {
-    name: "WovenMatter Enterprise Platform",
-    baseUrl: request.gateway.baseUrl.replace(/\/$/, "") + "/v1",
-    api: "openai-completions",
-    authHeader: true,
-    models: [
-      {
-        id: request.model,
-        name: request.model,
-        reasoning: false,
-        input: ["text", "image"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32768,
-        maxTokens: 8192,
-      },
-    ],
-  });
-  await runtime.setRuntimeApiKey(
-    "wovenmatter-enterprise",
-    request.gateway.token,
-  );
-  let sessionManager;
-  if (request.resumeId) {
-    const file = (await readdir("/session/pi")).find((name) =>
-      name.endsWith(`_${request.resumeId}.jsonl`),
-    );
-    if (!file)
-      throw new RuntimeError(
-        "session_missing",
-        "The saved Pi session is unavailable; the request was not replayed",
-      );
-    sessionManager = SessionManager.open(
-      join("/session/pi", file),
-      "/session/pi",
-    );
-  } else sessionManager = SessionManager.create("/workspace", "/session/pi");
-  const settingsManager = SettingsManager.inMemory({
-    retry: { enabled: false },
-    compaction: { enabled: true },
-  });
-  const loader = new DefaultResourceLoader({
-    cwd: "/workspace",
-    agentDir: "/session/pi",
-    settingsManager,
-    noExtensions: true,
-    noThemes: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    appendSystemPrompt: [
-      agentInstructions + ` Current access: ${request.access}.`,
-    ],
-  });
-  await loader.reload();
-  const { session } = await createAgentSession({
-    cwd: "/workspace",
-    agentDir: "/session/pi",
-    modelRuntime: runtime,
-    model: runtime.getModel("wovenmatter-enterprise", request.model),
-    sessionManager,
-    settingsManager,
-    resourceLoader: loader,
-    tools: ["read", "bash", "edit", "write", "grep", "find", "ls"],
-  });
-  const stream = session.agent.streamFunction;
-  session.agent.streamFunction = (model, context, options) =>
-    stream(model, context, { ...options, maxRetries: 0, transport: "sse" });
-  if (retained) retained.pi = session;
-  try {
-    await drivePiSession(
-      session,
-      request,
-      emit,
-      signal,
-      steering,
-      Boolean(retained),
-    );
-  } catch (error) {
-    if (retained) {
-      delete retained.pi;
-      session.dispose();
-    }
-    throw error;
-  }
-}
-
-type PiSession = Pick<
-  Awaited<
-    ReturnType<
-      typeof import("@earendil-works/pi-coding-agent").createAgentSession
-    >
-  >["session"],
-  "subscribe" | "abort" | "prompt" | "clearQueue" | "sessionId" | "dispose"
->;
-/** Keep the native subscription alive through admitted preflight and continuations. */
-export async function drivePiSession(
-  session: PiSession,
-  request: ContainerRequest,
-  emit: EventSink,
-  signal: AbortSignal,
-  steering?: SteeringChannel,
-  retained = false,
-) {
-  // SDK notifications are synchronous. Chain persistence to preserve event order and surface failures.
-  let events = Promise.resolve();
-  let agentError = false;
-  const push = (event: RuntimeEvent) => {
-    events = events.then(async () => {
-      await emit(event);
-    });
-    void events.catch(() => session.abort());
-  };
-  const unsubscribe = session.subscribe((event) => {
-    if (
-      event.type === "message_update" &&
-      event.assistantMessageEvent.type === "text_delta"
-    )
-      push({
-        type: "assistant_delta",
-        delta: event.assistantMessageEvent.delta,
-      });
-    if (event.type === "tool_execution_start")
-      push({
-        type: "tool_start",
-        tool: event.toolName,
-        toolId: event.toolCallId,
-      });
-    if (event.type === "tool_execution_end")
-      push({
-        type: "tool_end",
-        tool: event.toolName,
-        toolId: event.toolCallId,
-        status: event.isError ? "failed" : "completed",
-      });
-    if (
-      event.type === "message_end" &&
-      event.message.role === "assistant" &&
-      ["error", "aborted"].includes(event.message.stopReason)
-    )
-      agentError = true;
-  });
-  const abort = () => {
-    void session.abort();
-  };
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    signal.throwIfAborted();
-    await emit({ type: "native_session", sessionId: session.sessionId });
-    const continuations: Promise<void>[] = [];
-    await session.prompt(request.prompt, {
-      preflightResult: (ok) => {
-        if (signal.aborted) {
-          session.clearQueue();
-          signal.throwIfAborted();
-        }
-        if (ok) {
-          push({ type: "input_accepted" });
-          steering?.set(
-            (input) =>
-              new Promise<void>((resolve, reject) => {
-                signal.throwIfAborted();
-                const task = session.prompt(steeringText(input), {
-                  streamingBehavior: "steer",
-                  preflightResult: (accepted) => {
-                    if (signal.aborted) {
-                      session.clearQueue();
-                      signal.throwIfAborted();
-                    }
-                    if (accepted) resolve();
-                    else
-                      reject(
-                        new RuntimeError(
-                          "steering_rejected",
-                          "Pi rejected the input.",
-                        ),
-                      );
-                  },
-                });
-                continuations.push(task);
-                void task.catch(reject);
-              }),
-          );
-        }
-      },
-    });
-    await steering?.settle();
-    while (continuations.length) await Promise.all(continuations.splice(0));
-    await events;
-    if (agentError)
-      throw new RuntimeError(
-        "agent_failed",
-        "Pi did not finish the requested work",
-      );
-  } finally {
-    signal.removeEventListener("abort", abort);
-    await steering?.settle();
-    unsubscribe();
-    if (!retained) session.dispose();
-  }
+  await runEnterprisePi(request, emit, signal, steering, retained);
 }
