@@ -45,7 +45,13 @@ function responseEndpoint(model, auth) {
   const raw = auth?.baseUrl ?? model.baseUrl;
   let base;
   try { base = new URL(raw); } catch { throw new ProviderCompactionError('route-mismatch', 'Native compaction requires an explicit provider endpoint.'); }
-  if (base.protocol !== 'https:' || base.username || base.password || base.search || base.hash) {
+  // The container's exact loopback endpoint is a trusted Unix-socket relay,
+  // not an external plaintext provider. Only runtime-issued Enterprise auth
+  // may use it; other HTTP endpoints retain the upstream HTTPS requirement.
+  const localGateway = auth?.enterpriseGateway === true &&
+    base.origin === 'http://127.0.0.1:4101' &&
+    ['/inference/v1', '/inference/v1/responses'].includes(base.pathname.replace(/\/+$/, ''));
+  if ((base.protocol !== 'https:' && !localGateway) || base.username || base.password || base.search || base.hash) {
     throw new ProviderCompactionError('route-mismatch', 'Native compaction requires a secure provider endpoint without credentials or query parameters.');
   }
   const path = base.pathname.replace(/\/+$/, '');
@@ -152,7 +158,7 @@ async function resolveRoute({ model, route, runtime, signal }) {
     selected.nativeAccountID = account;
     if (route.nativeAccountID !== undefined && route.nativeAccountID !== account) throw new ProviderCompactionError('route-mismatch', 'The authenticated ChatGPT account changed before native compaction.');
   }
-  return { identity: selected, headers };
+  return { identity: selected, headers, enterpriseGateway: result.auth.enterpriseGateway === true };
 }
 
 /** Resolve sanitized native route provenance without returning credentials. */
@@ -403,7 +409,7 @@ export async function providerContinuationOptions({ model, route, runtime, signa
       return headers;
     },
     onPayload(payload, requestedModel) {
-      if (!payload || payload.model !== model.id || !Array.isArray(payload.input) || (requestedModel && (requestedModel.id !== model.id || requestedModel.provider !== model.provider || requestedModel.api !== model.api || responseEndpoint(requestedModel, {}) !== resolved.identity.endpoint))) {
+      if (!payload || payload.model !== model.id || !Array.isArray(payload.input) || (requestedModel && (requestedModel.id !== model.id || requestedModel.provider !== model.provider || requestedModel.api !== model.api || responseEndpoint(requestedModel, { enterpriseGateway: resolved.enterpriseGateway }) !== resolved.identity.endpoint))) {
         throw new ProviderCompactionError('route-mismatch', 'Native compacted context cannot be injected into a different request.');
       }
       if (requestedModel?.headers && resolved.identity.nativeAccountID) {

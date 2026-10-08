@@ -517,117 +517,186 @@ test("runPi uses Woven Claude native runtime through scoped Enterprise gateway",
   );
 });
 
-test("provider compaction uses scoped Enterprise Responses compact gateway", async () => {
-  const { compactProviderContext, providerContinuationOptions } = await import(
-    // @ts-ignore Copied WovenMatter runtime modules are authored as .mjs.
-    "../src/embedded/default-agent/src/provider-compaction.mjs"
-  );
-  const requests: Array<{
-    url: string;
-    authorization?: string;
-    body: Record<string, unknown>;
-  }> = [];
-  const model = {
-    provider: "openai",
-    id: "gpt-5-fixture",
-    api: "openai-responses",
-    baseUrl:
-      "https://api.example.test/enterprise/api/runtime/inference/project/v1",
-    contextWindow: 128000,
-    maxTokens: 16384,
-    input: ["text"],
-    compat: {},
-  };
-  const route = {
-    provider: "openai",
-    accountID: "default",
-    modelID: "gpt-5-fixture",
-    authIdentity: "enterprise-route",
-  };
-  const runtime = {
-    async getAuth() {
-      return {
-        auth: {
-          apiKey: "scoped-run-token",
-          baseUrl:
-            "https://api.example.test/enterprise/api/runtime/inference/project/v1",
-          enterpriseGateway: true,
+for (const baseUrl of [
+  "https://api.example.test/enterprise/api/runtime/inference/project/v1",
+  "http://127.0.0.1:4101/inference/v1",
+])
+  test(`provider compaction and continuation use scoped gateway ${baseUrl}`, async () => {
+    const { compactProviderContext, providerContinuationOptions } =
+      await import(
+        // @ts-ignore Copied WovenMatter runtime modules are authored as .mjs.
+        "../src/embedded/default-agent/src/provider-compaction.mjs"
+      );
+    const requests: Array<{
+      url: string;
+      authorization?: string;
+      body: Record<string, unknown>;
+    }> = [];
+    const model = {
+      provider: "openai",
+      id: "gpt-5-fixture",
+      api: "openai-responses",
+      baseUrl,
+      contextWindow: 128000,
+      maxTokens: 16384,
+      input: ["text"],
+      compat: {},
+    };
+    const route = {
+      provider: "openai",
+      accountID: "default",
+      modelID: "gpt-5-fixture",
+      authIdentity: "enterprise-route",
+    };
+    const runtime = {
+      async getAuth() {
+        return {
+          auth: {
+            apiKey: "scoped-run-token",
+            baseUrl: model.baseUrl,
+            enterpriseGateway: true,
+          },
+        };
+      },
+    };
+    const fetchRequest = async (url: string | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      requests.push({
+        url: new URL(String(url)).pathname,
+        authorization:
+          new Headers(init?.headers).get("authorization") ?? undefined,
+        body,
+      });
+      assert.equal(body.model, "gpt-5-fixture");
+      return Response.json({
+        id: "compact_1",
+        model: "gpt-5-fixture",
+        output: [
+          { type: "message", role: "system", opaque_provider_state: "kept" },
+          { type: "compaction", encrypted_content: "opaque-window" },
+        ],
+        usage: {
+          input_tokens: 10,
+          output_tokens: 2,
+          total_tokens: 12,
         },
-      };
-    },
-  };
-  const fetchRequest = async (url: string | URL, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body ?? "{}"));
-    requests.push({
-      url: new URL(String(url)).pathname,
-      authorization:
-        new Headers(init?.headers).get("authorization") ?? undefined,
-      body,
-    });
-    assert.equal(body.model, "gpt-5-fixture");
-    return Response.json({
-      id: "compact_1",
-      model: "gpt-5-fixture",
-      output: [
-        { type: "message", role: "system", opaque_provider_state: "kept" },
-        { type: "compaction", encrypted_content: "opaque-window" },
-      ],
-      usage: {
-        input_tokens: 10,
-        output_tokens: 2,
-        total_tokens: 12,
+      });
+    };
+    const first = await compactProviderContext({
+      model,
+      route,
+      runtime,
+      fetchRequest,
+      context: {
+        messages: [
+          { role: "user", content: [{ type: "text", text: "remember alpha" }] },
+        ],
       },
     });
-  };
-  const first = await compactProviderContext({
-    model,
-    route,
-    runtime,
-    fetchRequest,
-    context: {
-      messages: [
-        { role: "user", content: [{ type: "text", text: "remember alpha" }] },
-      ],
-    },
-  });
-  assert.equal(
-    requests[0].url,
-    "/enterprise/api/runtime/inference/project/v1/responses/compact",
-  );
-  assert.equal(requests[0].authorization, "Bearer scoped-run-token");
-  assert.equal(first.continuation.windowJSON, first.responseJSON);
-  assert.deepEqual(first.continuation.output.at(-1), {
-    type: "compaction",
-    encrypted_content: "opaque-window",
-  });
-  await compactProviderContext({
-    model,
-    route,
-    runtime,
-    fetchRequest,
-    continuation: first.continuation,
-    context: {
-      messages: [
-        { role: "user", content: [{ type: "text", text: "continue beta" }] },
-      ],
-    },
-  });
-  assert.deepEqual(
-    (requests[1].body.input as unknown[]).slice(0, 2),
-    first.continuation.output,
-  );
-  await assert.rejects(
-    () =>
-      providerContinuationOptions({
-        model: { ...model, id: "other-model" },
+    assert.equal(
+      requests[0].url,
+      new URL(baseUrl).pathname + "/responses/compact",
+    );
+    assert.equal(requests[0].authorization, "Bearer scoped-run-token");
+    assert.equal(first.continuation.windowJSON, first.responseJSON);
+    assert.deepEqual(first.continuation.output.at(-1), {
+      type: "compaction",
+      encrypted_content: "opaque-window",
+    });
+    await compactProviderContext({
+      model,
+      route,
+      runtime,
+      fetchRequest,
+      continuation: first.continuation,
+      context: {
+        messages: [
+          { role: "user", content: [{ type: "text", text: "continue beta" }] },
+        ],
+      },
+    });
+    assert.deepEqual(
+      (requests[1].body.input as unknown[]).slice(0, 2),
+      first.continuation.output,
+    );
+    const continuation = await providerContinuationOptions({
+      model,
+      route,
+      runtime,
+      continuation: first.continuation,
+    });
+    const payload = {
+      model: model.id,
+      input: [{ role: "user", content: "continue" }],
+    };
+    assert.deepEqual(
+      continuation.onPayload(payload, model).input.slice(0, 2),
+      first.continuation.output,
+    );
+    assert.throws(
+      () =>
+        continuation.onPayload(payload, {
+          ...model,
+          baseUrl: "https://another.example.test/v1",
+        }),
+      /different|route|request/i,
+    );
+    for (const rejectedUrl of [
+      "http://127.0.0.1:4102/inference/v1",
+      "http://127.0.0.1:4101/other/v1",
+      "http://external.example.test/v1",
+      "http://user:password@127.0.0.1:4101/inference/v1",
+      "http://127.0.0.1:4101/inference/v1?query=1",
+    ]) {
+      await assert.rejects(
+        compactProviderContext({
+          model: { ...model, baseUrl: rejectedUrl },
+          route,
+          runtime: {
+            getAuth: async () => ({
+              auth: {
+                apiKey: "synthetic",
+                baseUrl: rejectedUrl,
+                enterpriseGateway: true,
+              },
+            }),
+          },
+          context: { messages: [] },
+          fetchRequest: () => {
+            throw Error("Rejected routes must never dispatch");
+          },
+        }),
+        /secure provider endpoint/i,
+      );
+    }
+    await assert.rejects(
+      compactProviderContext({
+        model: { ...model, baseUrl: "http://127.0.0.1:4101/inference/v1" },
         route,
-        runtime,
-        signal: undefined,
-        continuation: first.continuation,
+        runtime: {
+          getAuth: async () => ({
+            auth: {
+              apiKey: "synthetic",
+              baseUrl: "http://127.0.0.1:4101/inference/v1",
+            },
+          }),
+        },
+        context: { messages: [] },
       }),
-    /different|route|model|account/i,
-  );
-});
+      /secure provider endpoint/i,
+    );
+    await assert.rejects(
+      () =>
+        providerContinuationOptions({
+          model: { ...model, id: "other-model" },
+          route,
+          runtime,
+          signal: undefined,
+          continuation: first.continuation,
+        }),
+      /different|route|model|account/i,
+    );
+  });
 
 test("runPi cancels after native acceptance without reporting completion", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "wme-enterprise-pi-cancel-"));
