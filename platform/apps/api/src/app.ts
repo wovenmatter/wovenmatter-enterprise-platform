@@ -254,8 +254,7 @@ export async function buildApp(
     assets: assetAgents,
     runtime: options.runtime ?? unavailableRuntime,
     files: {
-      resolveProjectMounts: (ctx, user, projectId, mode) =>
-        resolveProjectMounts(ctx, user, projectId, mode, true),
+      resolveProjectMounts,
       reconcileProjectFiles,
       captureProjectManifest,
     },
@@ -267,8 +266,9 @@ export async function buildApp(
           harness: scope.harness ?? "",
         }),
       revokeGateway: (id) => inference.revokeGateway(id),
-      defaultHarness: (orgId, model) => inference.defaultHarness(orgId, model),
+      resolvePiModel: (orgId, model) => inference.resolvePiModel(orgId, model),
       validateSelection: (...args) => inference.validateSelection(...args),
+      models: (orgId) => inference.models(orgId),
     },
   });
   let accessSyncPending = false;

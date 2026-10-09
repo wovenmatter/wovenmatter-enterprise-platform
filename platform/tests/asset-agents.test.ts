@@ -103,7 +103,7 @@ async function fixture(t: TestContext) {
       actor,
       "POST",
       `/enterprise/api/assets/${assetId}/agent`,
-      { model: "fixture-model", harness: "codex" },
+      { model: "fixture-model" },
     );
     assert.equal(r.statusCode, 200, r.body);
     return r.json();
@@ -409,7 +409,7 @@ test("linked asset runs share the existing project with siblings; their private 
     {
       title: "Ordinary private session",
       model: "fixture-model",
-      harness: "codex",
+      harness: "pi",
       mode: "write",
     },
   );
@@ -772,4 +772,31 @@ test("deleting an unopened asset needs no compute; project trash restores asset 
     ))!.asset_id,
     null,
   );
+});
+
+test("read-only asset sessions expose context but cannot mutate files or save drafts", async (t) => {
+  const f = await fixture(t),
+    asset = await f.create();
+  const created = await f.request(
+    "admin",
+    "POST",
+    "/enterprise/api/assets/" + asset.id + "/agent",
+    { mode: "read" },
+  );
+  assert.equal(created.statusCode, 200, created.body);
+  const turn = await f.prompt(created.json().id);
+  assert.equal(turn.request.access, "read");
+  assert.ok(turn.request.mounts.every((mount) => mount.access === "read"));
+  const context = await f.operation(turn, { operation: "context" });
+  assert.equal(context.statusCode, 200, context.body);
+  const result = await f.save(
+    turn,
+    context.json().revision,
+    document("Must not persist"),
+  );
+  assert.equal(result.statusCode, 403, result.body);
+  assert.equal(result.json().error.code, "read_only");
+  const after = await f.operation(turn, { operation: "context" });
+  assert.equal(after.json().revision, context.json().revision);
+  await f.complete(turn);
 });

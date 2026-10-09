@@ -83,6 +83,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         ctx.db,
         request,
         ctx.config.secureCookies,
+        ctx.config.sessionCookieName,
       );
       if (!session)
         throw new AppError(401, "unauthorized", "Sign in to continue");
@@ -102,6 +103,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       ctx.db,
       request,
       ctx.config.secureCookies,
+      ctx.config.sessionCookieName,
     );
     return {
       user: session?.user ?? null,
@@ -126,7 +128,11 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         "Email or password is incorrect",
       );
     const session = newSession(row.id);
-    const old = requestSessionId(request, ctx.config.secureCookies);
+    const old = requestSessionId(
+      request,
+      ctx.config.secureCookies,
+      ctx.config.sessionCookieName,
+    );
     await ctx.db.batch([
       ...(old
         ? [
@@ -145,7 +151,11 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
     };
   });
   app.post("/enterprise/api/logout", async (request, reply) => {
-    const id = requestSessionId(request, ctx.config.secureCookies);
+    const id = requestSessionId(
+      request,
+      ctx.config.secureCookies,
+      ctx.config.sessionCookieName,
+    );
     if (id) await ctx.db.run("DELETE FROM sessions WHERE id=?", [id]);
     setSessionCookie(reply, ctx.config, "", true);
     await ctx.onAccessChanged?.();
@@ -164,8 +174,8 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       ),
       ctx.db.all<any>(
         user.role === "owner"
-          ? "SELECT p.*,o.name AS organization_name FROM projects p JOIN organizations o ON o.id=p.org_id WHERE p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC"
-          : "SELECT p.*,o.name AS organization_name,CASE WHEN p.access='read' OR (m.role<>'admin' AND pm.access='read') THEN 'read' ELSE 'write' END AS effective_access FROM projects p JOIN organizations o ON o.id=p.org_id JOIN organization_memberships m ON m.org_id=p.org_id AND m.user_id=? LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=m.user_id WHERE (m.role='admin' OR pm.user_id IS NOT NULL) AND p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC",
+          ? "SELECT p.*,o.name AS organization_name,'write' AS effective_access FROM projects p JOIN organizations o ON o.id=p.org_id WHERE p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC"
+          : "SELECT p.*,o.name AS organization_name,CASE WHEN m.role='admin' OR pm.access='write' THEN 'write' ELSE 'read' END AS effective_access FROM projects p JOIN organizations o ON o.id=p.org_id JOIN organization_memberships m ON m.org_id=p.org_id AND m.user_id=? LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=m.user_id WHERE (m.role='admin' OR pm.user_id IS NOT NULL) AND p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC",
         user.role === "owner" ? [] : [user.id],
       ),
     ]);
@@ -186,7 +196,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         name: r.name,
         description: r.description,
         status: r.status,
-        access: r.effective_access ?? r.access,
+        access: r.effective_access,
         createdAt: r.created_at,
       })),
     };
@@ -203,13 +213,19 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
         "invalid_request",
         "Theme must be green or cognac",
       );
-    await ctx.db.run("UPDATE users SET name=?,theme=? WHERE id=?", [
-      name,
-      theme,
-      user.id,
-    ]);
+    const defaultModel =
+      body.defaultModel === undefined
+        ? (user.defaultModel ?? null)
+        : body.defaultModel === null || body.defaultModel === ""
+          ? null
+          : stringValue(body.defaultModel, "defaultModel", 240);
+    await ctx.db.run(
+      "UPDATE users SET name=?,theme=?,default_model=? WHERE id=?",
+      [name, theme, defaultModel, user.id],
+    );
     await ctx.audit(user, null, "user.profile_updated", user.id, {
       theme,
+      defaultModel,
     });
     return mapUser(
       await ctx.db.get("SELECT * FROM users WHERE id=?", [user.id]),

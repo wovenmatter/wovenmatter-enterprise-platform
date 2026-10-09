@@ -1,5 +1,14 @@
 # Development and validation
 
+## WovenMatter-first agent policy
+
+Agent/runtime behavior is first implemented and accepted in WovenMatter, then
+ported into Enterprise with a private parity matrix that names the source PR or
+commit, Enterprise adaptation, and tests. Keep behavioral ports narrow: do not
+invent scheduling, provider, credential or UI scope that was not proven
+upstream. When Enterprise platform constraints require a different mechanism,
+document that adaptation in the matrix and cover it with deterministic tests.
+
 Use Node 24.21.0, npm 12.2.0 and the root npm lockfile.
 Run commands from the repository root:
 
@@ -90,3 +99,5 @@ no executable elements, desktop/mobile interactions and screenshots. Synthetic
 transport/unit tests do not establish kernel isolation; run the public container
 acceptance separately on the exact runtime image. Actual provider entitlement and
 inference acceptance remain a human-owned check.
+
+See the [Pi Durable port guide](PI_DURABLE_PORT.md) for WovenMatter provenance, behavioral parity, approved SDK publication and conversation adoption.

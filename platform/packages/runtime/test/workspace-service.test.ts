@@ -32,7 +32,7 @@ const request = (
   userId: "user-a",
   organizationId: "org",
   projectId: "project",
-  harness: "codex",
+  harness: "pi",
   model: "model",
   prompt: "Work",
   access: "write",
@@ -325,5 +325,71 @@ test("durable input identities bind asset authority and workspace admission leas
     1,
     "successive turns retain the authorized native environment",
   );
+  await service.close();
+});
+
+test("Pi workspace session is conversation-owned across model changes and Pi options bind run identity", async (t) => {
+  const { service, workers } = await fixture(t);
+  await service.admit({
+    ...request("model-a"),
+    model: "model-a",
+    pi: { provider: "openai", routeIdentity: "route-a", thinking: "low" },
+  });
+  await workers[0]!.emit!({ type: "completed" });
+  workers[0]!.completion!.resolve();
+  await service.admit({
+    ...request("model-b"),
+    model: "model-b",
+    connectionId: "connection-b",
+    pi: { provider: "xai", routeIdentity: "route-b", thinking: "high" },
+  });
+  assert.equal(workers.length, 1);
+  assert.equal(workers[0]!.turns.length, 2);
+  assert.equal(workers[0]!.turns[0]!.model, "model-a");
+  assert.equal(workers[0]!.turns[1]!.model, "model-b");
+  await workers[0]!.emit!({ type: "completed" });
+  workers[0]!.completion!.resolve();
+  await service.admit({
+    ...request("route-bound"),
+    pi: { provider: "openai", routeIdentity: "route-a", thinking: "low" },
+  });
+  await assert.rejects(
+    service.admit({
+      ...request("route-bound"),
+      pi: { provider: "openai", routeIdentity: "route-a", thinking: "high" },
+    }),
+    { code: "request_conflict" },
+  );
+  await service.close();
+});
+
+test("replacement waits for confirmed namespace death even when Stop is delayed", async (t) => {
+  const { service, workers } = await fixture(t);
+  await service.admit(request("first"));
+  await workers[0]!.emit!({ type: "completed" });
+  workers[0]!.completion!.resolve();
+  // Let turn finalization release the lane, while the environment remains alive.
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(service.admit(request("unfenced", "thread-a", 1)), {
+    code: "authority_changed",
+  });
+  const stopping = deferred(),
+    release = deferred();
+  const stop = workers[0]!.worker.stop;
+  workers[0]!.worker.stop = async () => {
+    stopping.resolve();
+    await release.promise;
+    await stop();
+  };
+  const stopped = service.stopSession("thread-a", 1);
+  await stopping.promise;
+  await assert.rejects(service.admit(request("too-early", "thread-a", 1)), {
+    code: "session_stopping",
+  });
+  assert.equal(workers.length, 1);
+  release.resolve();
+  await stopped;
+  await service.admit(request("replacement", "thread-a", 1));
+  assert.equal(workers.length, 2);
   await service.close();
 });

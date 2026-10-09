@@ -22,7 +22,7 @@ export function validateContainerRequest(input: ContainerRequest): void {
   identity(input.projectId);
   if (input.assetId !== undefined) identity(input.assetId);
   if (
-    !["codex", "claude", "grok", "pi"].includes(input.harness) ||
+    input.harness !== "pi" ||
     !["read", "write"].includes(input.access)
   )
     throw new RuntimeError("invalid_request", "Invalid harness or access mode");
@@ -95,6 +95,23 @@ export function validateContainerRequest(input: ContainerRequest): void {
         "invalid_egress",
         "Invalid runtime egress capability",
       );
+  }
+  if (input.pi !== undefined) {
+    if (input.pi.provider !== undefined && !["openai", "anthropic", "xai", "openrouter", "custom"].includes(input.pi.provider))
+      throw new RuntimeError("invalid_request", "Invalid Pi provider");
+    if (input.pi.api !== undefined && !["openai-responses", "anthropic-messages", "openai-compatible"].includes(input.pi.api))
+      throw new RuntimeError("invalid_request", "Invalid Pi API");
+    for (const key of ["contextWindow", "maxOutputTokens"] as const) {
+      const value = input.pi[key];
+      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > 10_000_000))
+        throw new RuntimeError("invalid_request", "Invalid Pi model limit");
+    }
+    if (input.pi.routeIdentity !== undefined && (typeof input.pi.routeIdentity !== "string" || input.pi.routeIdentity.length > 512 || /[\r\n\x00]/.test(input.pi.routeIdentity)))
+      throw new RuntimeError("invalid_request", "Invalid Pi route identity");
+    if (input.pi.accountAffinity !== undefined && input.pi.accountAffinity !== "proxy-session-affinity")
+      throw new RuntimeError("invalid_request", "Invalid Pi account affinity");
+    if (input.pi.sdkGeneration !== undefined && (typeof input.pi.sdkGeneration !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(input.pi.sdkGeneration)))
+      throw new RuntimeError("invalid_request", "Invalid Pi SDK generation");
   }
 }
 export function isWithin(root: string, path: string): boolean {
@@ -202,6 +219,18 @@ function validateEventBody(value: unknown): RuntimeEvent {
     case "assistant_delta":
       if (typeof v.delta === "string" && Buffer.byteLength(v.delta) <= MAX_LINE)
         return { type: v.type, delta: v.delta };
+      break;
+    case "assistant_snapshot":
+      if (typeof v.text === "string" && Buffer.byteLength(v.text) <= MAX_LINE)
+        return { type: v.type, text: v.text };
+      break;
+    case "native_update":
+      if (v.update && typeof v.update === "object" && !Array.isArray(v.update))
+        return { type: v.type, update: v.update as Record<string, unknown> };
+      break;
+    case "native_records":
+      if (v.batch && typeof v.batch === "object" && !Array.isArray(v.batch))
+        return { type: v.type, batch: v.batch as Record<string, unknown> };
       break;
     case "citation":
       if (

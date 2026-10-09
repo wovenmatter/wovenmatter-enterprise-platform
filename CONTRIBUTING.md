@@ -5,6 +5,9 @@ Thank you for helping improve WovenMatter Enterprise.
 ## Before opening a change
 
 - Search existing issues and keep each change focused.
+- Agent/runtime feature work follows the WovenMatter-first policy: prove the
+  behavior in WovenMatter, port it here with source PR/commit references, and
+  include a parity matrix plus Enterprise-specific acceptance evidence.
 - If you do not have write access, fork the repository and create a short-lived
   branch in your fork. Collaborators should also use a short-lived branch.
 - Open pull requests against `main`.

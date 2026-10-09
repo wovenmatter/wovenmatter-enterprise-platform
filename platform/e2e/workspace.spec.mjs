@@ -612,34 +612,47 @@ test("durable conversation streams and can add a project colleague", async ({
     `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
   );
   await page
-    .getByRole("button", {
+    .getByRole("link", {
       name: "New conversation",
       exact: true,
     })
     .first()
     .click();
-  await page
-    .getByLabel("Title", {
-      exact: true,
-    })
-    .fill("Browser conversation");
-  await page
-    .getByLabel("Model", {
-      exact: true,
-    })
-    .selectOption("gpt-test-fixture");
+  await expect(page.getByRole("dialog").locator("select")).toHaveCount(1);
+  await expect(
+    page.getByRole("dialog").getByLabel("Session permissions"),
+  ).toHaveValue("write");
+  await expect(
+    page.getByRole("dialog").getByLabel("Title", { exact: true }),
+  ).toHaveCount(0);
   await page
     .getByRole("button", {
-      name: "Create conversation",
+      name: "Start session",
       exact: true,
     })
     .click();
   await expect(
+    page.getByLabel("Conversation model", { exact: true }),
+  ).toHaveValue("gpt-test-fixture");
+  await page.getByLabel("Thinking level", { exact: true }).selectOption("high");
+  await expect(page.getByLabel("Thinking level", { exact: true })).toHaveValue(
+    "high",
+  );
+  await expect(
     page.getByRole("heading", {
-      name: "Browser conversation",
+      name: "New conversation",
       exact: true,
     }),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Conversation settings", exact: true })
+    .click();
+  await page.getByLabel("Title", { exact: true }).fill("Browser conversation");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByLabel("Message mode").selectOption("comment");
   await page.getByLabel("Message your agent").fill("Background comment only");
   await page
@@ -662,6 +675,11 @@ test("durable conversation streams and can add a project colleague", async ({
     ),
   ).toHaveCount(0);
   await page.getByLabel("Message mode").selectOption("message");
+  await page
+    .getByLabel("Conversation model", {
+      exact: true,
+    })
+    .selectOption("gpt-test-fixture");
   await page.getByLabel("Message your agent").fill("Test durable delivery");
   await page
     .getByRole("button", {
@@ -686,6 +704,9 @@ test("durable conversation streams and can add a project colleague", async ({
     path: `${evidence}/workspace-desktop.png`,
     fullPage: true,
   });
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
   const stopBackground = page.getByRole("button", {
     name: "Stop background work",
     exact: true,
@@ -734,7 +755,7 @@ test("durable conversation streams and can add a project colleague", async ({
     .click();
   await page.reload();
   await page
-    .getByRole("button", {
+    .getByRole("link", {
       name: /Browser conversation/,
     })
     .click();
@@ -814,7 +835,15 @@ test("safe report publication is public without JavaScript and visibility change
   await page.getByRole("button", { name: "New asset", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("Browser report");
   await page.getByLabel("Belongs to").selectOption(f.projectId);
+  const creation = page.waitForResponse(
+    (response) =>
+      response
+        .url()
+        .endsWith(`/enterprise/api/organizations/${f.orgId}/assets`) &&
+      response.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
+  expect((await creation).status()).toBe(201);
   // Keep the renderer/import-compatibility regression through its existing API;
   // conversational preparation is covered by the asset agent workflow below.
   const assetList = await (
@@ -1249,7 +1278,7 @@ test("restricted members do not see owner or administrator navigation", async ({
         name: "Members",
         exact: true,
       }),
-    ).toHaveCount(0);
+    ).toHaveCount(1);
     await expect(
       sidebar.getByRole("link", {
         name: "Connections",
@@ -1360,7 +1389,7 @@ test("owner project deep links choose the correct organization", async ({
     }),
   ).toBeVisible();
 });
-test("invited read-only collaborators direct a full-access thread without gaining direct project writes", async ({
+test("downgraded collaborators can view a full-access thread without directing it", async ({
   page,
   browser,
 }) => {
@@ -1383,7 +1412,6 @@ test("invited read-only collaborators direct a full-access thread without gainin
         title: "Read-only collaboration",
         mode: "write",
         model: "gpt-test-fixture",
-        harness: "codex",
       },
     },
   );
@@ -1425,33 +1453,40 @@ test("invited read-only collaborators direct a full-access thread without gainin
       `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
     );
     await employee
-      .getByRole("button", {
+      .getByRole("link", {
         name: /Read-only collaboration/,
       })
       .click();
-    await employee
-      .getByLabel("Message your agent")
-      .fill("Question from a read-only collaborator");
-    await employee
-      .getByRole("button", {
-        name: "Send message",
-        exact: true,
-      })
-      .click();
+    await expect(employee.getByLabel("Message your agent")).toBeDisabled();
+    await expect(
+      employee.getByRole("button", { name: "Send message", exact: true }),
+    ).toBeDisabled();
     await expect(
       employee.getByText(
-        "Synthetic protocol fixture: the request reached the durable runtime.",
-        {
-          exact: true,
-        },
+        "Read-only for you. Start a read-only conversation to use the agent.",
       ),
     ).toBeVisible();
+    const memberSession = await (
+      await member.request.get("/enterprise/api/session")
+    ).json();
+    const forbidden = await member.request.post(
+      `/enterprise/api/conversations/${thread.id}/messages`,
+      {
+        headers: { origin: f.origin, "x-csrf-token": memberSession.csrfToken },
+        data: {
+          content: "Cannot borrow full authority",
+          requestId: "readonly-no-elevation",
+        },
+      },
+    );
+    expect(forbidden.status()).toBe(403);
+    expect((await forbidden.json()).error.code).toBe("read_only");
     const runs = await (
       await member.request.get(
         `/enterprise/api/conversations/${thread.id}/runs`,
       )
     ).json();
-    expect(runs.items[0].mode).toBe("write");
+    expect(runs.items).toHaveLength(0);
     await expect(
       employee.getByRole("link", {
         name: "Connections",
@@ -2077,10 +2112,16 @@ test("organization assets start without projects from Files and Assets, remain p
   await expect(page.getByLabel("Belongs to")).toHaveValue("");
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
   await page
-    .getByLabel("Model", { exact: true })
-    .selectOption("synthetic-asset-codex");
+    .getByLabel("Session permissions", { exact: true })
+    .selectOption("write");
   await page
-    .getByLabel("Message", { exact: true })
+    .getByRole("button", { name: "Start session", exact: true })
+    .click();
+  await page
+    .getByLabel("Conversation model", { exact: true })
+    .selectOption("synthetic-asset-pi");
+  await page
+    .getByLabel("Message your agent", { exact: true })
     .fill("Prepare an overview with a useful generated data table.");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(
@@ -2332,4 +2373,455 @@ test("denied, expired and unavailable remote sign-ins offer a fresh attempt with
     await expect(page.getByRole("dialog")).toHaveCount(0);
   }
   expect(errors).toEqual([]);
+});
+
+test("native streaming retains chronological work, task progress, full copy and reopen history", async ({
+  page,
+}) => {
+  const f = await ensureFixture(page);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  const detailRequests = [];
+  page.on("request", (request) => {
+    if (/\/activities\/[^/?]+\/[^/?]+/.test(request.url()))
+      detailRequests.push(request.url());
+  });
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(
+    "/enterprise/organizations/" + f.orgId + "/projects/" + f.projectId,
+  );
+  await page
+    .getByRole("link", { name: "New conversation", exact: true })
+    .first()
+    .click();
+  await page
+    .getByRole("button", { name: "Start session", exact: true })
+    .click();
+  await expect(page.locator(".composer-area .session-mode")).toContainText(
+    "Full access",
+  );
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Conversation settings", exact: true })
+    .click();
+  await page
+    .getByLabel("Title", { exact: true })
+    .fill("Native streaming review");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page
+    .getByLabel("Conversation model", { exact: true })
+    .selectOption("gpt-test-fixture");
+  await page
+    .getByLabel("Message your agent")
+    .fill("[native-stream] Inspect the record.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".native-task-badge")).toContainText(
+    "Inspect the retained record",
+  );
+  await expect(page.locator(".native-commentary")).toContainText(
+    "I will inspect",
+  );
+  expect(
+    detailRequests.some((url) => url.includes("tool%3Afixture-read")),
+  ).toBe(false);
+  await page
+    .locator(".native-work-group > summary")
+    .filter({ hasText: "Using 1 tool" })
+    .click();
+  await page
+    .locator(".native-work-item > summary")
+    .filter({ hasText: "Read retained record" })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Latest reply" }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: evidence + "/native-streaming-desktop.png",
+    fullPage: true,
+  });
+  await expect(page.locator(".native-final")).toContainText(
+    "All retained output remains available",
+    { timeout: 15000 },
+  );
+  await expect(page.locator(".native-task-badge")).toHaveCount(0);
+  await expect(page.locator(".native-completed-work")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await page.getByRole("button", { name: "Copy response" }).click();
+  await expect(page.locator(".response-actions")).toContainText("Copied");
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "The record is complete.\n\nAll retained output remains available after reopening this conversation.",
+  );
+  await page.reload();
+  await page.getByRole("link", { name: /Native streaming review/ }).click();
+  await expect(page.locator(".native-final")).toContainText(
+    "All retained output remains available",
+  );
+  await page.locator(".native-completed-work > summary").click();
+  await page
+    .locator(".native-work-group > summary")
+    .filter({ hasText: "Used 1 tool" })
+    .click();
+  await page
+    .locator(".native-work-item > summary")
+    .filter({ hasText: "Read retained record" })
+    .click();
+  await expect(page.locator(".native-work-detail")).toContainText(
+    "Complete tool output.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Load more details" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Load more details" }).click();
+  await expect(page.locator(".native-work-detail")).toContainText(
+    "FINAL RETAINED ROW",
+  );
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Native history", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Search history" }).click();
+  await expect(page.locator(".native-history-results")).toContainText(
+    "message",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: evidence + "/native-streaming-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Close dialog", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Conversation settings" }).click();
+  await expect(
+    page.getByLabel("Pi Durable version", { exact: true }),
+  ).toHaveValue("fixture-sdk-one");
+  await page
+    .getByLabel("Pi Durable version", { exact: true })
+    .selectOption("fixture-sdk-two");
+  await page
+    .getByRole("button", { name: "Apply version", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Apply version", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Check for updates", exact: true })
+    .click();
+  await expect(
+    page.getByLabel("Pi Durable version", { exact: true }),
+  ).toHaveValue("fixture-sdk-two");
+  expect(errors).toEqual([]);
+});
+
+test("older replies outside the activity window expose complete text and their paged work", async ({
+  page,
+}) => {
+  test.skip(
+    Boolean(process.env.WME_E2E_AGENT_IMAGE),
+    "Uses the disposable API history fixture; native protocols have their own acceptance suite.",
+  );
+  const f = await ensureFixture(page);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(
+    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
+  );
+  await page
+    .getByRole("link", { name: "New conversation", exact: true })
+    .first()
+    .click();
+  await page
+    .getByRole("button", { name: "Start session", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Conversation settings", exact: true })
+    .click();
+  await page
+    .getByLabel("Title", { exact: true })
+    .fill("Retained reply recovery");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page
+    .getByLabel("Conversation model", { exact: true })
+    .selectOption("gpt-test-fixture");
+  await page
+    .getByLabel("Message your agent")
+    .fill("[retained-reply] Generate an older complete reply.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".native-final")).toContainText(
+    "END OF OLDER REPLY",
+  );
+  await page
+    .getByLabel("Message your agent")
+    .fill("[history-page-after] Generate later work.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(
+    page
+      .locator(".native-final")
+      .filter({ hasText: "Later activity is complete" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Stop background work", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Conversation actions", exact: true })
+    .click();
+  await page.reload();
+  // Reopen the newest conversation through the project list.
+  await page
+    .getByRole("link", { name: /Retained reply recovery/ })
+    .first()
+    .click();
+  const older = page.locator("article.message-assistant").first();
+  await expect(
+    older.getByRole("button", { name: "Show complete reply", exact: true }),
+  ).toBeVisible();
+  await older
+    .getByRole("button", { name: "Show complete reply", exact: true })
+    .click();
+  await expect(older).toContainText("END OF OLDER REPLY");
+  await older
+    .getByRole("button", { name: "Copy response", exact: true })
+    .click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "Retained older response. ".repeat(100) + "END OF OLDER REPLY",
+  );
+  const complete = page
+    .locator("article.message-assistant")
+    .filter({ hasText: "END OF OLDER REPLY" })
+    .first();
+  await complete
+    .getByRole("button", { name: "Load complete activity", exact: true })
+    .click();
+  await expect(complete.locator(".native-final")).toContainText(
+    "END OF OLDER REPLY",
+  );
+  await expect(
+    complete.getByRole("button", {
+      name: "Load complete activity",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page.screenshot({
+    path: evidence + "/retained-reply-recovery.png",
+    fullPage: true,
+  });
+  expect(errors).toEqual([]);
+});
+
+test("one persistent rail leaves the chat full width and preserves URL selection and scoped drafts", async ({
+  page,
+}) => {
+  const f = await ensureFixture(page);
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  const session = await (
+    await page.request.get("/enterprise/api/session")
+  ).json();
+  const headers = { origin: f.origin, "x-csrf-token": session.csrfToken };
+  const base = `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`;
+  const first = await (
+    await page.request.post(
+      `/enterprise/api/projects/${f.projectId}/conversations`,
+      {
+        headers,
+        data: { title: "Workspace layout review", model: "gpt-test-fixture" },
+      },
+    )
+  ).json();
+  const second = await (
+    await page.request.post(
+      `/enterprise/api/projects/${f.projectId}/conversations`,
+      {
+        headers,
+        data: {
+          title: "Read-only research",
+          mode: "read",
+          model: "gpt-test-fixture",
+        },
+      },
+    )
+  ).json();
+  expect(first.mode).toBe("write");
+  await page.setViewportSize({ width: 855, height: 769 });
+  await page.goto(`${base}?conversation=${first.id}`);
+  await expect(page.locator(".thread-header h2")).toHaveText(
+    "Workspace layout review",
+  );
+  await expect(page.locator(".conversation-rail")).toHaveCount(0);
+  const geometry = await page.locator(".conversation-main").boundingBox();
+  expect(geometry.width).toBeGreaterThan(550);
+  expect(geometry.height).toBeGreaterThan(730);
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= innerWidth &&
+        document.documentElement.scrollHeight <= innerHeight,
+    ),
+  ).toBe(true);
+  const rail = await page.locator(".sidebar").elementHandle();
+  const draft = page.getByLabel("Message your agent");
+  await draft.fill("Keep this unsent project draft");
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "Files", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Project files", exact: true }),
+  ).toBeVisible();
+  expect(await rail.evaluate((node) => node.isConnected)).toBe(true);
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "Workspace layout review", exact: true })
+    .click();
+  await expect(draft).toHaveValue("Keep this unsent project draft");
+  await page.reload();
+  await expect(draft).toHaveValue("Keep this unsent project draft");
+  await expect(page).toHaveURL(`${f.origin}${base}?conversation=${first.id}`);
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "Read-only research", exact: true })
+    .click();
+  await expect(draft).toHaveValue("");
+  await expect(page.locator(".session-mode")).toHaveText("Read-only");
+  await page.goBack();
+  await expect(page.locator(".thread-header h2")).toHaveText(
+    "Workspace layout review",
+  );
+  await expect(draft).toHaveValue("Keep this unsent project draft");
+  await page.screenshot({ path: `${evidence}/workspace-855.png` });
+  await page.setViewportSize({ width: 1536, height: 1024 });
+  await page.screenshot({ path: `${evidence}/workspace-wide.png` });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(draft).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Send message", exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth <= innerWidth &&
+        document.documentElement.scrollHeight <= innerHeight,
+    ),
+  ).toBe(true);
+  const modelControls = await page
+    .locator(".composer-model-controls label")
+    .evaluateAll((labels) =>
+      labels.map((label) => {
+        const r = label.getBoundingClientRect();
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+      }),
+    );
+  expect(modelControls.length).toBe(2);
+  expect(
+    modelControls[0].right <= modelControls[1].left ||
+      modelControls[0].bottom <= modelControls[1].top,
+  ).toBe(true);
+  await page
+    .getByRole("button", { name: "Open navigation", exact: true })
+    .click();
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "Read-only research", exact: true })
+    .click();
+  await expect(page.getByRole("dialog", { name: "Navigation" })).toHaveCount(0);
+  await expect(page.locator(".thread-header h2")).toHaveText(
+    "Read-only research",
+  );
+  await page.screenshot({ path: `${evidence}/workspace-mobile.png` });
+  expect(errors).toEqual([]);
+});
+
+test("a successful send acknowledged after navigation cannot restore an already-sent draft", async ({
+  page,
+}) => {
+  const f = await ensureFixture(page);
+  const session = await (
+    await page.request.get("/enterprise/api/session")
+  ).json();
+  const response = await page.request.post(
+    `/enterprise/api/projects/${f.projectId}/conversations`,
+    {
+      headers: { origin: f.origin, "x-csrf-token": session.csrfToken },
+      data: { title: "Delayed receipt review", model: "gpt-test-fixture" },
+    },
+  );
+  const conversation = await response.json();
+  const base = `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`;
+  await page.goto(`${base}?conversation=${conversation.id}`);
+  let released = false;
+  let release;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  let admitted;
+  const seen = new Promise((resolve) => {
+    admitted = resolve;
+  });
+  await page.route(
+    `**/api/conversations/${conversation.id}/messages`,
+    async (route) => {
+      if (route.request().method() !== "POST") {
+        if (!released)
+          return route.fulfill({
+            json: { items: [], hasMore: false, nextBefore: null },
+          });
+        return route.continue();
+      }
+      const result = await route.fetch();
+      admitted();
+      await held;
+      await route.fulfill({ response: result });
+    },
+  );
+  await page
+    .getByLabel("Message your agent")
+    .fill("An exact receipt acknowledged after navigation");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await seen;
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "Files", exact: true })
+    .click();
+  const settled = page.waitForResponse(
+    (r) =>
+      r.url().endsWith(`/conversations/${conversation.id}/messages`) &&
+      r.request().method() === "POST",
+  );
+  released = true;
+  release();
+  await settled;
+  await page
+    .locator(".sidebar")
+    .getByRole("link", { name: "Delayed receipt review", exact: true })
+    .click();
+  await expect(page.getByLabel("Message your agent")).toHaveValue("");
+  await expect(
+    page.getByText("An exact receipt acknowledged after navigation", {
+      exact: true,
+    }),
+  ).toHaveCount(1);
 });

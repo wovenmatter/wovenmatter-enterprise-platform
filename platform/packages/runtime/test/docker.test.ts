@@ -27,7 +27,7 @@ async function fixture(t: any) {
     sessions,
     journal,
     join(files, "projects/project1/files"),
-    join(sessions, "org1/project1/sessions/thread1/codex/read"),
+    join(sessions, "org1/project1/sessions/thread1/pi/read"),
   ])
     await mkdir(path, {
       recursive: true,
@@ -37,10 +37,11 @@ import fs from 'node:fs';import {createInterface} from 'node:readline';import cr
 const a=process.argv.slice(2),root=${JSON.stringify(root)},log=${JSON.stringify(log)},container=root+'/container.json',network=root+'/network.json';fs.appendFileSync(log,JSON.stringify(a)+'\\n');
 const labels=()=>Object.fromEntries(a.flatMap((v,i)=>v==='--label'?[a[i+1].split('=')]:[]));
 const load=file=>JSON.parse(fs.readFileSync(file,'utf8'));const save=(file,data)=>fs.writeFileSync(file,JSON.stringify(data));
-if(a[0]==='volume'&&a[1]==='inspect'){const roots=${JSON.stringify([files, sessions, journal])};const r=roots.find(r=>'wme-storage-'+crypto.createHash('sha256').update(r).digest('hex').slice(0,32)===a[2]);console.log(JSON.stringify([{Driver:'local',Options:{type:'none',o:'bind',device:r}}]));}
+if(a.includes('volume')&&a.includes('inspect')){const roots=${JSON.stringify([files, sessions, journal])};const r=roots.find(r=>a.includes('wme-storage-'+crypto.createHash('sha256').update(r).digest('hex').slice(0,32)));console.log(JSON.stringify([{Driver:'local',Options:{type:'none',o:'bind',device:r}}]));}
+if(a.includes('volume')&&a.includes('create'))console.log(a.at(-1));
 if(a[0]==='network'&&a[1]==='ls'&&fs.existsSync(network))console.log('net1');
 if(a[0]==='network'&&a[1]==='create')save(network,{Id:'net1',Internal:true,Labels:labels(),Containers:{}});
-if(a[1]==='inspect'&&['container','network'].includes(a[0])){const file=a[0]==='container'?container:network;if(!fs.existsSync(file)){console.error(a[0]==='network'&&fs.existsSync(root+'/network-error')?fs.readFileSync(root+'/network-error','utf8'):'No such '+a[0]);process.exit(1);}console.log(JSON.stringify([load(file)]));}
+if(a[1]==='inspect'&&['container','network'].includes(a[0])){const file=a[0]==='container'?container:network;if(!fs.existsSync(file)){fs.writeSync(2,a[0]==='network'&&fs.existsSync(root+'/network-error')?fs.readFileSync(root+'/network-error','utf8'):'No such '+a[0]);process.exit(1);}console.log(JSON.stringify([load(file)]));}
 if(a[0]==='create')save(container,{Id:'container1',Config:{Labels:labels(),Image:'fixture:runtime'},State:{Running:false}});
 if(['start','stop'].includes(a[0])){const c=load(container);c.State.Running=a[0]==='start';save(container,c);}
 if(a[0]==='rm')fs.rmSync(container,{force:true});
@@ -79,7 +80,7 @@ process.stdin.destroy();
     organizationId: "org1",
     projectId: "project1",
     conversationId: "thread1",
-    harness: "codex",
+    harness: "pi",
     model: "fixture-model",
     prompt: "Fixture",
     access: "read",
@@ -92,7 +93,7 @@ process.stdin.destroy();
     ],
     sessionDirectory: join(
       sessions,
-      "org1/project1/sessions/thread1/codex/read",
+      "org1/project1/sessions/thread1/pi/read",
     ),
     gateway: {
       baseUrl: "http://api:4100/enterprise/api/runtime/inference/project1",
@@ -386,7 +387,7 @@ test("asset compute releases only an idle matching lease and reopens durable wor
       f.sessions,
       "org1",
       projectId,
-      "sessions/thread1/codex/write",
+      "sessions/thread1/pi/write",
     );
   await mkdir(root, { recursive: true });
   await mkdir(sessionDirectory, { recursive: true });

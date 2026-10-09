@@ -11,6 +11,8 @@ export interface DockerRuntimeOptions {
   storageRoots: string[];
   sessionRoot: string;
   journalRoot: string;
+  /** Operator-published immutable Pi SDK catalog, mounted read-only into project runtimes. */
+  sdkCatalogRoot?: string;
   gatewayOrigins: string[];
   /** Trusted internal HTTP proxy origins. Empty/omitted rejects all egress capabilities. */
   egressProxyOrigins?: string[];

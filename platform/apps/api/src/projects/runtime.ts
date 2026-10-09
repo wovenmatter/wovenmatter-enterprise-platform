@@ -10,14 +10,15 @@ export async function projectRuntimeSpec(
     id: string;
     org_id: string;
     host_id: string;
-    access: string;
-  }>("SELECT id,org_id,host_id,access FROM projects WHERE id=?", [id]);
+  }>("SELECT id,org_id,host_id FROM projects WHERE id=?", [id]);
   if (!project) throw new Error("Project runtime policy unavailable");
   return {
     projectId: id,
     organizationId: project.org_id,
     hostId: project.host_id,
-    scheduleEnabled: project.access === "write",
+    // Projects are full-capability; only write-mounted sessions, which require
+    // the actor's own full project access, can change schedule definitions.
+    scheduleEnabled: true,
     scheduleMounts: await resolveScheduledMounts(ctx, project.org_id, id),
   };
 }

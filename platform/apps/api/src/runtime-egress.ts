@@ -61,6 +61,7 @@ export async function createRuntimeEgress(options: RuntimeEgressOptions) {
   });
   let listening = false;
   const runtime: Runtime = {
+    sdkCatalog: options.runtime.sdkCatalog?.bind(options.runtime),
     releaseAsset: options.runtime.releaseAsset?.bind(options.runtime),
     attach: options.runtime.attach?.bind(options.runtime),
     acknowledge: options.runtime.acknowledge?.bind(options.runtime),

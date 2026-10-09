@@ -17,7 +17,7 @@ const request: RuntimeRequest = {
   organizationId: "test-org",
   projectId: "test-project",
   conversationId: "test-thread",
-  harness: "codex",
+  harness: "pi",
   model: "test-model",
   prompt: "Synthetic test",
   access: "read",
@@ -193,7 +193,17 @@ test("egress wrapper preserves durable attachment and asset release without lend
       workspaceLease: 1,
       scheduleEnabled: false,
     };
+  const catalog = {
+    bundledGeneration: "fixture-sdk",
+    defaultGeneration: "fixture-sdk",
+    items: [],
+  };
   const runtime: Runtime = {
+    async sdkCatalog(id) {
+      assert.equal(this, runtime, "wrapper must retain the catalog receiver");
+      assert.equal(id, spec.projectId);
+      return catalog;
+    },
     async execute() {},
     async cancel() {},
     async recover() {
@@ -222,7 +232,10 @@ test("egress wrapper preserves durable attachment and asset release without lend
     proxyOrigin: "http://api:4101",
     host: "127.0.0.1",
     port: 0,
-    networkBoundary: async () => ({ addresses: ["127.0.0.1"], hostnames: ["host.example"] }),
+    networkBoundary: async () => ({
+      addresses: ["127.0.0.1"],
+      hostnames: ["host.example"],
+    }),
     issueProjectCapability: async () => {
       throw Error("Asset must not receive project scheduling authority");
     },
@@ -231,6 +244,7 @@ test("egress wrapper preserves durable attachment and asset release without lend
     },
   });
   t.after(() => wrapped.close());
+  assert.deepEqual(await wrapped.runtime.sdkCatalog!(spec.projectId), catalog);
   await wrapped.runtime.ensureProject!(spec);
   await wrapped.runtime.attach!("run", 7, () => {});
   await wrapped.runtime.acknowledge!("run", 8);
@@ -243,4 +257,22 @@ test("egress wrapper preserves durable attachment and asset release without lend
     "stop:asset-fixture:thread:2",
     "release",
   ]);
+});
+
+test("deployment cookie names retain a validated host-only prefix", () => {
+  assert.equal(loadConfig({}).sessionCookieName, "wme_session");
+  assert.equal(
+    loadConfig({ WME_SESSION_COOKIE_NAME: "wme_pr3_dev_session" })
+      .sessionCookieName,
+    "wme_pr3_dev_session",
+  );
+  for (const name of [
+    "",
+    "__Host-session",
+    "Cookie; Path=/",
+    "a".repeat(65),
+    "../cookie",
+    "wme=session",
+  ])
+    assert.throws(() => loadConfig({ WME_SESSION_COOKIE_NAME: name }));
 });

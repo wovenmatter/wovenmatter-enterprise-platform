@@ -23,6 +23,14 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
     await ctx.requireOrgAdmin(user, p.orgId);
     return p;
   }
+  function rejectProjectAccess(body: Record<string, unknown>) {
+    if (body.access !== undefined)
+      throw new AppError(
+        400,
+        "invalid_request",
+        "Projects have no project-wide access setting. Set read or write access for each project member instead.",
+      );
+  }
   app.get<{
     Params: {
       orgId: string;
@@ -32,10 +40,11 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
     const orgId = request.params.orgId;
     await ctx.requireOrgMember(user, orgId);
     const isAdmin = (await ctx.membership(user, orgId)).role === "admin";
+    // Report the caller's own access, matching requireProject and /me.
     const rows = await ctx.db.all<any>(
       !isAdmin
-        ? "SELECT p.*,CASE WHEN p.access='read' OR m.access='read' THEN 'read' ELSE 'write' END AS effective_access FROM projects p JOIN project_members m ON p.id=m.project_id WHERE p.org_id=? AND m.user_id=? AND p.status NOT IN ('deleted','deleting','purged') ORDER BY p.created_at DESC"
-        : "SELECT * FROM projects WHERE org_id=? AND status NOT IN ('deleted','deleting','purged') ORDER BY created_at DESC",
+        ? "SELECT p.*,CASE WHEN m.access='write' THEN 'write' ELSE 'read' END AS effective_access FROM projects p JOIN project_members m ON p.id=m.project_id WHERE p.org_id=? AND m.user_id=? AND p.status NOT IN ('deleted','deleting','purged') ORDER BY p.created_at DESC"
+        : "SELECT *,'write' AS effective_access FROM projects WHERE org_id=? AND status NOT IN ('deleted','deleting','purged') ORDER BY created_at DESC",
       !isAdmin ? [orgId, user.id] : [orgId],
     );
     return {
@@ -53,6 +62,7 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
       const orgId = request.params.orgId;
       await ctx.requireOrgAdmin(user, orgId);
       const body = objectBody(request.body);
+      rejectProjectAccess(body);
       const organization = await ctx.db.get<any>(
         "SELECT default_host_id FROM organizations WHERE id=?",
         [orgId],
@@ -91,7 +101,8 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
             ? ""
             : stringValue(body.description, "description", 4000, true),
         status: "provisioning",
-        access: accessValue(body.access),
+        // The creating administrator's own access; projects are full-capability.
+        access: "write" as const,
         createdAt: new Date().toISOString(),
       };
       const job = jobStatement({
@@ -106,14 +117,13 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
       });
       await ctx.db.batch([
         {
-          sql: "INSERT INTO projects (id,org_id,name,description,status,access,created_at,host_id) VALUES (?,?,?,?,?,?,?,?)",
+          sql: "INSERT INTO projects (id,org_id,name,description,status,created_at,host_id) VALUES (?,?,?,?,?,?,?)",
           params: [
             project.id,
             orgId,
             project.name,
             project.description,
             project.status,
-            project.access,
             project.createdAt,
             hostId,
           ],
@@ -146,6 +156,7 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
     const user = await ctx.requireUser(request);
     const project = await admin(user, request.params.projectId);
     const body = objectBody(request.body);
+    rejectProjectAccess(body);
     if (body.hostId !== undefined) {
       if (user.role !== "owner")
         throw new AppError(
@@ -166,15 +177,12 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
       body.description === undefined
         ? project.description
         : stringValue(body.description, "description", 4000, true);
-    const access = accessValue(body.access, project.access);
-    await ctx.db.run(
-      "UPDATE projects SET name=?,description=?,access=? WHERE id=?",
-      [name, description, access, project.id],
-    );
-    await ctx.onAccessChanged?.();
-    await ctx.audit(user, project.orgId, "project.updated", project.id, {
-      access,
-    });
+    await ctx.db.run("UPDATE projects SET name=?,description=? WHERE id=?", [
+      name,
+      description,
+      project.id,
+    ]);
+    await ctx.audit(user, project.orgId, "project.updated", project.id);
     return ctx.requireProject(user, project.id);
   });
   app.delete<{
@@ -287,7 +295,8 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
   }>("/enterprise/api/projects/:projectId/members/:userId", async (request) => {
     const user = await ctx.requireUser(request);
     const project = await admin(user, request.params.projectId);
-    const access = accessValue(objectBody(request.body).access);
+    // An update names the new grant explicitly; only additions default to write.
+    const access = accessValue(objectBody(request.body).access ?? null);
     const result = await ctx.db.run(
       "UPDATE project_members SET access=? WHERE project_id=? AND user_id=?",
       [access, project.id, request.params.userId],

@@ -28,6 +28,7 @@ import {
 import { ensureStorageVolumes, volumeMount } from "./volumes.js";
 import { createIsolatedNetwork, validateNetworkPool } from "./networks.js";
 import type { DockerRuntimeOptions } from "./docker.js";
+import { sdkCatalogStatus } from "./sdk-catalog.js";
 const exec = promisify(execFile);
 const containerName = (id: string) =>
   id.startsWith("asset-")
@@ -226,6 +227,19 @@ export class ProjectDockerRuntime implements Runtime {
       return undefined;
     }
   }
+  async sdkCatalog(projectId: string) {
+    const p = await this.placement(identity(projectId));
+    if (p.hostId !== (this.options.hostId ?? "local") || p.status === "purged")
+      throw new RuntimeError(
+        "project_unavailable",
+        "Project runtime is unavailable.",
+      );
+    return sdkCatalogStatus({
+      catalogDirectory:
+        this.options.sdkCatalogRoot ??
+        join(this.options.journalRoot, "approved-sdk"),
+    });
+  }
   private async writePolicy(p: Placement) {
     const library = join(
         this.options.storageRoots[0],
@@ -392,7 +406,16 @@ export class ProjectDockerRuntime implements Runtime {
         mode: 0o750,
       });
     const journal = join(this.options.journalRoot, "projects", spec.projectId);
-    const roots = [root, this.options.sessionRoot, this.options.journalRoot];
+    const sdkCatalog =
+      this.options.sdkCatalogRoot ??
+      join(this.options.journalRoot, "approved-sdk");
+    await mkdir(sdkCatalog, { recursive: true, mode: 0o755 });
+    const roots = [
+      root,
+      this.options.sessionRoot,
+      this.options.journalRoot,
+      ...(this.options.sdkCatalogRoot ? [sdkCatalog] : []),
+    ];
     await ensureStorageVolumes(roots, (args) => this.command(args));
     const networkName = p.network;
     const listed = await this.command([
@@ -502,6 +525,8 @@ export class ProjectDockerRuntime implements Runtime {
       volumeMount(sessions, "/state", roots, false),
       "--mount",
       volumeMount(journal, "/control", roots, false),
+      "--mount",
+      volumeMount(sdkCatalog, "/opt/runtime/approved-sdk", roots, true),
       "--entrypoint",
       "node",
       this.options.image,
@@ -798,6 +823,7 @@ export class ProjectDockerRuntime implements Runtime {
           request.userId,
           request.assetId,
           request.workspaceLease,
+          request.pi,
         ]),
       )
       .digest("hex");
