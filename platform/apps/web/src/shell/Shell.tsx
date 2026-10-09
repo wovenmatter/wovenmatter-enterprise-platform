@@ -61,7 +61,7 @@ export function Shell({
   const accountReturn = location.pathname.startsWith("/organizations/")
     ? `?returnTo=${encodeURIComponent(`${location.pathname}${location.search}`)}`
     : "";
-  useEffect(() => setMobileOpen(false), [location.pathname]);
+  useEffect(() => setMobileOpen(false), [location.pathname, location.search]);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 760px)");
     const resize = () => {
@@ -114,7 +114,7 @@ export function Shell({
           if (event.key === "Tab") {
             const controls = Array.from(
               event.currentTarget.querySelectorAll<HTMLElement>(
-                "a[href],button:not([disabled]),select:not([disabled])",
+                "a[href],button:not([disabled]),select:not([disabled]),input:not([disabled])",
               ),
             ).filter((element) => element.getClientRects().length > 0);
             const first = controls[0];
@@ -202,7 +202,11 @@ export function Shell({
           <ErrorNotice message={error} />
         </div>
       </aside>
-      <main id="main" className="main-content" inert={mobileOpen}>
+      <main
+        id="main"
+        className={`main-content ${/\/organizations\/[^/]+\/projects\/[^/]+/.test(location.pathname) ? "project-workspace" : ""}`}
+        inert={mobileOpen}
+      >
         {organizations.loading ? (
           <Loading />
         ) : organizations.error ? (

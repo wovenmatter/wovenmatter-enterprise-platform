@@ -31,6 +31,7 @@ export interface Project {
   name: string;
   description: string;
   status: string;
+  /** The caller's own effective access, never a project-wide policy. */
   access: "read" | "write";
   createdAt: string;
   hostId: string;
@@ -75,14 +76,14 @@ export function mapUser(r: any): User {
     defaultModel: r.default_model ?? null,
   };
 }
-export function mapProject(r: any, access?: "read" | "write"): Project {
+export function mapProject(r: any, access: "read" | "write"): Project {
   return {
     id: r.id,
     orgId: r.org_id,
     name: r.name,
     description: r.description,
     status: r.status,
-    access: access ?? r.access,
+    access,
     createdAt: r.created_at,
     hostId: r.host_id ?? "local",
   };
@@ -119,7 +120,12 @@ export function createContext(db: Database, config: AppConfig): AppContext {
     db,
     config,
     async getSessionId(request) {
-      const session = await readSession(db, request, config.secureCookies);
+      const session = await readSession(
+        db,
+        request,
+        config.secureCookies,
+        config.sessionCookieName,
+      );
       return session?.id ?? null;
     },
     async isSessionActive(sessionId, userId) {
@@ -129,7 +135,12 @@ export function createContext(db: Database, config: AppConfig): AppContext {
       ));
     },
     async requireUser(request) {
-      const session = await readSession(db, request, config.secureCookies);
+      const session = await readSession(
+        db,
+        request,
+        config.secureCookies,
+        config.sessionCookieName,
+      );
       if (!session)
         throw new AppError(401, "unauthorized", "Sign in to continue");
       return session.user;
@@ -176,19 +187,26 @@ export function createContext(db: Database, config: AppConfig): AppContext {
         [projectId],
       );
       if (!p) throw new AppError(404, "not_found", "Project not found");
+      // Access is per user: owner and organization admins always have full
+      // access; everyone else has exactly their project membership grant.
+      // The legacy projects.access column is not an authorization input.
       const membership = await ctx.membership(user, p.org_id);
-      let effective: "read" | "write" = p.access;
+      let effective: "read" | "write" = "write";
       if (membership.role !== "admin") {
-        const projectMember = await db.get<any>(
+        const projectMember = await db.get<{ access: "read" | "write" }>(
           "SELECT access FROM project_members WHERE project_id=? AND user_id=?",
           [projectId, user.id],
         );
         if (!projectMember)
           throw new AppError(404, "not_found", "Project not found");
-        if (projectMember.access === "read") effective = "read";
+        effective = projectMember.access === "write" ? "write" : "read";
       }
       if (requested === "write" && effective !== "write")
-        throw new AppError(403, "read_only", "This project is read-only");
+        throw new AppError(
+          403,
+          "read_only",
+          "Your project access is read-only. Full access is required for this action.",
+        );
       return mapProject(p, effective);
     },
     async audit(user, orgId, action, entityId, details = {}) {

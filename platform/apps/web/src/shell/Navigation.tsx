@@ -7,6 +7,7 @@ import {
   Settings,
 } from "lucide-react";
 import type { Organization, User } from "../api";
+import { ProjectNavigation } from "./ProjectNavigation";
 
 export function AdministrationNav({
   user,
@@ -62,7 +63,6 @@ export function OrganizationNav({
   const isAdmin = user.role === "owner" || org?.role === "admin";
   const base = `/organizations/${orgId}`;
   const links = [
-    { to: `${base}/projects`, label: "Projects", icon: Folder },
     { to: `${base}/library`, label: "Library", icon: LibraryBig },
     ...(isAdmin
       ? [
@@ -91,7 +91,13 @@ export function OrganizationNav({
           <Link to="/">Switch organization</Link>
         ) : null}
       </div>
-      <nav aria-label="Main navigation">
+      <ProjectNavigation
+        key={orgId}
+        orgId={orgId}
+        user={user}
+        isAdmin={isAdmin}
+      />
+      <nav aria-label="Main navigation" className="organization-navigation">
         {links.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}

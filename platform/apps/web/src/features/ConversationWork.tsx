@@ -558,7 +558,15 @@ function HistoryRecord({
     </details>
   );
 }
-export function NativeHistory({ id }: { id: string }) {
+export function NativeHistory({
+  id,
+  opened,
+  onClose,
+}: {
+  id: string;
+  opened?: boolean;
+  onClose?: () => void;
+}) {
   const [open, setOpen] = useState(false),
     [query, setQuery] = useState(""),
     [error, setError] = useState("");
@@ -605,20 +613,31 @@ export function NativeHistory({ id }: { id: string }) {
       if (!request.signal.aborted) setError(errorMessage(e));
     }
   }
+  useEffect(() => {
+    if (opened) void search();
+  }, [opened, id]);
   return (
     <div className="native-history">
-      <button
-        type="button"
-        className="text-button"
-        onClick={() => {
-          setOpen(true);
-          void search();
-        }}
-      >
-        Native history
-      </button>
-      {open ? (
-        <Modal title="Native history" onClose={() => setOpen(false)}>
+      {opened === undefined ? (
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => {
+            setOpen(true);
+            void search();
+          }}
+        >
+          Native history
+        </button>
+      ) : null}
+      {(opened ?? open) ? (
+        <Modal
+          title="Native history"
+          onClose={() => {
+            setOpen(false);
+            onClose?.();
+          }}
+        >
           <form
             onSubmit={(e) => {
               e.preventDefault();

@@ -579,7 +579,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
     );
     await f.app.inject({
       method: "PATCH",
-      url: `/enterprise/api/projects/${p.id}`,
+      url: `/enterprise/api/projects/${p.id}/members/${f.member.id}`,
       headers: f.admin.headers,
       payload: { access: "read" },
     });
@@ -997,3 +997,65 @@ for (const administrative of [false, true]) {
     }
   });
 }
+
+test("same-host HTTPS deployments use independent host-only session cookies", async () => {
+  const f = await fixture();
+  try {
+    f.ctx.config.secureCookies = true;
+    f.ctx.config.publicOrigin = "https://portal.test:12443";
+    f.ctx.config.sessionCookieName = "wme_pr3_dev_session";
+    const originalCookie = `__Host-wme_session=${f.admin.session.token}`;
+    const login = await f.app.inject({
+      method: "POST",
+      url: "/enterprise/api/login",
+      headers: { origin: f.ctx.config.publicOrigin, cookie: originalCookie },
+      payload: { email: "admin@test.example", password },
+    });
+    assert.equal(login.statusCode, 200);
+    const header = String(login.headers["set-cookie"]);
+    assert.match(header, /^__Host-wme_pr3_dev_session=/);
+    assert.match(header, /; Secure/);
+    assert.match(header, /; Path=\//);
+    assert.doesNotMatch(header, /Domain=/i);
+    const devCookie = header.split(";")[0];
+    assert.equal(
+      (
+        await f.app.inject({
+          url: "/enterprise/api/session",
+          headers: { cookie: originalCookie },
+        })
+      ).json().user,
+      null,
+    );
+    assert.equal(
+      (
+        await f.app.inject({
+          url: "/enterprise/api/session",
+          headers: { cookie: `${originalCookie}; ${devCookie}` },
+        })
+      ).json().user.id,
+      f.admin.id,
+    );
+    const logout = await f.app.inject({
+      method: "POST",
+      url: "/enterprise/api/logout",
+      headers: {
+        origin: f.ctx.config.publicOrigin,
+        cookie: `${originalCookie}; ${devCookie}`,
+        "x-csrf-token": login.json().csrfToken,
+      },
+    });
+    assert.equal(logout.statusCode, 200);
+    assert.match(
+      String(logout.headers["set-cookie"]),
+      /^__Host-wme_pr3_dev_session=/,
+    );
+    assert.ok(
+      await f.db.get("SELECT id FROM sessions WHERE id=?", [
+        hashToken(f.admin.session.token),
+      ]),
+    );
+  } finally {
+    await f.close();
+  }
+});

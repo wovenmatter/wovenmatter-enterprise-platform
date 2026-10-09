@@ -68,8 +68,8 @@ export async function registerConversations(
       }>("SELECT org_id FROM projects WHERE id=?", [c.project_id]);
       return {
         items: await ctx.db.all(
-          "SELECT u.id,u.name,u.email FROM users u WHERE u.enabled=1 AND (u.role='owner' OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u.id AND m.org_id=? AND (m.role='admin' OR EXISTS(SELECT 1 FROM project_members p WHERE p.user_id=u.id AND p.project_id=?)))) ORDER BY u.name,u.email",
-          [project!.org_id, c.project_id],
+          "SELECT u.id,u.name,u.email FROM users u WHERE u.enabled=1 AND (u.role='owner' OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u.id AND m.org_id=? AND (m.role='admin' OR EXISTS(SELECT 1 FROM project_members p WHERE p.user_id=u.id AND p.project_id=? AND (?='read' OR p.access='write'))))) ORDER BY u.name,u.email",
+          [project!.org_id, c.project_id, c.mode],
         ),
       };
     },

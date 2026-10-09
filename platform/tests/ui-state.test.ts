@@ -8,6 +8,9 @@ import {
   mergeMessages,
   safeContentUrl,
   savePendingMessage,
+  loadConversationDraft,
+  saveConversationDraft,
+  settleConversationInput,
 } from "../apps/web/src/conversation-state.js";
 
 test("continuous stream events coalesce behind a slow read without aborting it", async () => {
@@ -114,5 +117,44 @@ test("untrusted Markdown blocks executable and scheme-relative destinations whil
   assert.equal(
     safeContentUrl("https://example.com/report"),
     "https://example.com/report",
+  );
+});
+
+test("an acknowledgement after navigation clears only its own draft and receipt", () => {
+  const records = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => records.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      records.set(k, v);
+    },
+    removeItem: (k: string) => {
+      records.delete(k);
+    },
+  };
+  const pending = {
+    id: "receipt-navigation-1",
+    content: "Admitted content",
+    kind: "message" as const,
+  };
+  savePendingMessage("pending", pending, storage);
+  saveConversationDraft("draft", pending.content, "message", storage);
+  settleConversationInput("pending", "draft", pending, storage);
+  assert.equal(loadConversationDraft("draft", storage), undefined);
+  assert.equal(loadPendingMessage("pending", storage), undefined);
+  savePendingMessage("pending", pending, storage);
+  saveConversationDraft("draft", "Newer unsent content", "comment", storage);
+  settleConversationInput("pending", "draft", pending, storage);
+  assert.deepEqual(loadConversationDraft("draft", storage), {
+    content: "Newer unsent content",
+    kind: "comment",
+  });
+  const newer = { ...pending, id: "receipt-navigation-2" };
+  savePendingMessage("pending", newer, storage);
+  saveConversationDraft("draft", pending.content, "message", storage);
+  settleConversationInput("pending", "draft", pending, storage);
+  assert.equal(loadPendingMessage("pending", storage)?.id, newer.id);
+  assert.equal(
+    loadConversationDraft("draft", storage)?.content,
+    pending.content,
   );
 });

@@ -254,8 +254,7 @@ export async function buildApp(
     assets: assetAgents,
     runtime: options.runtime ?? unavailableRuntime,
     files: {
-      resolveProjectMounts: (ctx, user, projectId, mode) =>
-        resolveProjectMounts(ctx, user, projectId, mode, true),
+      resolveProjectMounts,
       reconcileProjectFiles,
       captureProjectManifest,
     },

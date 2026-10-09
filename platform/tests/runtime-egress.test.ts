@@ -258,3 +258,21 @@ test("egress wrapper preserves durable attachment and asset release without lend
     "release",
   ]);
 });
+
+test("deployment cookie names retain a validated host-only prefix", () => {
+  assert.equal(loadConfig({}).sessionCookieName, "wme_session");
+  assert.equal(
+    loadConfig({ WME_SESSION_COOKIE_NAME: "wme_pr3_dev_session" })
+      .sessionCookieName,
+    "wme_pr3_dev_session",
+  );
+  for (const name of [
+    "",
+    "__Host-session",
+    "Cookie; Path=/",
+    "a".repeat(65),
+    "../cookie",
+    "wme=session",
+  ])
+    assert.throws(() => loadConfig({ WME_SESSION_COOKIE_NAME: name }));
+});

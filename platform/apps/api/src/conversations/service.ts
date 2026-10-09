@@ -332,8 +332,11 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     }
     return c;
   }
+  private async requireThreadAuthority(user: User, c: ConversationRow) {
+    if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!, c.mode);
+  }
   async list(user: User, projectId: string) {
-    await this.ctx.requireProject(user, projectId);
+    const project = await this.ctx.requireProject(user, projectId);
     const rows = await this.ctx.db.all<ConversationRow>(
       "SELECT c.* FROM conversations c WHERE c.project_id=? AND c.asset_id IS NULL AND c.deleted_at IS NULL AND (c.creator_id=? OR EXISTS(SELECT 1 FROM conversation_members m WHERE m.conversation_id=c.id AND m.user_id=?)) ORDER BY c.updated_at DESC",
       [projectId, user.id, user.id],
@@ -342,7 +345,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       items: await Promise.all(
         rows.map(async (c) => ({
           ...conversationView(c),
-          effectiveMode: c.mode,
+          effectiveMode: project.access === "read" ? "read" : c.mode,
           activeRun: await this.latestActive(c.id),
         })),
       ),
@@ -350,7 +353,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   async get(user: User, id: string) {
     const c = await this.requireConversation(user, id);
-    if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!);
+    const project = !c.asset_id
+      ? await this.ctx.requireProject(user, c.project_id!)
+      : undefined;
     const cursor = await this.ctx.db.get<{
       id: number;
     }>(
@@ -359,7 +364,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     );
     return {
       ...conversationView(c),
-      effectiveMode: c.mode,
+      effectiveMode: project?.access === "read" ? "read" : c.mode,
       lastEventId: cursor!.id,
       activeRun: await this.latestActive(id),
       members: (await this.members(user, id)).items,
@@ -383,8 +388,10 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     return catalog[0]!.id;
   }
   async create(user: User, projectId: string, input: Record<string, unknown>) {
-    const mode = selectedMode(input.mode),
-      project = await this.ctx.requireProject(user, projectId, mode);
+    const project = await this.ctx.requireProject(user, projectId);
+    const mode =
+      input.mode === undefined ? project.access : selectedMode(input.mode);
+    await this.ctx.requireProject(user, projectId, mode);
     const model =
         input.model === undefined
           ? await this.defaultModel(user, project.orgId)
@@ -463,7 +470,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "fixed_mode",
           "Thread access is fixed at creation. Create a new thread to use a different mode.",
         );
-      if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!);
+      await this.requireThreadAuthority(user, c);
       if (model)
         await this.dependencies.inference.validateSelection(
           c.org_id,
@@ -542,6 +549,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   async remove(user: User, id: string) {
     const c = await this.requireConversation(user, id, true);
+    await this.requireThreadAuthority(user, c);
     if (c.asset_id)
       throw new AppError(
         409,
@@ -598,7 +606,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "asset_conversation",
         "Asset conversations are limited to current asset editors.",
       );
-    await this.ctx.requireProject(candidate, c.project_id!);
+    await this.requireThreadAuthority(user, c);
+    await this.ctx.requireProject(candidate, c.project_id!, c.mode);
     await this.ctx.db.batch([
       {
         sql: "INSERT OR IGNORE INTO conversation_members(conversation_id,user_id,added_by,created_at) VALUES(?,?,?,?)",
@@ -674,6 +683,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       );
     const changed = await this.serial(id, async () => {
       const c = await this.requireConversation(user, id, true);
+      await this.requireThreadAuthority(user, c);
       if (c.harness !== "pi")
         throw new AppError(
           409,
@@ -873,6 +883,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           );
         return this.inputReceipt(existing.message_id, true);
       }
+      // Recover an exact existing receipt without admitting new authority.
+      await this.requireThreadAuthority(user, c);
       const current = await this.ctx.db.get<RunRow>(
         "SELECT * FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling') ORDER BY rowid LIMIT 1",
         [id],
@@ -1054,7 +1066,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         let delivery = "accepted",
           error: string | null = null;
         try {
-          await this.requireConversation(await this.user(input.author_id), id);
+          const author = await this.user(input.author_id);
+          const thread = await this.requireConversation(author, id);
+          await this.requireThreadAuthority(author, thread);
           const current = await this.ctx.db.get<RunRow>(
             "SELECT * FROM conversation_runs WHERE id=? AND status='running'",
             [runId],
@@ -1228,7 +1242,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         c.org_id !== run.org_id
       )
         return false;
-      if (!run.asset_id) await this.ctx.requireProject(user, run.project_id!);
+      if (!run.asset_id)
+        await this.ctx.requireProject(user, run.project_id!, run.mode);
       return true;
     } catch {
       return false;
@@ -1523,7 +1538,11 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       ? await this.dependencies.assets!.prepare(user, run)
       : undefined;
     if (!run.asset_id) {
-      const project = await this.ctx.requireProject(user, run.project_id!);
+      const project = await this.ctx.requireProject(
+        user,
+        run.project_id!,
+        run.mode,
+      );
       if (project.status !== "ready")
         throw new AppError(
           409,
@@ -1582,10 +1601,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       const pending = [];
       for (const candidate of candidates) {
         try {
-          await this.requireConversation(
-            await this.user(candidate.author_id),
+          const author = await this.user(candidate.author_id);
+          const thread = await this.requireConversation(
+            author,
             run.conversation_id,
           );
+          await this.requireThreadAuthority(author, thread);
           pending.push(candidate);
         } catch {
           await this.ctx.db.run(
@@ -1683,19 +1704,24 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       );
     }
     await this.serial(run.conversation_id, async () => {
-      await this.requireConversation(
-        await this.user(user.id),
+      const initiator = await this.user(user.id);
+      const currentThread = await this.requireConversation(
+        initiator,
         run.conversation_id,
       );
+      await this.requireThreadAuthority(initiator, currentThread);
       const authors = await this.ctx.db.all<{ author_id: string }>(
         "SELECT DISTINCT m.author_id FROM conversation_messages m JOIN conversation_inputs i ON i.message_id=m.id WHERE i.run_id=? AND i.delivery='pending' AND i.message_id IN (SELECT value FROM json_each(?)) AND m.author_id IS NOT NULL",
         [run.id, JSON.stringify(execution.initialMessages ?? [])],
       );
-      for (const author of authors)
-        await this.requireConversation(
-          await this.user(author.author_id),
+      for (const author of authors) {
+        const actor = await this.user(author.author_id);
+        const thread = await this.requireConversation(
+          actor,
           run.conversation_id,
         );
+        await this.requireThreadAuthority(actor, thread);
+      }
       await this.ctx.db.batch([
         ...authors.map((author) => ({
           sql: "INSERT INTO conversation_runtime_owners(conversation_id,user_id,generation,signature) VALUES(?,?,?,?) ON CONFLICT(conversation_id,user_id) DO UPDATE SET generation=excluded.generation,signature=excluded.signature",
@@ -2129,7 +2155,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     ]);
   }
   async cancel(user: User, id: string, runId?: string) {
-    await this.requireConversation(user, id);
+    const thread = await this.requireConversation(user, id);
+    await this.requireThreadAuthority(user, thread);
     if (this.dependencies.runtime.stopSession) {
       if (
         runId &&

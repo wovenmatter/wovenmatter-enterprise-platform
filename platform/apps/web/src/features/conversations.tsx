@@ -5,11 +5,19 @@ import {
   useConversationActivities,
 } from "./ConversationWork";
 import type { Activity } from "../activity-state";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowUp,
-  MessageSquare,
-  Plus,
+  Ellipsis,
+  LockKeyhole,
+  ShieldCheck,
   Settings,
   Square,
   Trash2,
@@ -25,8 +33,18 @@ import {
   type List,
   type Project,
   type User,
+  type Model,
+  type Run,
+  type Conversation,
 } from "../api";
 import { useWorkspace } from "../workspace";
+import { useSearchParams } from "react-router-dom";
+import {
+  workspaceChanged,
+  useWorkspaceChanges,
+  readWorkspaceValue,
+  writeWorkspaceValue,
+} from "../workspace-events";
 import { RichText } from "../components/RichText";
 import { sourcePathFromContentUrl } from "../source-preview";
 import {
@@ -35,6 +53,9 @@ import {
   loadPendingMessage,
   savePendingMessage,
   clearPendingMessage,
+  settleConversationInput,
+  loadConversationDraft,
+  saveConversationDraft,
 } from "../conversation-state";
 import {
   AsyncForm,
@@ -46,30 +67,7 @@ import {
   Modal,
   Status,
 } from "../components/ui";
-export type Model = {
-  id: string;
-  name: string;
-  provider: string;
-  thinkingLevels?: string[];
-};
-export type Conversation = {
-  id: string;
-  title: string;
-  mode: "read" | "write";
-  effectiveMode?: "read" | "write";
-  harness: string;
-  pi?: {
-    codeMode?: string;
-    subagentConcurrency?: number;
-    thinking?: string;
-    sdkGeneration?: string;
-  };
-  model: string;
-  createdBy: string;
-  lastEventId?: number;
-  activeRun?: Run | null;
-  members?: User[];
-};
+export type { Model, Conversation } from "../api";
 type Message = {
   id: string;
   requestId?: string;
@@ -92,17 +90,6 @@ type Message = {
     versionId?: string;
   }[];
 };
-type Run = {
-  id: string;
-  status: string;
-  error?: {
-    code: string;
-    message: string;
-  } | null;
-  createdAt: string;
-  startedAt?: string | null;
-  completedAt?: string | null;
-};
 type Messages = List<Message> & {
   hasMore: boolean;
   nextBefore: string | null;
@@ -114,71 +101,45 @@ const activeStatuses = new Set([
   "cancelling",
 ]);
 export function ConversationsPage({ project }: { project: Project }) {
-  const { org } = useWorkspace();
+  const { org, user } = useWorkspace();
   const list = useResource<List<Conversation>>(
     `/enterprise/api/projects/${project.id}/conversations`,
   );
   const models = useResource<List<Model>>(
     `/enterprise/api/organizations/${org.id}/inference/models`,
   );
-  const [selected, setSelected] = useState<string>();
-  const [creating, setCreating] = useState(false);
-  const [search, setSearch] = useState("");
+  useWorkspaceChanges(list.reload);
+  const [query, setQuery] = useSearchParams();
+  const requestedConversation = query.get("conversation") ?? undefined;
   const conversationId =
-    selected && list.data?.items.some((c) => c.id === selected)
-      ? selected
+    requestedConversation &&
+    list.data?.items.some((c) => c.id === requestedConversation)
+      ? requestedConversation
       : undefined;
+  const creating = query.get("new") === "1";
+  useEffect(() => {
+    if (requestedConversation) list.reload();
+  }, [requestedConversation, list.reload]);
+  const selectionKey = `wme:selected:${user.id}:${project.id}`;
+  useEffect(() => {
+    if (conversationId) writeWorkspaceValue(selectionKey, conversationId);
+  }, [conversationId, selectionKey]);
+  useEffect(() => {
+    if (requestedConversation || creating || !list.data) return;
+    const previous = readWorkspaceValue(selectionKey);
+    if (previous && list.data.items.some((c) => c.id === previous))
+      setQuery({ conversation: previous }, { replace: true });
+  }, [requestedConversation, creating, list.data, selectionKey, setQuery]);
+  function select(id?: string) {
+    setQuery(id ? { conversation: id } : {});
+  }
+  function closeCreate() {
+    const next = new URLSearchParams(query);
+    next.delete("new");
+    setQuery(next, { replace: true });
+  }
   return (
     <div className="conversation-layout">
-      <aside className="conversation-rail">
-        <button className="primary" onClick={() => setCreating(true)}>
-          <Plus size={17} />
-          New conversation
-        </button>
-        <label className="sr-only" htmlFor="conversation-search">
-          Search conversations
-        </label>
-        <input
-          id="conversation-search"
-          type="search"
-          placeholder="Search conversations…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <ErrorNotice message={list.error} />
-        {list.loading && !list.data ? (
-          <Loading />
-        ) : !list.data?.items.length ? (
-          <p className="rail-empty">No conversations yet.</p>
-        ) : (
-          <div className="conversation-list">
-            {list.data.items
-              .filter((c) =>
-                c.title.toLowerCase().includes(search.toLowerCase()),
-              )
-              .map((c) => (
-                <button
-                  key={c.id}
-                  className={`conversation-link ${conversationId === c.id ? "selected" : ""}`}
-                  onClick={() => setSelected(c.id)}
-                >
-                  <MessageSquare size={16} />
-                  <span>
-                    {c.title}
-                    <small>
-                      {c.mode === "write" && c.effectiveMode === "read"
-                        ? "Read-only for you"
-                        : c.mode === "write"
-                          ? "Full access"
-                          : "Read-only"}
-                      {c.activeRun ? " · Working" : ""}
-                    </small>
-                  </span>
-                </button>
-              ))}
-          </div>
-        )}
-      </aside>
       <div className="conversation-main">
         {conversationId ? (
           <Thread
@@ -186,17 +147,32 @@ export function ConversationsPage({ project }: { project: Project }) {
             id={conversationId}
             project={project}
             models={models.data?.items ?? []}
-            refresh={list.reload}
+            refresh={workspaceChanged}
             onDeleted={() => {
-              setSelected(undefined);
-              list.reload();
+              writeWorkspaceValue(selectionKey, "");
+              select();
+              workspaceChanged();
             }}
           />
+        ) : requestedConversation ? (
+          (!list.data || list.loading) && !list.error ? (
+            <Loading />
+          ) : (
+            <ErrorNotice
+              message={
+                list.error ||
+                "This conversation is unavailable in this project."
+              }
+            />
+          )
         ) : (
           <Empty
-            title="Start a conversation"
+            title={project.name}
             action={
-              <button className="primary" onClick={() => setCreating(true)}>
+              <button
+                className="primary"
+                onClick={() => setQuery({ new: "1" })}
+              >
                 New conversation
               </button>
             }
@@ -204,21 +180,20 @@ export function ConversationsPage({ project }: { project: Project }) {
             Ask a question, analyze your files, or work through ideas.
           </Empty>
         )}
+        {!conversationId ? <ErrorNotice message={list.error} /> : null}
       </div>
       {creating ? (
-        <Modal title="New conversation" onClose={() => setCreating(false)}>
+        <Modal title="New conversation" compact onClose={closeCreate}>
           <ConversationForm
             project={project}
-            modelsError={models.error}
-            onCancel={() => setCreating(false)}
+            onCancel={closeCreate}
             onSave={async (body) => {
               const c = await send<Conversation>(
                 `/enterprise/api/projects/${project.id}/conversations`,
                 body,
               );
-              setSelected(c.id);
-              list.reload();
-              setCreating(false);
+              select(c.id);
+              workspaceChanged();
             }}
           />
         </Modal>
@@ -373,7 +348,11 @@ export function ConversationForm({
           label="Session permissions"
           hint="Access is fixed for this session."
         >
-          <select name="mode" defaultValue="read" autoFocus>
+          <select
+            name="mode"
+            defaultValue={project?.access ?? "read"}
+            autoFocus
+          >
             <option value="read">Read-only</option>
             {project?.access === "write" ? (
               <option value="write">Full access</option>
@@ -564,6 +543,7 @@ export function Thread({
   assetSaved.current = asset?.onSaved;
   const detail = useResource<Conversation>(
     `/enterprise/api/conversations/${id}`,
+    10000,
   );
   const activity = useConversationActivities(id);
   const [loadingRuns, setLoadingRuns] = useState<Set<string>>(new Set());
@@ -579,10 +559,43 @@ export function Thread({
   const [restored] = useState(() => loadPendingMessage(pendingKey));
   const [before, setBefore] = useState<string | null>(null);
   const [olderLoaded, setOlderLoaded] = useState(false);
-  const [draft, setDraft] = useState(restored?.content ?? "");
-  const [kind, setKind] = useState<"message" | "comment">(
-    restored?.kind ?? "message",
+  const draftKey = `wme:draft:${user.id}:${id}`;
+  const [savedDraft] = useState(() => loadConversationDraft(draftKey));
+  const [draft, setDraft] = useState(
+    restored?.content ?? savedDraft?.content ?? "",
   );
+  const [kind, setKind] = useState<"message" | "comment">(
+    restored?.kind ?? savedDraft?.kind ?? "message",
+  );
+  useEffect(() => {
+    saveConversationDraft(draftKey, draft, kind);
+  }, [draftKey, draft, kind]);
+  const inputElement = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const input = inputElement.current;
+    if (input) {
+      input.style.height = "auto";
+      input.style.height = `${Math.min(168, Math.max(60, input.scrollHeight))}px`;
+    }
+  }, [draft]);
+  const [nativeOpen, setNativeOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!menu.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [menuOpen]);
   const [sending, setSending] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
   const [uncertain, setUncertain] = useState(Boolean(restored));
@@ -613,7 +626,7 @@ export function Thread({
     )
       return;
     request.current = undefined;
-    clearPendingMessage(pendingKey);
+    settleConversationInput(pendingKey, draftKey, pending);
     setUncertain(false);
     setDraft((current) => (current === pending.content ? "" : current));
     setError("");
@@ -656,6 +669,20 @@ export function Thread({
   const active =
     runs.data?.items.filter((r) => activeStatuses.has(r.status)) ?? [];
   const creator = !!asset || detail.data?.createdBy === user.id;
+  const canAct =
+    !!detail.data &&
+    (!project ||
+      detail.data.mode === "read" ||
+      (project.access === "write" && detail.data.effectiveMode !== "read"));
+  async function stop() {
+    try {
+      await send(`/enterprise/api/conversations/${id}/cancel`, {});
+      runs.reload();
+      setMenuOpen(false);
+    } catch (e) {
+      setError(errorMessage(e));
+    }
+  }
   useEffect(() => {
     if (detail.data && initialCursor === undefined)
       setInitialCursor(detail.data.lastEventId ?? 0);
@@ -814,7 +841,13 @@ export function Thread({
     };
   }, [id]);
   async function submit() {
-    if (sending || modelSaving || (!draft.trim() && !request.current)) return;
+    if (
+      !canAct ||
+      sending ||
+      modelSaving ||
+      (!draft.trim() && !request.current)
+    )
+      return;
     if (kind === "message" && !active.length && !detail.data?.model) {
       setError("Select a model before sending a message.");
       return;
@@ -835,7 +868,7 @@ export function Thread({
         kind: pending.kind ?? "message",
       });
       request.current = undefined;
-      clearPendingMessage(pendingKey);
+      settleConversationInput(pendingKey, draftKey, pending);
       setUncertain(false);
       setDraft("");
       messages.reload();
@@ -880,51 +913,84 @@ export function Thread({
   return (
     <>
       <header className="thread-header">
-        <div>
-          <h2>{detail.data?.title ?? "Conversation"}</h2>
-          <small>
-            {detail.data?.mode === "write" &&
-            detail.data?.effectiveMode === "read"
-              ? "Read-only for you"
-              : detail.data?.mode === "write"
-                ? "Full access"
-                : "Read-only"}{" "}
-            · Pi Durable · {detail.data?.model || "No model selected"}
-          </small>
-        </div>
-        <div className="row-actions">
+        <h2 title={detail.data?.title}>
+          {detail.data?.title ?? "Conversation"}
+        </h2>
+        <div className="thread-header-actions">
           {!asset ? (
             <button
               className="icon-button"
               aria-label="Conversation members"
               onClick={() => setMembers(true)}
             >
-              <Users size={18} />
+              <Users size={17} />
             </button>
           ) : null}
-          {creator ? (
-            <>
-              <button
-                className="icon-button"
-                aria-label="Conversation settings"
-                disabled={active.length > 0}
-                onClick={() => setEditing(true)}
-              >
-                <Settings size={18} />
-              </button>
-              {!asset ? (
+          <div className="thread-menu" ref={menu}>
+            <button
+              className="icon-button"
+              aria-label="Conversation actions"
+              aria-expanded={menuOpen}
+              aria-haspopup="true"
+              onClick={() => setMenuOpen(!menuOpen)}
+            >
+              <Ellipsis size={19} />
+            </button>
+            {menuOpen ? (
+              <div className="thread-menu-items">
                 <button
-                  className="icon-button danger"
-                  aria-label="Delete conversation"
-                  onClick={() => setDeleting(true)}
+                  onClick={() => {
+                    setNativeOpen(true);
+                    setMenuOpen(false);
+                  }}
                 >
-                  <Trash2 size={17} />
+                  Native history
                 </button>
-              ) : null}
-            </>
-          ) : null}
+                <button
+                  disabled={!canAct}
+                  title="Stop this thread’s current work and background processes. Other threads keep running."
+                  onClick={() => void stop()}
+                >
+                  <Square size={14} />
+                  {active.length ? "Stop" : "Stop background work"}
+                </button>
+                {creator ? (
+                  <>
+                    <button
+                      disabled={!canAct || active.length > 0}
+                      onClick={() => {
+                        setEditing(true);
+                        setMenuOpen(false);
+                      }}
+                    >
+                      <Settings size={15} />
+                      Conversation settings
+                    </button>
+                    {!asset ? (
+                      <button
+                        className="danger"
+                        disabled={!canAct}
+                        onClick={() => {
+                          setDeleting(true);
+                          setMenuOpen(false);
+                        }}
+                      >
+                        <Trash2 size={15} />
+                        Delete conversation
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
+      <NativeHistory
+        id={id}
+        opened={nativeOpen}
+        onClose={() => setNativeOpen(false)}
+      />
       <ErrorNotice
         message={
           detail.error ||
@@ -1143,7 +1209,6 @@ export function Thread({
           items={activity.items}
           activeRunIds={new Set(active.map((run) => run.id))}
         />
-        <NativeHistory id={id} />
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -1154,12 +1219,14 @@ export function Thread({
             Message your agent
           </label>
           <textarea
+            ref={inputElement}
             id="message"
-            placeholder="Message your agent…"
+            rows={3}
+            placeholder={canAct ? "Message your agent…" : "Read-only for you"}
             value={draft}
             maxLength={100000}
             readOnly={uncertain}
-            disabled={sending}
+            disabled={sending || !canAct}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (
@@ -1173,12 +1240,11 @@ export function Thread({
             }}
           />
           <div className="composer-controls">
-            <label>
-              Send as{" "}
+            <label className="message-kind">
               <select
                 aria-label="Message mode"
                 value={kind}
-                disabled={sending || uncertain}
+                disabled={sending || uncertain || !canAct}
                 onChange={(e) =>
                   setKind(e.target.value as "message" | "comment")
                 }
@@ -1193,7 +1259,7 @@ export function Thread({
               disabled={
                 active.length > 0 || sending || uncertain || modelSaving
               }
-              canEdit={creator}
+              canEdit={creator && canAct}
               onSaving={setModelSaving}
               onSaved={() => {
                 detail.reload();
@@ -1201,36 +1267,38 @@ export function Thread({
               }}
               onError={setError}
             />
-            <span className="connection-state">
-              {kind === "comment"
-                ? "Saved for later agent context. "
-                : active.length
-                  ? "Messages steer the active run. "
-                  : ""}
-              {active.length
-                ? `${active.length} ${active.length === 1 ? "run" : "runs"} in progress`
-                : streamState}
+            <span
+              className="session-mode"
+              title={
+                detail.data?.mode === "write" && !canAct
+                  ? "Your project access is read-only. Create a read-only conversation to use the agent."
+                  : "Access is fixed for this conversation."
+              }
+            >
+              {detail.data?.mode === "write" && canAct ? (
+                <ShieldCheck size={14} />
+              ) : (
+                <LockKeyhole size={14} />
+              )}
+              <span>
+                {detail.data?.mode === "write" && canAct
+                  ? "Full access"
+                  : "Read-only"}
+              </span>
             </span>
-            <div className="row-actions">
-              <button
-                type="button"
-                className="secondary"
-                title="Stop this thread's current work and background processes. Other threads keep running."
-                onClick={async () => {
-                  try {
-                    await send(
-                      `/enterprise/api/conversations/${id}/cancel`,
-                      {},
-                    );
-                    runs.reload();
-                  } catch (e) {
-                    setError(errorMessage(e));
-                  }
-                }}
-              >
-                <Square size={14} />
-                {active.length ? "Stop" : "Stop background work"}
-              </button>
+            <div className="composer-send-actions">
+              {active.length ? (
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Stop"
+                  title="Stop current work and background processes"
+                  disabled={!canAct}
+                  onClick={() => void stop()}
+                >
+                  <Square size={15} />
+                </button>
+              ) : null}
               <button
                 type="submit"
                 className="send-button"
@@ -1242,7 +1310,10 @@ export function Thread({
                       : "Send message"
                 }
                 disabled={
-                  sending || modelSaving || (!draft.trim() && !uncertain)
+                  !canAct ||
+                  sending ||
+                  modelSaving ||
+                  (!draft.trim() && !uncertain)
                 }
               >
                 {uncertain ? "Retry" : <ArrowUp size={20} />}
@@ -1250,6 +1321,19 @@ export function Thread({
             </div>
           </div>
         </form>
+        <div className="composer-status" role="status">
+          {!canAct && detail.data
+            ? "Read-only for you. Start a read-only conversation to use the agent."
+            : uncertain
+              ? "Delivery unconfirmed"
+              : active.length
+                ? kind === "comment"
+                  ? "Comment saved for later agent context"
+                  : "Working · messages steer the active run"
+                : kind === "comment"
+                  ? "Comments are saved for later agent context"
+                  : streamState}
+        </div>
       </div>
       {editing && detail.data ? (
         <Modal title="Conversation settings" onClose={() => setEditing(false)}>
@@ -1267,7 +1351,11 @@ export function Thread({
         </Modal>
       ) : null}
       {members ? (
-        <ThreadMembers id={id} onClose={() => setMembers(false)} />
+        <ThreadMembers
+          id={id}
+          canAdd={canAct}
+          onClose={() => setMembers(false)}
+        />
       ) : null}
       {deleting ? (
         <Confirm
@@ -1286,7 +1374,15 @@ export function Thread({
     </>
   );
 }
-function ThreadMembers({ id, onClose }: { id: string; onClose: () => void }) {
+function ThreadMembers({
+  id,
+  canAdd,
+  onClose,
+}: {
+  id: string;
+  canAdd: boolean;
+  onClose: () => void;
+}) {
   const members = useResource<
     List<
       User & {
@@ -1295,14 +1391,14 @@ function ThreadMembers({ id, onClose }: { id: string; onClose: () => void }) {
     >
   >(`/enterprise/api/conversations/${id}/members`);
   const people = useResource<List<User>>(
-    `/enterprise/api/conversations/${id}/eligible-members`,
+    canAdd ? `/enterprise/api/conversations/${id}/eligible-members` : null,
   );
   return (
     <Modal title="Conversation members" onClose={onClose}>
       <p className="muted">
-        Conversations are private until you add people. Everyone here can read
-        and send messages. Everyone inherits this thread’s access mode,
-        including full access to direct edits when enabled.
+        Conversations are private until you add people. Participants must retain
+        the project access required by this conversation. Read-only project
+        access never grants full-access agent authority.
       </p>
       <ErrorNotice message={members.error || people.error} />
       {members.data?.items.map((u) => (

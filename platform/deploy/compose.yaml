@@ -16,6 +16,7 @@ services:
       NODE_ENV: production
       WME_HOST: 0.0.0.0
       WME_PORT: 4100
+      WME_SESSION_COOKIE_NAME: ${WME_SESSION_COOKIE_NAME:-wme_session}
       WME_PUBLIC_ORIGIN: ${WME_PUBLIC_ORIGIN:?Set HTTPS portal origin}
       WME_STATE_DIR: ${WME_CANDIDATE_ROOT:?}/state
       WME_INTERNAL_API_ORIGIN: http://api:4100
