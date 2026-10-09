@@ -612,6 +612,25 @@ export async function readActivities(
     nextBefore: !incremental && page.length ? page[0].ordinal : null,
   };
 }
+export async function readRunActivities(
+  db: Database,
+  conversationId: string,
+  runId: string,
+  after = 0,
+) {
+  const rows = await db.all<Row>(
+    "SELECT " +
+      summaryColumns +
+      " FROM conversation_activity WHERE conversation_id=? AND run_id=? AND ordinal>? ORDER BY ordinal LIMIT 201",
+    [conversationId, runId, after],
+  );
+  const page = rows.slice(0, 200);
+  return {
+    items: page.map(summary),
+    hasMore: rows.length > 200,
+    nextAfter: page.at(-1)?.ordinal ?? after,
+  };
+}
 export async function readActivityDetail(
   db: Database,
   conversationId: string,

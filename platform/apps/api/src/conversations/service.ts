@@ -4,6 +4,7 @@ import {
   captureNativeBatch,
   settleActivity,
   readActivities,
+  readRunActivities,
   readActivityDetail,
   nativeArchivePage,
   nativeArchiveRecord,
@@ -391,9 +392,10 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       harness = fixedHarness(input.harness),
       title = field(input.title ?? "New conversation", "Title", 200);
     const options = piOptions(input.pi);
-    if (this.dependencies.runtime.sdkCatalog)
+    // Provisioning projects have no placed runtime yet; pin on their first usable turn.
+    if (project.status === "ready" && this.dependencies.runtime.sdkCatalog)
       options.sdkGeneration = (
-        await this.dependencies.runtime.sdkCatalog(projectId)
+        await this.runtimeSDKCatalog(projectId)
       ).defaultGeneration;
     const connectionId =
       input.connectionId === undefined
@@ -438,88 +440,105 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     });
     return this.get(user, id);
   }
-  async update(user: User, id: string, input: Record<string, unknown>) {
-    const c = await this.requireConversation(user, id, true);
-    const title =
-        input.title === undefined ? c.title : field(input.title, "Title", 200),
-      mode = input.mode === undefined ? c.mode : selectedMode(input.mode),
-      model = input.model === undefined ? c.model : optionalModel(input.model),
-      harness = fixedHarness(input.harness),
-      connectionId =
-        input.connectionId === undefined
-          ? c.connection_id
-          : input.connectionId === null
-            ? null
-            : field(input.connectionId, "Connection", 100);
-    if (mode !== c.mode)
-      throw new AppError(
-        409,
-        "fixed_mode",
-        "Thread access is fixed at creation. Create a new thread to use a different mode.",
-      );
-    if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!);
-    if (model)
-      await this.dependencies.inference.validateSelection(
-        c.org_id,
-        model,
-        harness,
-        connectionId ?? undefined,
-      );
-    if (await this.latestActive(id))
-      throw new AppError(
-        409,
-        "conversation_busy",
-        "Wait for queued work to finish before changing conversation settings.",
-      );
-    const previousPi = piOptions(JSON.parse(c.pi_options ?? "{}"), true);
-    const supplied =
-      input.pi === undefined
-        ? undefined
-        : (input.pi as Record<string, unknown>);
-    const clearThinking = supplied?.thinking === null || model !== c.model;
-    const updates =
-      supplied?.thinking === null
-        ? { ...supplied, thinking: undefined }
-        : supplied;
-    const nextPi = { ...previousPi, ...piOptions(updates) };
-    if (clearThinking) delete nextPi.thinking;
-    if (nextPi.thinking && this.dependencies.inference.models) {
-      const selected = (
-        await this.dependencies.inference.models(c.org_id)
-      ).find((m) => m.id === model);
-      if (
-        selected?.thinkingLevels &&
-        !selected.thinkingLevels.includes(nextPi.thinking)
-      )
+  update(user: User, id: string, input: Record<string, unknown>) {
+    return this.serial(id, async () => {
+      const c = await this.requireConversation(user, id, true);
+      const title =
+          input.title === undefined
+            ? c.title
+            : field(input.title, "Title", 200),
+        mode = input.mode === undefined ? c.mode : selectedMode(input.mode),
+        model =
+          input.model === undefined ? c.model : optionalModel(input.model),
+        harness = fixedHarness(input.harness),
+        connectionId =
+          input.connectionId === undefined
+            ? c.connection_id
+            : input.connectionId === null
+              ? null
+              : field(input.connectionId, "Connection", 100);
+      if (mode !== c.mode)
         throw new AppError(
-          400,
-          "invalid_pi_options",
-          "This thinking level is unavailable for the selected model.",
+          409,
+          "fixed_mode",
+          "Thread access is fixed at creation. Create a new thread to use a different mode.",
         );
-    }
-    const options = JSON.stringify(nextPi);
-    const timestamp = now();
-    const changed = await this.ctx.db.run(
-      "UPDATE conversations SET title=?,mode=?,harness=?,model=?,connection_id=?,updated_at=?,pi_options=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling'))",
-      [title, mode, harness, model, connectionId, timestamp, options, id, id],
-    );
-    if (!changed.changes)
-      throw new AppError(
-        409,
-        "conversation_busy",
-        "Wait for queued work to finish before changing conversation settings.",
+      if (!c.asset_id) await this.ctx.requireProject(user, c.project_id!);
+      if (model)
+        await this.dependencies.inference.validateSelection(
+          c.org_id,
+          model,
+          harness,
+          connectionId ?? undefined,
+        );
+      if (await this.latestActive(id))
+        throw new AppError(
+          409,
+          "conversation_busy",
+          "Wait for queued work to finish before changing conversation settings.",
+        );
+      const previousPi = piOptions(JSON.parse(c.pi_options ?? "{}"), true);
+      const supplied =
+        input.pi === undefined
+          ? undefined
+          : (input.pi as Record<string, unknown>);
+      const clearThinking = supplied?.thinking === null || model !== c.model;
+      const updates =
+        supplied?.thinking === null
+          ? { ...supplied, thinking: undefined }
+          : supplied;
+      const nextPi = { ...previousPi, ...piOptions(updates) };
+      if (clearThinking) delete nextPi.thinking;
+      if (nextPi.thinking && this.dependencies.inference.models) {
+        const selected = (
+          await this.dependencies.inference.models(c.org_id)
+        ).find((m) => m.id === model);
+        if (
+          selected?.thinkingLevels &&
+          !selected.thinkingLevels.includes(nextPi.thinking)
+        )
+          throw new AppError(
+            400,
+            "invalid_pi_options",
+            "This thinking level is unavailable for the selected model.",
+          );
+      }
+      const options = JSON.stringify(nextPi);
+      const timestamp = now();
+      const changed = await this.ctx.db.run(
+        "UPDATE conversations SET title=?,mode=?,harness=?,model=?,connection_id=?,updated_at=?,pi_options=? WHERE id=? AND pi_options=? AND runtime_generation=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling'))",
+        [
+          title,
+          mode,
+          harness,
+          model,
+          connectionId,
+          timestamp,
+          options,
+          id,
+          c.pi_options ?? "{}",
+          c.runtime_generation ?? 0,
+          id,
+        ],
       );
-    await this.ctx.db.run(
-      "INSERT INTO conversation_events(conversation_id,run_id,type,data,created_at) VALUES(?,?,?,?,?)",
-      [
-        id,
-        null,
-        "settings.changed",
-        JSON.stringify({ title, model, harness }),
-        timestamp,
-      ],
-    );
-    return this.get(user, id);
+      if (!changed.changes)
+        throw new AppError(
+          409,
+          "conversation_busy",
+          "Wait for queued work to finish before changing conversation settings.",
+        );
+      await this.ctx.db.run(
+        "INSERT INTO conversation_events(conversation_id,run_id,type,data,created_at) VALUES(?,?,?,?,?)",
+        [
+          id,
+          null,
+          "settings.changed",
+          JSON.stringify({ title, model, harness }),
+          timestamp,
+        ],
+      );
+      return this.get(user, id);
+    });
   }
   async remove(user: User, id: string) {
     const c = await this.requireConversation(user, id, true);
@@ -602,6 +621,23 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       "Thread participants cannot be removed individually. Project or organization access can be revoked by an administrator.",
     );
   }
+  private async runtimeSDKCatalog(id: string) {
+    if (!this.dependencies.runtime.sdkCatalog)
+      throw new AppError(
+        503,
+        "sdk_catalog_unavailable",
+        "SDK version inventory is unavailable on this host.",
+      );
+    try {
+      return await this.dependencies.runtime.sdkCatalog(id);
+    } catch {
+      throw new AppError(
+        503,
+        "sdk_catalog_unavailable",
+        "SDK version inventory is temporarily unavailable. Try again when the project runtime is ready.",
+      );
+    }
+  }
   async sdkCatalog(user: User, id: string) {
     const c = await this.requireConversation(user, id);
     if (!this.dependencies.runtime.sdkCatalog)
@@ -610,7 +646,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "sdk_catalog_unavailable",
         "SDK version inventory is unavailable on this host.",
       );
-    const catalog = await this.dependencies.runtime.sdkCatalog(workspaceId(c));
+    const catalog = await this.runtimeSDKCatalog(workspaceId(c));
     const selected = piOptions(
       JSON.parse(c.pi_options ?? "{}"),
       true,
@@ -669,13 +705,14 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       try {
         await this.ctx.db.batch([
           {
-            sql: "UPDATE conversations SET pi_options=?,runtime_generation=?,updated_at=? WHERE id=? AND runtime_generation=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling')) AND NOT EXISTS(SELECT 1 FROM conversation_runtime_stops WHERE conversation_id=?)",
+            sql: "UPDATE conversations SET pi_options=?,runtime_generation=?,updated_at=? WHERE id=? AND runtime_generation=? AND pi_options=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling')) AND NOT EXISTS(SELECT 1 FROM conversation_runtime_stops WHERE conversation_id=?)",
             params: [
               JSON.stringify({ ...options, sdkGeneration: generation }),
               next,
               now(),
               id,
               c.runtime_generation ?? 0,
+              c.pi_options ?? "{}",
               id,
               id,
             ],
@@ -702,9 +739,18 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     if (changed) await this.completeThreadStop(id, changed, "sdk_updated");
     return this.sdkCatalog(user, id);
   }
-  async activities(user: User, id: string, after?: string, before?: number) {
+  async activities(
+    user: User,
+    id: string,
+    after?: string,
+    before?: number,
+    runId?: string,
+    runAfter = 0,
+  ) {
     await this.requireConversation(user, id);
-    return readActivities(this.ctx.db, id, after, before);
+    return runId
+      ? readRunActivities(this.ctx.db, id, runId, runAfter)
+      : readActivities(this.ctx.db, id, after, before);
   }
   async activityDetail(
     user: User,
@@ -748,6 +794,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     const rows = await this.ctx.db.all<MessageRow>(
       `SELECT m.id,m.conversation_id,m.run_id,m.role,m.author_id,m.citations,m.created_at,m.kind,
       ${compact ? "CASE WHEN m.role='assistant' AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN substr(m.content,1,500) ELSE m.content END" : "m.content"} content,
+      ${compact ? "CASE WHEN m.role='assistant' AND length(m.content)>500 AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN 1 ELSE 0 END" : "0"} content_truncated,
+      ${compact ? "(SELECT COUNT(*) FROM conversation_activity a WHERE a.run_id=m.run_id AND a.deleted=0)" : "NULL"} activity_count,
       u.name author_name,i.request_id,i.delivery,i.sequence,i.error FROM conversation_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? ${before ? "AND m.rowid<(SELECT rowid FROM conversation_messages WHERE id=? AND conversation_id=?)" : ""} ORDER BY m.rowid DESC LIMIT 201`,
       before ? [id, before, id] : [id],
     );
@@ -759,6 +807,15 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       hasMore,
       nextBefore: hasMore ? rows[0]?.id : null,
     };
+  }
+  async message(user: User, id: string, messageId: string) {
+    await this.requireConversation(user, id);
+    const row = await this.ctx.db.get<MessageRow>(
+      "SELECT m.*,u.name author_name,i.request_id,i.delivery,i.sequence,i.error FROM conversation_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? AND m.id=?",
+      [id, messageId],
+    );
+    if (!row) throw new AppError(404, "not_found", "Message not found.");
+    return messageView(row);
   }
   admit(
     user: User,
@@ -1197,6 +1254,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         const run = await this.ctx.db.get<RunRow>(
           `UPDATE conversation_runs SET status='dispatching',started_at=?
       WHERE id=(SELECT q.id FROM conversation_runs q WHERE q.status='queued'
+        AND NOT EXISTS(SELECT 1 FROM conversation_runtime_stops s WHERE s.conversation_id=q.conversation_id)
         AND NOT EXISTS(SELECT 1 FROM conversation_runs a WHERE a.conversation_id=q.conversation_id AND a.status IN ${active})
         AND (SELECT COUNT(*) FROM conversation_runs a WHERE a.org_id=q.org_id AND a.status IN ${active})<?
         ORDER BY q.rowid LIMIT 1)
@@ -1598,22 +1656,40 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "access_revoked",
         "Access was revoked before execution.",
       );
-    // Once dispatch begins its outcome may be unknown. Only a native receipt
-    // establishes delivery; preparation failures leave inputs undelivered.
-    await this.ctx.db.batch(
-      (execution.initialMessages ?? []).map((id) => ({
-        sql: "UPDATE conversation_inputs SET delivery='uncertain',error='Native delivery has not been acknowledged.' WHERE message_id=? AND delivery='pending'",
-        params: [id],
-      })),
+    const piRoute = await this.dependencies.inference.resolvePiModel?.(
+      run.org_id,
+      run.model,
     );
+    const configuredPi = piOptions(
+      JSON.parse(conversation.pi_options ?? "{}"),
+      true,
+    );
+    if (
+      configuredPi &&
+      !configuredPi.sdkGeneration &&
+      this.dependencies.runtime.sdkCatalog
+    ) {
+      configuredPi.sdkGeneration = (
+        await this.runtimeSDKCatalog(workspaceId(run))
+      ).defaultGeneration;
+      await this.ctx.db.run(
+        "UPDATE conversations SET pi_options=? WHERE id=? AND pi_options=? AND runtime_generation=?",
+        [
+          JSON.stringify(configuredPi),
+          run.conversation_id,
+          conversation.pi_options ?? "{}",
+          generation,
+        ],
+      );
+    }
     await this.serial(run.conversation_id, async () => {
       await this.requireConversation(
         await this.user(user.id),
         run.conversation_id,
       );
       const authors = await this.ctx.db.all<{ author_id: string }>(
-        "SELECT DISTINCT m.author_id FROM conversation_messages m JOIN conversation_inputs i ON i.message_id=m.id WHERE i.run_id=? AND i.delivery='uncertain' AND m.author_id IS NOT NULL",
-        [run.id],
+        "SELECT DISTINCT m.author_id FROM conversation_messages m JOIN conversation_inputs i ON i.message_id=m.id WHERE i.run_id=? AND i.delivery='pending' AND i.message_id IN (SELECT value FROM json_each(?)) AND m.author_id IS NOT NULL",
+        [run.id, JSON.stringify(execution.initialMessages ?? [])],
       );
       for (const author of authors)
         await this.requireConversation(
@@ -1644,33 +1720,17 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             execution.signature!,
           ],
         },
+        // Atomically record dispatch intent only after all preparation and fences pass.
+        {
+          sql: "UPDATE conversation_runs SET runtime_initial=? WHERE id=?",
+          params: [JSON.stringify(execution.initialMessages ?? []), run.id],
+        },
+        ...(execution.initialMessages ?? []).map((id) => ({
+          sql: "UPDATE conversation_inputs SET delivery='uncertain',error='Native delivery has not been acknowledged.' WHERE message_id=? AND delivery='pending'",
+          params: [id],
+        })),
       ]);
     });
-    await this.ctx.db.run(
-      "UPDATE conversation_runs SET runtime_initial=? WHERE id=?",
-      [JSON.stringify(execution.initialMessages ?? []), run.id],
-    );
-    const piRoute = await this.dependencies.inference.resolvePiModel?.(
-      run.org_id,
-      run.model,
-    );
-    const configuredPi = piOptions(
-      JSON.parse(conversation.pi_options ?? "{}"),
-      true,
-    );
-    if (
-      configuredPi &&
-      !configuredPi.sdkGeneration &&
-      this.dependencies.runtime.sdkCatalog
-    ) {
-      configuredPi.sdkGeneration = (
-        await this.dependencies.runtime.sdkCatalog(workspaceId(run))
-      ).defaultGeneration;
-      await this.ctx.db.run(
-        "UPDATE conversations SET pi_options=? WHERE id=?",
-        [JSON.stringify(configuredPi), run.conversation_id],
-      );
-    }
     execution.dispatched = true;
     execution.cleanupNeeded = true;
     await this.dependencies.runtime.execute(
@@ -2344,6 +2404,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         params: [id, stop.generation],
       },
     ]);
+    this.kick();
   }
   private async retireThread(id: string, reason: string) {
     const stop = await this.serial(id, () => this.fenceThread(id));

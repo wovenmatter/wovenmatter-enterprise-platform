@@ -43,6 +43,8 @@ export interface RunRow {
   completed_at: string | null;
 }
 export interface MessageRow {
+  content_truncated?: number;
+  activity_count?: number;
   id: string;
   request_id?: string;
   conversation_id: string;
@@ -94,7 +96,6 @@ export interface ConversationDependencies {
         import("../../../../packages/runtime/src/types.js").RuntimeRequest["pi"]
       >
     >;
-    defaultHarness(orgId: string, model: string): Promise<Harness>;
     issueGateway(input: {
       orgId: string;
       projectId: string;
@@ -173,6 +174,8 @@ export function messageView(m: MessageRow) {
     authorId: m.author_id,
     authorName: m.author_name ?? null,
     content: m.content,
+    contentTruncated: Boolean(m.content_truncated),
+    activityCount: m.activity_count ?? undefined,
     citations: JSON.parse(m.citations),
     createdAt: m.created_at,
   };

@@ -268,7 +268,6 @@ export async function buildApp(
         }),
       revokeGateway: (id) => inference.revokeGateway(id),
       resolvePiModel: (orgId, model) => inference.resolvePiModel(orgId, model),
-      defaultHarness: (orgId, model) => inference.defaultHarness(orgId, model),
       validateSelection: (...args) => inference.validateSelection(...args),
       models: (orgId) => inference.models(orgId),
     },

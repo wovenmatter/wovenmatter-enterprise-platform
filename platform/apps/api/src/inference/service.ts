@@ -1382,18 +1382,6 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
       accountAffinity: "proxy-session-affinity",
     };
   }
-  async defaultHarness(orgId: string, model: string): Promise<"pi"> {
-    const selected = (await this.models(orgId)).find(
-      (item) => item.id === model,
-    );
-    if (!selected)
-      throw new InferenceError(
-        400,
-        "model_unavailable",
-        "This model is not available in the organization inference pool.",
-      );
-    return "pi";
-  }
   async validateSelection(
     orgId: string,
     model: string,

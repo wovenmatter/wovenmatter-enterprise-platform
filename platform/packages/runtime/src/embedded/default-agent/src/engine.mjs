@@ -27,7 +27,7 @@ export class DefaultAgentEngine {
     for (const provider of this.enterpriseProviders) this.runtime.registerProvider(provider.id, provider.definition);
     registerLocalServers(this.runtime, this.config.customServers);
     const xaiModels = this.runtime.getModels().filter(model => model.provider === 'xai');
-    if (xaiModels.length) this.runtime.registerProvider('xai-api', {
+    if (xaiModels.length && !this.enterpriseProviderIds.has('xai-api')) this.runtime.registerProvider('xai-api', {
       name: 'xAI API key', baseUrl: 'https://api.x.ai/v1', api: 'openai-responses', authHeader: true,
       models: xaiModels.map(({ provider, api, baseUrl, ...model }) => model),
     });

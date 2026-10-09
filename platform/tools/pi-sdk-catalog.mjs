@@ -246,8 +246,7 @@ async function readCatalog(catalog) {
   try {
     return await readJSON(join(catalog, "catalog.json"));
   } catch (error) {
-    if (error.code === "ENOENT")
-      return { schemaVersion: 1, defaultGeneration: null, generations: [] };
+    if (error.code === "ENOENT") return { schemaVersion: 1, generations: [] };
     throw error;
   }
 }
@@ -340,9 +339,11 @@ async function build() {
     ].sort((a, b) => a.id.localeCompare(b.id));
     await writeCatalog(catalog, {
       schemaVersion: 1,
-      defaultGeneration: has("--default")
-        ? id
-        : (current.defaultGeneration ?? id),
+      ...(has("--default")
+        ? { defaultGeneration: id }
+        : current.defaultGeneration
+          ? { defaultGeneration: current.defaultGeneration }
+          : {}),
       generations: generationsList,
     });
     console.log(JSON.stringify({ ok: true, item }, null, 2));

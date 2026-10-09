@@ -23,6 +23,10 @@ is reimplemented in SQLite, HTTP and React.
 | Task progress | Only native execution checklists feed the badge above the composer. Proposals remain transcript content. Checklist replace, merge and clear operations retain their native meaning. |
 | Large output and reconnect | Compact summaries refresh independently of full detail. Full text is paged lazily; framed replacements become visible atomically. Scrolling up or opening work pauses follow; Latest reply resumes it. |
 | Native history | Original native captures and presentation events are retained independently of the UI projection. Authorized users can search, open individual captures and export NDJSON. |
+| xAI provider registration | The upstream built-in xAI API registration is skipped when an Enterprise provider already owns `xai-api`, preserving the admitted model and scoped gateway. The native A→B→A reopen fixture uses a built-in xAI ID and verifies its exact outbound model. |
+| Current session scope | Enterprise is actively testing with Pi Durable only. There is no legacy harness or pre-Durable session import, native-ID cutover, upgrade retry machinery, or backwards-compatibility regression suite. |
+| SDK selection and preparation | Ready projects select the reviewed default at conversation creation. Provisioning projects select it on their first usable turn; catalog failures are retryable and never count as delivered input. Egress preserves catalog access, settings writes serialize with explicit SDK adoption, and new turns wait for an unfinished namespace stop. |
+| Retained history and reconnect | Compact replies explicitly identify shortened content and incomplete activity windows. Authorized complete-reply reads and 200-row per-run activity pages recover replies and work outside the loaded window without fetching the whole archive. SSE drains full persisted pages immediately with authorization rechecks and the existing backpressure bound. |
 
 Pi Durable is the only harness for project and asset conversations. Creation
 asks for access only, and model selection lives beside the composer so it can
@@ -96,8 +100,9 @@ reported explicitly rather than joining text from different snapshots. Full
 response Copy fetches the complete selected revision.
 
 Every summary, detail, archive and export request repeats current conversation
-authorization. Export rechecks it between pages. The API grants no direct filesystem access or access to another session's archive. Existing
-transcript records continue to render through the legacy read path.
+authorization. Export rechecks it between pages. The API grants no direct
+filesystem access or access to another session's archive. Current Pi Durable
+message snapshots remain available when their activity is outside the loaded window.
 
 Run the repository checks, rendered browser suite and dependency audit.
 Native runtime fixtures must use disposable workspaces and synthetic provider

@@ -2493,3 +2493,97 @@ test("native streaming retains chronological work, task progress, full copy and 
   ).toHaveValue("fixture-sdk-two");
   expect(errors).toEqual([]);
 });
+
+test("older replies outside the activity window expose complete text and their paged work", async ({
+  page,
+}) => {
+  test.skip(
+    Boolean(process.env.WME_E2E_AGENT_IMAGE),
+    "Uses the disposable API history fixture; native protocols have their own acceptance suite.",
+  );
+  const f = await ensureFixture(page);
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(
+    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
+  );
+  await page
+    .getByRole("button", { name: "New conversation", exact: true })
+    .first()
+    .click();
+  await page
+    .getByRole("button", { name: "Start session", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Conversation settings", exact: true })
+    .click();
+  await page
+    .getByLabel("Title", { exact: true })
+    .fill("Retained reply recovery");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page
+    .getByLabel("Conversation model", { exact: true })
+    .selectOption("gpt-test-fixture");
+  await page
+    .getByLabel("Message your agent")
+    .fill("[retained-reply] Generate an older complete reply.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".native-final")).toContainText(
+    "END OF OLDER REPLY",
+  );
+  await page
+    .getByLabel("Message your agent")
+    .fill("[history-page-after] Generate later work.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(
+    page
+      .locator(".native-final")
+      .filter({ hasText: "Later activity is complete" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Stop background work", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  // Reopen the newest conversation through the project list.
+  await page
+    .getByRole("button", { name: /Retained reply recovery/ })
+    .first()
+    .click();
+  const older = page.locator("article.message-assistant").first();
+  await expect(
+    older.getByRole("button", { name: "Show complete reply", exact: true }),
+  ).toBeVisible();
+  await older
+    .getByRole("button", { name: "Show complete reply", exact: true })
+    .click();
+  await expect(older).toContainText("END OF OLDER REPLY");
+  await older
+    .getByRole("button", { name: "Copy response", exact: true })
+    .click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "Retained older response. ".repeat(100) + "END OF OLDER REPLY",
+  );
+  const complete = page
+    .locator("article.message-assistant")
+    .filter({ hasText: "END OF OLDER REPLY" })
+    .first();
+  await complete
+    .getByRole("button", { name: "Load complete activity", exact: true })
+    .click();
+  await expect(complete.locator(".native-final")).toContainText(
+    "END OF OLDER REPLY",
+  );
+  await expect(
+    complete.getByRole("button", {
+      name: "Load complete activity",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page.screenshot({
+    path: evidence + "/retained-reply-recovery.png",
+    fullPage: true,
+  });
+  expect(errors).toEqual([]);
+});

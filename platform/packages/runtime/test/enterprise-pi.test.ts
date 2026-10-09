@@ -1040,7 +1040,7 @@ test("runPi keeps one durable session through model A to B to A across worker re
     {
       ...request(secondGateway.baseUrl),
       runId: "10000000-0000-4000-8000-000000000002",
-      model: "fixture-model-b",
+      model: "grok-4",
       prompt: "Continue on model B",
       resumeId: sessionId,
       pi: { provider: "xai", routeIdentity: "route-b" },
@@ -1059,6 +1059,7 @@ test("runPi keeps one durable session through model A to B to A across worker re
     sessionId,
   );
   assert.match(JSON.stringify(secondGateway.requests), /Alpha from model A/);
+  assert.match(JSON.stringify(secondGateway.requests), /"model":"grok-4"/);
   const thirdGateway = gateway(t, [
     textStream("Gamma from model A", "resp_a2"),
   ]);

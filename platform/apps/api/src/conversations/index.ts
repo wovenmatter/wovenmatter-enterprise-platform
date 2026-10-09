@@ -108,6 +108,15 @@ export async function registerConversations(
       );
     },
   );
+  app.get(
+    "/enterprise/api/conversations/:conversationId/messages/:messageId",
+    async (r) =>
+      service.message(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+        params(r).messageId!,
+      ),
+  );
   app.post(
     "/enterprise/api/conversations/:conversationId/messages",
     async (r, reply) =>
@@ -150,6 +159,25 @@ export async function registerConversations(
     async (r) => {
       const q = r.query as Record<string, unknown>;
       if (
+        q.runId !== undefined &&
+        (typeof q.runId !== "string" ||
+          !q.runId ||
+          q.runId.length > 100 ||
+          q.after !== undefined ||
+          q.before !== undefined)
+      )
+        throw new AppError(
+          400,
+          "invalid_cursor",
+          "Choose a run or the conversation history cursor.",
+        );
+      if (q.runAfter !== undefined && q.runId === undefined)
+        throw new AppError(
+          400,
+          "invalid_cursor",
+          "Choose a run for this activity cursor.",
+        );
+      if (
         q.after !== undefined &&
         (typeof q.after !== "string" ||
           !/^\d{1,16}:\d{1,16}$/.test(q.after) ||
@@ -165,6 +193,8 @@ export async function registerConversations(
         params(r).conversationId!,
         q.after as string | undefined,
         natural(q.before),
+        q.runId as string | undefined,
+        natural(q.runAfter, 0),
       );
     },
   );
@@ -320,21 +350,24 @@ async function streamEvents(
     if (closed || busy) return;
     busy = true;
     try {
-      // Re-read session and authorization while connected; no cached membership survives revocation.
-      const freshUser = await ctx.requireUser(request);
-      const events = await service.events(freshUser, id, after);
-      if (closed) return;
-      for (const event of events) {
-        if (closed) break;
-        if (reply.raw.writableLength > 1_048_576) {
-          finish();
-          break;
+      let events;
+      do {
+        // Re-read session and authorization while connected; no cached membership survives revocation.
+        const freshUser = await ctx.requireUser(request);
+        events = await service.events(freshUser, id, after);
+        if (closed) return;
+        for (const event of events) {
+          if (closed) break;
+          if (reply.raw.writableLength > 1_048_576) {
+            finish();
+            break;
+          }
+          reply.raw.write(
+            `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
+          );
+          after = event.id;
         }
-        reply.raw.write(
-          `id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`,
-        );
-        after = event.id;
-      }
+      } while (!closed && events.length === 100);
       if (!closed && ++heartbeats % 15 === 0)
         reply.raw.write(": heartbeat\n\n");
     } catch {

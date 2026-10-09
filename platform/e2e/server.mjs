@@ -63,6 +63,42 @@ const runtime = native?.runtime ?? {
   async execute(request, emit, signal) {
     await emit({ type: "started" });
     await emit({ type: "input_accepted" });
+    if (
+      request.prompt.includes("[history-page-after]") ||
+      request.prompt.includes("[retained-reply]")
+    ) {
+      await emit({
+        type: "native_session",
+        sessionId: "fixture-retained-" + request.conversationId,
+      });
+      const later = request.prompt.includes("[history-page-after]");
+      if (later)
+        for (let index = 0; index < 210; index++) {
+          await emit({
+            type: "native_update",
+            update: {
+              sessionUpdate: "tool_call",
+              toolCallId: "fixture-history-" + index,
+              title: "Later retained tool " + index,
+              kind: "read",
+              status: "completed",
+            },
+          });
+        }
+      const text = later
+        ? "Later activity is complete"
+        : "Retained older response. ".repeat(100) + "END OF OLDER REPLY";
+      await emit({
+        type: "native_update",
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      });
+      await emit({ type: "assistant_snapshot", text });
+      await emit({ type: "completed" });
+      return;
+    }
     if (request.prompt.includes("[native-stream]")) {
       const native = (update) => emit({ type: "native_update", update });
       const message = async (text) => {
@@ -375,12 +411,17 @@ system.inference.proxy = new ProxyClient(
   },
 );
 system.inference.models = async () => [
-  { id: "gpt-test-fixture", name: "Synthetic test model", provider: "openai", thinkingLevels: ["off", "low", "high"] },
-  ...["pi"].map((h) => ({
-    id: "synthetic-asset-" + h,
-    name: "Asset fixture " + h,
-    provider: h === "claude" ? "anthropic" : h === "grok" ? "xai" : "openai",
-  })),
+  {
+    id: "gpt-test-fixture",
+    name: "Synthetic test model",
+    provider: "openai",
+    thinkingLevels: ["off", "low", "high"],
+  },
+  {
+    id: "synthetic-asset-pi",
+    name: "Asset fixture pi",
+    provider: "openai",
+  },
 ];
 system.inference.validateSelection = async () => {};
 

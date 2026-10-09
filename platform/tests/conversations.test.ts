@@ -413,9 +413,6 @@ async function fixture(
       async reconcileProjectFiles() {},
     },
     inference: {
-      async defaultHarness() {
-        return "pi" as const;
-      },
       async validateSelection() {},
       async models() {
         return [
@@ -1262,7 +1259,7 @@ test("new conversations are Pi Durable, can start without a model, and keep harn
   );
   await assert.rejects(
     f.service.create(f.users[0], f.project, {
-      title: "Legacy",
+      title: "Unsupported harness",
       mode: "read",
       model: "gpt-test",
       harness: "codex",
@@ -2155,4 +2152,311 @@ test("permission-only launch resolves user defaults and thinking controls respec
       .thinking,
     undefined,
   );
+});
+
+test("SDK activation and settings saves serialize without restoring a stale generation", async (t) => {
+  const catalog = {
+    bundledGeneration: "one",
+    defaultGeneration: "one",
+    items: ["one", "two"].map((id) => ({
+      id,
+      label: id,
+      piVersion: "1.1.0",
+      status: "approved" as const,
+      integrity: { algorithm: "sha256" as const, manifest: "0".repeat(64) },
+    })),
+  };
+  const f = await fixture(
+    t,
+    100_000,
+    {},
+    { sdkCatalog: async () => catalog, async stopSession() {} },
+  );
+  const c = await f.create();
+  let entered!: () => void, release!: () => void;
+  const seen = new Promise<void>((r) => {
+    entered = r;
+  });
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  f.deps.inference.validateSelection = async () => {
+    entered();
+    await gate;
+  };
+  const saving = f.service.update(f.users[0], c.id, {
+    title: "Saved concurrently",
+    pi: { codeMode: "off" },
+  });
+  await seen;
+  const applying = f.service.activateSDK(f.users[0], c.id, "two");
+  try {
+    // The SDK selection must wait behind the settings read/modify/write.
+    await pause(20);
+    assert.equal(
+      (await f.service.get(f.users[0], c.id)).pi.sdkGeneration,
+      "one",
+    );
+  } finally {
+    release();
+  }
+  await Promise.all([saving, applying]);
+  const current = await f.service.get(f.users[0], c.id);
+  assert.equal(current.pi.sdkGeneration, "two");
+  assert.equal(current.pi.codeMode, "off");
+  assert.equal(current.title, "Saved concurrently");
+});
+
+test("new work waits behind an unfinished SDK stop and dispatches after the fence clears", async (t) => {
+  const catalog = {
+    bundledGeneration: "one",
+    defaultGeneration: "one",
+    items: ["one", "two"].map((id) => ({
+      id,
+      label: id,
+      piVersion: "1.1.0",
+      status: "approved" as const,
+      integrity: { algorithm: "sha256" as const, manifest: "0".repeat(64) },
+    })),
+  };
+  let entered!: () => void, release!: () => void;
+  const seen = new Promise<void>((r) => {
+    entered = r;
+  });
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const f = await fixture(
+    t,
+    100_000,
+    {},
+    {
+      sdkCatalog: async () => catalog,
+      async stopSession() {
+        entered();
+        await gate;
+      },
+    },
+  );
+  const c = await f.create();
+  await f.service.addMember(f.users[0], c.id, f.users[1].id);
+  const applying = f.service.activateSDK(f.users[0], c.id, "two");
+  await seen;
+  const next = await f.service.admit(f.users[1], c.id, {
+    content: "Collaborator work during SDK handoff",
+    requestId: randomUUID(),
+  });
+  try {
+    await until(() => !(f.service as any).scheduling);
+    assert.equal(f.runtime.requests.length, 0);
+    assert.equal(
+      (await f.service.runs(f.users[0], c.id)).items[0].status,
+      "queued",
+    );
+    assert.equal(
+      (await f.service.messages(f.users[0], c.id)).items.find(
+        (m) => m.id === next.message.id,
+      )!.delivery,
+      "pending",
+    );
+  } finally {
+    release();
+  }
+  await applying;
+  await until(() => f.runtime.pending.has(next.run!.id));
+  assert.equal(f.runtime.requests[0].pi?.sdkGeneration, "two");
+  await f.runtime.complete(next.run!.id);
+});
+
+test("Pi route and SDK preparation failures retain confirmed non-delivery", async (t) => {
+  const f = await fixture(t);
+  for (const failure of ["route", "catalog"]) {
+    const c = await f.create();
+    (f.deps.inference as any).resolvePiModel =
+      failure === "route"
+        ? async () => {
+            throw new AppError(
+              503,
+              "route_unavailable",
+              "Synthetic route unavailable",
+            );
+          }
+        : undefined;
+    f.runtime.sdkCatalog =
+      failure === "catalog"
+        ? async () => {
+            throw new Error("Synthetic catalog unavailable");
+          }
+        : undefined;
+    const receipt = await f.service.admit(f.users[0], c.id, {
+      content: "Undispatched preparation " + failure,
+      requestId: randomUUID(),
+    });
+    await until(
+      async () =>
+        (await f.service.runs(f.users[0], c.id)).items[0].status === "failed",
+    );
+    assert.equal(
+      (await f.service.messages(f.users[0], c.id)).items.find(
+        (m) => m.id === receipt.message.id,
+      )!.delivery,
+      "rejected",
+    );
+    assert.equal(f.runtime.requests.length, 0);
+    f.runtime.sdkCatalog = undefined;
+  }
+});
+
+test("provisioning conversation defers SDK pinning and unavailable inventory reports a retryable error", async (t) => {
+  const f = await fixture(t);
+  let reads = 0;
+  f.runtime.sdkCatalog = async () => {
+    reads++;
+    throw new Error("Synthetic unavailable placement");
+  };
+  await f.db.run("UPDATE projects SET status='provisioning' WHERE id=?", [
+    f.project,
+  ]);
+  const c = await f.create();
+  assert.equal(c.pi.sdkGeneration, undefined);
+  assert.equal(reads, 0);
+  await f.db.run("UPDATE projects SET status='ready' WHERE id=?", [f.project]);
+  await assert.rejects(f.create(), {
+    statusCode: 503,
+    code: "sdk_catalog_unavailable",
+  });
+  f.runtime.sdkCatalog = async () => ({
+    bundledGeneration: "ready-sdk",
+    defaultGeneration: "ready-sdk",
+    items: [],
+  });
+  const receipt = await f.service.admit(f.users[0], c.id, {
+    content: "First usable turn",
+    requestId: randomUUID(),
+  });
+  await until(() => f.runtime.pending.has(receipt.run!.id));
+  assert.equal(f.runtime.requests[0].pi?.sdkGeneration, "ready-sdk");
+  await f.runtime.complete(receipt.run!.id);
+});
+
+test("compact replies expose complete authorized content outside the activity window", async (t) => {
+  const f = await fixture(t),
+    c = await f.create();
+  const receipt = await f.service.admit(f.users[0], c.id, {
+    content: "Retained reply",
+    requestId: randomUUID(),
+  });
+  await until(() => f.runtime.pending.has(receipt.run!.id));
+  const text = "Complete older reply 🌿 ".repeat(100) + "END OF RETAINED REPLY";
+  await f.runtime.event(receipt.run!.id, {
+    type: "native_update",
+    update: {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text },
+    },
+  });
+  await f.runtime.event(receipt.run!.id, { type: "assistant_snapshot", text });
+  for (let index = 0; index < 210; index++) {
+    await f.runtime.event(receipt.run!.id, {
+      type: "native_update",
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "older-page-" + index,
+        title: "Retained tool " + index,
+        status: "completed",
+        kind: "read",
+      },
+    });
+  }
+  await f.runtime.complete(receipt.run!.id);
+  const compact = (
+    await f.service.messages(f.users[0], c.id, undefined, true)
+  ).items.find((m) => m.role === "assistant")!;
+  assert.equal(compact.contentTruncated, true);
+  assert.equal(compact.activityCount, 211);
+  assert.ok(compact.content.length <= 1000);
+  const app = Fastify();
+  let current = f.users[0];
+  f.ctx.requireUser = async () => current;
+  await registerConversations(app, f.ctx, f.service);
+  t.after(() => app.close());
+  const endpoint = `/enterprise/api/conversations/${c.id}/messages/${compact.id}`;
+  assert.equal((await app.inject({ url: endpoint })).json().content, text);
+  const other = await f.create();
+  assert.equal(
+    (
+      await app.inject({
+        url: `/enterprise/api/conversations/${other.id}/messages/${compact.id}`,
+      })
+    ).statusCode,
+    404,
+  );
+  const activityBase = `/enterprise/api/conversations/${c.id}/activities?runId=${receipt.run!.id}`;
+  const firstPage = (await app.inject({ url: activityBase })).json();
+  assert.equal(firstPage.items.length, 200);
+  assert.equal(firstPage.hasMore, true);
+  const nextPage = (
+    await app.inject({ url: activityBase + "&runAfter=" + firstPage.nextAfter })
+  ).json();
+  assert.equal(nextPage.items.length, 11);
+  assert.equal(nextPage.hasMore, false);
+  assert.equal(
+    new Set([...firstPage.items, ...nextPage.items].map((item) => item.ordinal))
+      .size,
+    211,
+  );
+  assert.equal(
+    (await app.inject({ url: activityBase + "&runAfter=-1" })).statusCode,
+    400,
+  );
+  current = f.users[1];
+  assert.equal((await app.inject({ url: endpoint })).statusCode, 404);
+  assert.equal((await app.inject({ url: activityBase })).statusCode, 404);
+  await f.service.addMember(f.users[0], c.id, current.id);
+  assert.equal(
+    (await app.inject({ url: endpoint })).json().contentTruncated,
+    false,
+  );
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [current.id]);
+  assert.equal((await app.inject({ url: endpoint })).statusCode, 404);
+});
+
+test("SSE drains full persisted pages without one second of delay per page", async (t) => {
+  const f = await fixture(t),
+    c = await f.create();
+  await f.db.batch(
+    Array.from({ length: 350 }, (_, index) => ({
+      sql: "INSERT INTO conversation_events(conversation_id,type,data,created_at) VALUES(?,?,?,?)",
+      params: [
+        c.id,
+        index === 349 ? "run.completed" : "activity.changed",
+        JSON.stringify({ index }),
+        new Date().toISOString(),
+      ],
+    })),
+  );
+  const app = Fastify();
+  f.ctx.requireUser = async () => f.users[0];
+  await registerConversations(app, f.ctx, f.service);
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  const address = app.server.address();
+  assert.ok(address && typeof address === "object");
+  const response = await fetch(
+    `http://127.0.0.1:${address.port}/enterprise/api/conversations/${c.id}/events?after=0`,
+    { signal: AbortSignal.timeout(2000) },
+  );
+  const reader = response.body!.getReader();
+  let text = "";
+  try {
+    while (!text.includes("event: run.completed")) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      text += new TextDecoder().decode(chunk.value);
+    }
+    assert.equal((text.match(/event:/g) ?? []).length, 350);
+    assert.match(text, /"index":349/);
+  } finally {
+    await reader.cancel();
+    await app.close();
+  }
 });

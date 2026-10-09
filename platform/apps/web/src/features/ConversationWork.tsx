@@ -82,7 +82,26 @@ export function useConversationActivities(id: string) {
     setBefore(page.nextBefore);
     setHasOlder(page.hasMore);
   }, [id, before]);
-  return { items, error, reload, loadOlder, hasOlder };
+  const loadRun = useCallback(
+    async (runId: string) => {
+      let after = 0;
+      for (;;) {
+        const page = await api<{
+          items: Activity[];
+          hasMore: boolean;
+          nextAfter: number;
+        }>(
+          `/enterprise/api/conversations/${id}/activities?runId=${encodeURIComponent(runId)}&runAfter=${after}`,
+        );
+        if (activeId.current !== id) return;
+        setItems((previous) => mergeActivities(previous, page.items));
+        if (!page.hasMore) return;
+        after = page.nextAfter;
+      }
+    },
+    [id],
+  );
+  return { items, error, reload, loadOlder, loadRun, hasOlder };
 }
 type Detail = {
   stale: boolean;

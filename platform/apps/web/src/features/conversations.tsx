@@ -77,6 +77,8 @@ type Message = {
   authorId: string;
   authorName: string;
   content: string;
+  contentTruncated?: boolean;
+  activityCount?: number;
   runId: string;
   createdAt: string;
   kind?: "message" | "comment";
@@ -485,6 +487,63 @@ function ModelControls({
     </div>
   );
 }
+function RetainedReply({ id, message }: { id: string; message: Message }) {
+  const [complete, setComplete] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const truncated = message.contentTruncated && complete === undefined;
+  async function load() {
+    setLoading(true);
+    setError("");
+    try {
+      const reply = await api<Message>(
+        `/enterprise/api/conversations/${id}/messages/${message.id}`,
+      );
+      setComplete(reply.content);
+    } catch (e) {
+      setError(errorMessage(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+  return (
+    <>
+      <RichText>{complete ?? message.content}</RichText>
+      {truncated ? (
+        <button
+          type="button"
+          className="text-button"
+          disabled={loading}
+          onClick={() => void load()}
+        >
+          {loading ? "Loading reply…" : "Show complete reply"}
+        </button>
+      ) : (
+        <div className="response-actions">
+          <button
+            type="button"
+            className="text-button"
+            aria-label="Copy response"
+            onClick={() => {
+              void navigator.clipboard
+                .writeText(complete ?? message.content)
+                .then(() => setCopied(true))
+                .catch((e) => setError(errorMessage(e)));
+            }}
+          >
+            {copied ? "Copied" : "Copy response"}
+          </button>
+        </div>
+      )}
+      {error ? (
+        <small className="danger" role="alert">
+          {error}
+        </small>
+      ) : null}
+    </>
+  );
+}
 export function Thread({
   id,
   project,
@@ -507,6 +566,7 @@ export function Thread({
     `/enterprise/api/conversations/${id}`,
   );
   const activity = useConversationActivities(id);
+  const [loadingRuns, setLoadingRuns] = useState<Set<string>>(new Set());
   const messages = useResource<Messages>(
     `/enterprise/api/conversations/${id}/messages?compact=1`,
   );
@@ -927,25 +987,33 @@ export function Thread({
               <div className="message-content">
                 {m.role === "assistant" ? (
                   activityByRun.has(m.runId) ? (
-                    <ConversationRunWork
-                      id={id}
-                      items={activityByRun.get(m.runId)!}
-                      status={
-                        runs.data?.items.find((run) => run.id === m.runId)
-                          ?.status
-                      }
-                      startedAt={
-                        runs.data?.items.find((run) => run.id === m.runId)
-                          ?.startedAt
-                      }
-                      completedAt={
-                        runs.data?.items.find((run) => run.id === m.runId)
-                          ?.completedAt
-                      }
-                      onInspect={inspectWork}
-                    />
+                    <>
+                      <ConversationRunWork
+                        id={id}
+                        items={activityByRun.get(m.runId)!}
+                        status={
+                          runs.data?.items.find((run) => run.id === m.runId)
+                            ?.status
+                        }
+                        startedAt={
+                          runs.data?.items.find((run) => run.id === m.runId)
+                            ?.startedAt
+                        }
+                        completedAt={
+                          runs.data?.items.find((run) => run.id === m.runId)
+                            ?.completedAt
+                        }
+                        onInspect={inspectWork}
+                      />
+                      {m.contentTruncated &&
+                      !activityByRun
+                        .get(m.runId)!
+                        .some((item) => item.kind === "final") ? (
+                        <RetainedReply id={id} message={m} />
+                      ) : null}
+                    </>
                   ) : m.content ? (
-                    <RichText>{m.content}</RichText>
+                    <RetainedReply id={id} message={m} />
                   ) : (
                     <span className="muted">
                       {emptyAssistantLabel(
@@ -958,6 +1026,38 @@ export function Thread({
                   m.content
                 )}
               </div>
+              {m.role === "assistant" &&
+              (m.activityCount ?? 0) >
+                (activityByRun.get(m.runId)?.length ?? 0) ? (
+                <div>
+                  <small>Earlier work for this reply is available.</small>{" "}
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={loadingRuns.has(m.runId)}
+                    onClick={() => {
+                      inspectWork();
+                      setLoadingRuns((previous) =>
+                        new Set(previous).add(m.runId),
+                      );
+                      void activity
+                        .loadRun(m.runId)
+                        .catch((e) => setError(errorMessage(e)))
+                        .finally(() => {
+                          setLoadingRuns((previous) => {
+                            const next = new Set(previous);
+                            next.delete(m.runId);
+                            return next;
+                          });
+                        });
+                    }}
+                  >
+                    {loadingRuns.has(m.runId)
+                      ? "Loading activity…"
+                      : "Load complete activity"}
+                  </button>
+                </div>
+              ) : null}
               {m.kind === "comment" ? (
                 <small>Comment</small>
               ) : m.delivery && m.delivery !== "accepted" ? (

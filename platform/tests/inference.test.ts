@@ -481,11 +481,6 @@ test("gateway exposes no management endpoint and rejects anonymous requests", as
 test("model selection verifies the actual catalog and rejects non-Pi harnesses", async () => {
   const f = await fixture();
   try {
-    assert.equal(await f.service.defaultHarness(f.orgId, "gpt-example"), "pi");
-    assert.equal(
-      await f.service.defaultHarness(f.orgId, "claude-example"),
-      "pi",
-    );
     assert.deepEqual(await f.service.resolvePiModel(f.orgId, "gpt-example"), {
       model: "gpt-example",
       provider: "openai",
