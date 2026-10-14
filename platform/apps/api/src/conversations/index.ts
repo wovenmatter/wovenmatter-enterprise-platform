@@ -1,3 +1,8 @@
+import {
+  listFolders,
+  createFolder,
+  updateFolder,
+} from "../projects/workspaces.js";
 import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { AppError, type AppContext } from "../context.js";
@@ -19,12 +24,142 @@ export async function registerConversations(
   ctx: AppContext,
   service: ConversationService,
 ) {
+  app.get("/enterprise/api/projects/:projectId/folders", async (r) =>
+    listFolders(ctx, await ctx.requireUser(r), params(r).projectId!),
+  );
+  app.post("/enterprise/api/projects/:projectId/folders", async (r, reply) =>
+    reply
+      .code(201)
+      .send(
+        await createFolder(
+          ctx,
+          await ctx.requireUser(r),
+          params(r).projectId!,
+          body(r),
+        ),
+      ),
+  );
+  app.patch(
+    "/enterprise/api/projects/:projectId/folders/:folderId",
+    async (r) =>
+      updateFolder(
+        ctx,
+        await ctx.requireUser(r),
+        params(r).projectId!,
+        params(r).folderId!,
+        body(r),
+      ),
+  );
+  app.delete(
+    "/enterprise/api/projects/:projectId/folders/:folderId",
+    async (r) =>
+      service.removeFolder(
+        await ctx.requireUser(r),
+        params(r).projectId!,
+        params(r).folderId!,
+        (r.query as Record<string, unknown>).deleteDirectory === "1",
+      ),
+  );
+  app.post("/enterprise/api/conversations/:conversationId/restore", async (r) =>
+    service.restore(await ctx.requireUser(r), params(r).conversationId!),
+  );
+  app.patch(
+    "/enterprise/api/conversations/:conversationId/organization",
+    async (r) =>
+      service.organize(
+        await ctx.requireUser(r),
+        params(r).conversationId!,
+        body(r),
+      ),
+  );
+  app.get(
+    "/enterprise/api/conversations/:conversationId/export",
+    async (r, reply) => {
+      const user = await ctx.requireUser(r),
+        id = params(r).conversationId!,
+        c = await service.requireConversation(user, id);
+      const full = (r.query as Record<string, unknown>).full === "1";
+      const tables = full
+        ? [
+            "conversation_messages",
+            "conversation_runs",
+            "conversation_events",
+            "conversation_activity",
+            "conversation_native_records",
+            "conversation_activity_content",
+            "conversation_activity_snapshots",
+            "conversation_inputs",
+            "conversation_run_sources",
+          ]
+        : ["conversation_messages"];
+      const scope = (table: string) =>
+        [
+          "conversation_activity_content",
+          "conversation_activity_snapshots",
+          "conversation_run_sources",
+        ].includes(table)
+          ? "run_id IN (SELECT id FROM conversation_runs WHERE conversation_id=?)"
+          : "conversation_id=?";
+      const cutoffs = await Promise.all(
+        tables.map(
+          async (table) =>
+            (await ctx.db.get<{ n: number }>(
+              `SELECT COALESCE(MAX(rowid),0) n FROM ${table} WHERE ${scope(table)}`,
+              [id],
+            ))!.n,
+        ),
+      );
+      async function* document() {
+        yield '{"conversation":' +
+          JSON.stringify({
+            id: c.id,
+            title: c.title,
+            workingDirectory: c.working_directory,
+          }) +
+          ",";
+        for (let index = 0; index < tables.length; index++) {
+          const table = tables[index]!;
+          yield JSON.stringify(table.replace("conversation_", "")) + ":[";
+          let cursor = 0,
+            first = true;
+          while (cursor < cutoffs[index]!) {
+            await service.requireConversation(user, id);
+            const rows = await ctx.db.all<Record<string, unknown>>(
+              `SELECT rowid AS export_cursor,* FROM ${table} WHERE ${scope(table)} AND rowid>? AND rowid<=? ORDER BY rowid LIMIT 25`,
+              [id, cursor, cutoffs[index]!],
+            );
+            if (!rows.length) break;
+            for (const row of rows) {
+              cursor = Number(row.export_cursor);
+              delete row.export_cursor;
+              yield (first ? "" : ",") + JSON.stringify(row);
+              first = false;
+            }
+          }
+          yield "]" + (index < tables.length - 1 ? "," : "");
+        }
+        yield "}";
+      }
+      reply
+        .header("content-type", "application/json; charset=utf-8")
+        .header(
+          "content-disposition",
+          `attachment; filename="conversation-${id}.json"`,
+        )
+        .header("cache-control", "no-store");
+      return reply.send(Readable.from(document()));
+    },
+  );
   const streams = new Set<() => void>();
   app.addHook("preClose", async () => {
     for (const close of streams) close();
   });
   app.get("/enterprise/api/projects/:projectId/conversations", async (r) =>
-    service.list(await ctx.requireUser(r), params(r).projectId!),
+    service.list(
+      await ctx.requireUser(r),
+      params(r).projectId!,
+      (r.query as Record<string, unknown>).trash === "1",
+    ),
   );
   app.post(
     "/enterprise/api/projects/:projectId/conversations",

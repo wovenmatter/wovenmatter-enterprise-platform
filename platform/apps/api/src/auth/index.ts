@@ -207,11 +207,11 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
     const name =
       body.name === undefined ? user.name : stringValue(body.name, "name", 160);
     const theme = body.theme === undefined ? user.theme : body.theme;
-    if (theme !== "green" && theme !== "cognac")
+    if (theme !== "green" && theme !== "cognac" && theme !== "dark")
       throw new AppError(
         400,
         "invalid_request",
-        "Theme must be green or cognac",
+        "Theme must be green, cognac or dark",
       );
     const defaultModel =
       body.defaultModel === undefined

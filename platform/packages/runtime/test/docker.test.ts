@@ -81,6 +81,7 @@ process.stdin.destroy();
     projectId: "project1",
     conversationId: "thread1",
     harness: "pi",
+      workingDirectory: "/workspace",
     model: "fixture-model",
     prompt: "Fixture",
     access: "read",

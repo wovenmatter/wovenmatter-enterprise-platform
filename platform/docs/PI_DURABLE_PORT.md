@@ -120,3 +120,14 @@ admitted only after the prior owner has closed; its startup removes only empty
 Pi UUID owner-lock directories through a pinned, no-symlink directory lookup.
 The durable journal is retained. This adapts WovenMatter's heartbeat lock to
 Enterprise's forced namespace termination without shortening its ownership lease.
+
+## Current project-folder workspace port
+
+The project workspace/sidebar implementation follows WovenMatter main
+`1f168813174ec9449f29bf0e41cd1c1550083e8a`: `remote/src/projects.mjs`,
+`docs/WORKSPACE_DATA_MODEL.md`, `docs/guide/workspaces.md`, `DashboardSidebar.swift`
+and the draft/session root bindings. Dark follows #122, `codex/dark-theme` at
+`a65b4d8f5a39021e4309b3d13b263ffd00dc68ca`, `DashboardColors.swift` and
+`DashboardStyle.swift`. The current colored Pi Durable mark is copied from main's
+shared assets. See [Project workspaces](WORKSPACES.md) for source parity and the
+Enterprise-only host, authorization, storage, lifecycle and appearance adaptations.

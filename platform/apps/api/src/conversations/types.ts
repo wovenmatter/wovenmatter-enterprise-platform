@@ -3,6 +3,13 @@ import type { AppContext, User } from "../context.js";
 export type Harness = "pi";
 export type Mode = "read" | "write";
 export interface ConversationRow {
+  folder_id?: string | null;
+  working_directory?: string | null;
+  directory_device?: string | null;
+  directory_inode?: string | null;
+  scratch_name?: string | null;
+  workspace_locked?: number;
+  pinned?: number;
   pi_options?: string;
   runtime_generation?: number;
   id: string;
@@ -130,6 +137,13 @@ export function conversationView(c: ConversationRow) {
     assetId: c.asset_id ?? null,
     createdBy: c.creator_id,
     title: c.title,
+    folderId: c.folder_id ?? null,
+    workingDirectory: c.working_directory
+      ? `/workspace/${c.working_directory}`
+      : null,
+    workspaceLocked: !!c.workspace_locked,
+    pinned: !!c.pinned,
+    deletedAt: c.deleted_at,
     mode: c.mode,
     harness: c.harness,
     pi: JSON.parse(c.pi_options ?? "{}"),

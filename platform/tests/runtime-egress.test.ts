@@ -18,6 +18,7 @@ const request: RuntimeRequest = {
   projectId: "test-project",
   conversationId: "test-thread",
   harness: "pi",
+      workingDirectory: "/workspace",
   model: "test-model",
   prompt: "Synthetic test",
   access: "read",

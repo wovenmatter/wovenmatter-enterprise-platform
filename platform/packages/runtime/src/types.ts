@@ -53,6 +53,9 @@ export interface RuntimeRequest {
   mounts: RuntimeMount[];
   /** Host directory outside user-editable volumes. Native history only, no upstream credentials. */
   sessionDirectory: string;
+  /** Trusted container path fixed by the first accepted send. */
+  workingDirectory: string;
+  workingDirectoryIdentity?: { device: string; inode: string };
   gateway: { baseUrl: string; token: string };
   /** Trusted credential-free internal proxy origin. Omit to disable public egress. */
   egressProxyUrl?: string;
@@ -76,6 +79,8 @@ export interface RuntimeRequest {
 /** The only values sent to the isolated container. No host paths or management secrets. */
 export type ContainerRequest = Pick<
   RuntimeRequest,
+  | "workingDirectory"
+  | "workingDirectoryIdentity"
   | "runId"
   | "projectId"
   | "harness"

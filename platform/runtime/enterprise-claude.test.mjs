@@ -114,6 +114,7 @@ test(
     const base = {
       projectId: "project",
       harness: "pi",
+      workingDirectory: "/workspace",
       model: "claude-sonnet-4-6",
       access: "write",
       gateway: {

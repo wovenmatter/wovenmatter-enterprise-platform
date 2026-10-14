@@ -371,7 +371,7 @@ test("project creation, ordinary files, organization sharing and revocation", as
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Browser-created workspace",
+      name: "All Workspaces",
     }),
   ).toBeVisible();
   await page
@@ -618,7 +618,7 @@ test("durable conversation streams and can add a project colleague", async ({
     })
     .first()
     .click();
-  await expect(page.getByRole("dialog").locator("select")).toHaveCount(1);
+  await expect(page.getByRole("dialog").locator("select")).toHaveCount(2);
   await expect(
     page.getByRole("dialog").getByLabel("Session permissions"),
   ).toHaveValue("write");
@@ -1262,7 +1262,7 @@ test("restricted members do not see owner or administrator navigation", async ({
     );
     await expect(
       employee.getByRole("heading", {
-        name: "Case review",
+        name: "All Workspaces",
         exact: true,
       }),
     ).toBeVisible();
@@ -2700,7 +2700,9 @@ test("one persistent rail leaves the chat full width and preserves URL selection
   await expect(draft).toHaveValue("Keep this unsent project draft");
   await page.reload();
   await expect(draft).toHaveValue("Keep this unsent project draft");
-  await expect(page).toHaveURL(`${f.origin}${base}?conversation=${first.id}`);
+  await expect(page).toHaveURL(
+    `${f.origin}${base}?folder=all&conversation=${first.id}`,
+  );
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Read-only research", exact: true })

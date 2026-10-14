@@ -346,6 +346,7 @@ function request(baseUrl: string): ContainerRequest {
     runId: "11111111-1111-4111-8111-111111111111",
     projectId: "project",
     harness: "pi",
+      workingDirectory: "/workspace",
     model: "fixture-model",
     prompt: "Use durable execution",
     access: "write",

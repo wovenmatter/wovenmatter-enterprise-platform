@@ -113,7 +113,7 @@ export type User = {
   name: string;
   role: "owner" | "admin" | "member";
   enabled: boolean;
-  theme: "green" | "cognac";
+  theme: "green" | "cognac" | "dark";
   defaultModel?: string | null;
   invitationPending?: boolean;
   libraryAccess?: "read" | "write";
@@ -155,6 +155,11 @@ export type Run = {
   completedAt?: string | null;
 };
 export type Conversation = {
+  folderId: string | null;
+  workingDirectory: string | null;
+  workspaceLocked: boolean;
+  pinned: boolean;
+  deletedAt: string | null;
   id: string;
   title: string;
   mode: "read" | "write";
@@ -184,3 +189,14 @@ export const errorMessage = (error: unknown) =>
   error instanceof Error
     ? error.message
     : "Something went wrong. Please try again.";
+
+export type WorkspaceFolder = {
+  removalPending: boolean;
+  id: string;
+  projectId: string;
+  name: string;
+  rootPath: string;
+  pinned: boolean;
+  position: number;
+  referencePaths: string[];
+};

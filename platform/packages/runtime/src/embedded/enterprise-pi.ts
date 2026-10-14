@@ -411,7 +411,7 @@ async function createEngine(
       ): Promise<AsyncIterable<unknown> & { close?: () => void }>;
     };
   };
-  const cwd = dependencies.cwd ?? "/workspace";
+  const cwd = dependencies.cwd ?? request.workingDirectory;
   const claude =
     route.provider === "anthropic"
       ? enterpriseClaudeRuntime(
@@ -548,7 +548,7 @@ export async function runEnterprisePi(
         ...(request.resumeId || retainedSessionId
           ? { sessionId: request.resumeId ?? retainedSessionId }
           : {}),
-        cwd: dependencies.cwd ?? "/workspace",
+        cwd: dependencies.cwd ?? request.workingDirectory,
       },
       native.handle,
     );

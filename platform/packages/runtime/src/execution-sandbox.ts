@@ -13,6 +13,8 @@ export async function prepareSandbox(
   mode: "read" | "write",
   shares: { source: string; target: string; access: "read" | "write" }[],
   broker: string,
+  workingDirectory = "/workspace",
+  workingDirectoryIdentity?: { device: string; inode: string },
 ) {
   const handles: FileHandle[] = [];
   const add = (h: FileHandle) => {
@@ -40,6 +42,23 @@ export async function prepareSandbox(
       await evidence(session, "/session"),
       await evidence(home, "/home/agent"),
     ];
+    if (workingDirectory !== "/workspace") {
+      const cwd = await openDirectory(
+        `/proc/self/fd/${workspace.fd}/.`,
+        workingDirectory.slice("/workspace/".length),
+      );
+      const stat = await cwd.stat({ bigint: true });
+      if (
+        !workingDirectoryIdentity ||
+        String(stat.dev) !== workingDirectoryIdentity.device ||
+        String(stat.ino) !== workingDirectoryIdentity.inode
+      ) {
+        await cwd.close();
+        throw new Error("Conversation working directory changed");
+      }
+      mounts.push({ fd: add(cwd), target: workingDirectory, access: mode });
+      attestations.push(await evidence(cwd, workingDirectory));
+    }
     for (const share of shares.filter((m) => m.target !== "/workspace")) {
       if (!share.source.startsWith("/library/"))
         throw new Error("Invalid share source");
@@ -58,6 +77,7 @@ export async function prepareSandbox(
       sessionFd,
       homeFd,
       brokerFd,
+      workingDirectory,
     ).map((arg) => {
       const fd = /^\/proc\/self\/fd\/(\d+)$/.exec(arg);
       return fd ? pinned.sources[Number(fd[1]) - 3] : arg;

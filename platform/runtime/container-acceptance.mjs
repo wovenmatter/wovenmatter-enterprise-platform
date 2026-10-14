@@ -65,13 +65,25 @@ const save = () =>
   writeFile(join(root, "allocation.json"), JSON.stringify(ledger, null, 2), {
     mode: 0o600,
   });
-for (const path of [workspace, library, sessions, journal])
+for (const path of [
+  workspace,
+  library,
+  sessions,
+  journal,
+  join(workspace, ".WovenMatter"),
+  join(workspace, ".WovenMatter", "Acceptance"),
+])
   await mkdir(path, {
     recursive: true,
     mode: 0o750,
   });
 // These are new synthetic directories, never a recursive ownership change.
-for (const path of [workspace, library]) {
+for (const path of [
+  workspace,
+  library,
+  join(workspace, ".WovenMatter"),
+  join(workspace, ".WovenMatter", "Acceptance"),
+]) {
   await chown(path, 10001, 10001);
   await chmod(path, 0o750);
 }
@@ -216,6 +228,7 @@ async function request(
     mode: 0o700,
   });
   return {
+    workingDirectory: "/workspace/.WovenMatter/Acceptance",
     runId: randomUUID(),
     organizationId,
     projectId,

@@ -33,7 +33,12 @@ async function output(value: unknown) {
 async function turn(request: ContainerRequest) {
   validateContainerRequest(request);
   if (active) throw new Error("Concurrent turn");
-  const signature = JSON.stringify([request.harness, request.access]);
+  const signature = JSON.stringify([
+    request.harness,
+    request.access,
+    request.workingDirectory,
+    request.workingDirectoryIdentity,
+  ]);
   if (identity && identity !== signature)
     throw new Error("Environment identity changed");
   identity = signature;
@@ -71,6 +76,7 @@ async function turn(request: ContainerRequest) {
         "/session/background",
         "/tmp/wme-background.sock",
         { ...runtimeEnvironment(), ...egressEnvironment(request) },
+        request.workingDirectory,
       );
       prepared = true;
     }

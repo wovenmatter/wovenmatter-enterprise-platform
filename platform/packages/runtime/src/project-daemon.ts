@@ -18,7 +18,7 @@ import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, posix } from "node:path";
 import { identity, MAX_LINE } from "./validation.js";
-import { safeRelative } from "./sandbox.js";
+import { safeRelative, openDirectory } from "./sandbox.js";
 import { prepareSandbox } from "./execution-sandbox.js";
 import { RuntimeError, type RuntimeRequest } from "./types.js";
 import { WorkspaceService } from "./workspace-service.js";
@@ -159,6 +159,23 @@ async function relay(
 const workspace = new WorkspaceService(
   "/control/workspace-journal",
   launchWorkspaceWorker,
+  undefined,
+  async (path) => {
+    if (path !== "/workspace" && !path.startsWith("/workspace/.WovenMatter/"))
+      throw new Error("Invalid working directory");
+    const directory = await openDirectory(
+      "/project",
+      path === "/workspace"
+        ? "files"
+        : "files/" + path.slice("/workspace/".length),
+    );
+    try {
+      const stat = await directory.stat({ bigint: true });
+      return { device: String(stat.dev), inode: String(stat.ino) };
+    } finally {
+      await directory.close();
+    }
+  },
 );
 await workspace.initialize();
 await mkdir("/control/brokers", {

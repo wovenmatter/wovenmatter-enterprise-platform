@@ -65,6 +65,7 @@ export async function shareFile(
         "Files cannot be shared between organizations.",
       );
     const alias = cleanName(name ?? path.posix.basename(row.path));
+    if(alias.toLowerCase()===".wovenmatter") throw new AppError(400,"reserved_name",".WovenMatter is reserved for this project's managed workspace.");
     const root = await ensureRoot(ctx, {
       orgId: row.org_id,
       projectId,

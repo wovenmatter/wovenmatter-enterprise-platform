@@ -18,13 +18,31 @@ export function identity(value: string): string {
   return value;
 }
 export function validateContainerRequest(input: ContainerRequest): void {
+  if (
+    typeof input.workingDirectory !== "string" ||
+    (input.workingDirectory !== "/workspace" &&
+      !/^\/workspace\/\.WovenMatter\/(?:scratch\/)?[^/\\\x00-\x1f\x7f]+$/.test(
+        input.workingDirectory,
+      )) ||
+    posix.normalize(input.workingDirectory) !== input.workingDirectory
+  )
+    throw new RuntimeError(
+      "invalid_working_directory",
+      "Invalid conversation working directory",
+    );
+  if (
+    input.workingDirectoryIdentity !== undefined &&
+    (!/^[0-9]+$/.test(input.workingDirectoryIdentity.device) ||
+      !/^[0-9]+$/.test(input.workingDirectoryIdentity.inode))
+  )
+    throw new RuntimeError(
+      "invalid_working_directory",
+      "Invalid directory identity",
+    );
   identity(input.runId);
   identity(input.projectId);
   if (input.assetId !== undefined) identity(input.assetId);
-  if (
-    input.harness !== "pi" ||
-    !["read", "write"].includes(input.access)
-  )
+  if (input.harness !== "pi" || !["read", "write"].includes(input.access))
     throw new RuntimeError("invalid_request", "Invalid harness or access mode");
   if (
     typeof input.prompt !== "string" ||
@@ -97,20 +115,45 @@ export function validateContainerRequest(input: ContainerRequest): void {
       );
   }
   if (input.pi !== undefined) {
-    if (input.pi.provider !== undefined && !["openai", "anthropic", "xai", "openrouter", "custom"].includes(input.pi.provider))
+    if (
+      input.pi.provider !== undefined &&
+      !["openai", "anthropic", "xai", "openrouter", "custom"].includes(
+        input.pi.provider,
+      )
+    )
       throw new RuntimeError("invalid_request", "Invalid Pi provider");
-    if (input.pi.api !== undefined && !["openai-responses", "anthropic-messages", "openai-compatible"].includes(input.pi.api))
+    if (
+      input.pi.api !== undefined &&
+      !["openai-responses", "anthropic-messages", "openai-compatible"].includes(
+        input.pi.api,
+      )
+    )
       throw new RuntimeError("invalid_request", "Invalid Pi API");
     for (const key of ["contextWindow", "maxOutputTokens"] as const) {
       const value = input.pi[key];
-      if (value !== undefined && (!Number.isSafeInteger(value) || value < 0 || value > 10_000_000))
+      if (
+        value !== undefined &&
+        (!Number.isSafeInteger(value) || value < 0 || value > 10_000_000)
+      )
         throw new RuntimeError("invalid_request", "Invalid Pi model limit");
     }
-    if (input.pi.routeIdentity !== undefined && (typeof input.pi.routeIdentity !== "string" || input.pi.routeIdentity.length > 512 || /[\r\n\x00]/.test(input.pi.routeIdentity)))
+    if (
+      input.pi.routeIdentity !== undefined &&
+      (typeof input.pi.routeIdentity !== "string" ||
+        input.pi.routeIdentity.length > 512 ||
+        /[\r\n\x00]/.test(input.pi.routeIdentity))
+    )
       throw new RuntimeError("invalid_request", "Invalid Pi route identity");
-    if (input.pi.accountAffinity !== undefined && input.pi.accountAffinity !== "proxy-session-affinity")
+    if (
+      input.pi.accountAffinity !== undefined &&
+      input.pi.accountAffinity !== "proxy-session-affinity"
+    )
       throw new RuntimeError("invalid_request", "Invalid Pi account affinity");
-    if (input.pi.sdkGeneration !== undefined && (typeof input.pi.sdkGeneration !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(input.pi.sdkGeneration)))
+    if (
+      input.pi.sdkGeneration !== undefined &&
+      (typeof input.pi.sdkGeneration !== "string" ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(input.pi.sdkGeneration))
+    )
       throw new RuntimeError("invalid_request", "Invalid Pi SDK generation");
   }
 }

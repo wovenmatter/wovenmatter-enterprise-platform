@@ -147,6 +147,7 @@ export function PersonalSettings({
             <select name="theme" defaultValue={current.theme}>
               <option value="green">Green</option>
               <option value="cognac">Cognac</option>
+              <option value="dark">Dark</option>
             </select>
           </Field>
         </AsyncForm>

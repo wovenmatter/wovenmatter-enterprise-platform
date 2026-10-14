@@ -299,6 +299,7 @@ test("retained Pi sessions reject SDK generation changes until idle handoff", as
     runId: "11111111-1111-4111-8111-111111111111",
     projectId: "project",
     harness: "pi",
+      workingDirectory: "/workspace",
     model: "fixture-model",
     prompt: "hello",
     access: "write",

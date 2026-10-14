@@ -33,6 +33,7 @@ const request = (
   organizationId: "org",
   projectId: "project",
   harness: "pi",
+      workingDirectory: "/workspace",
   model: "model",
   prompt: "Work",
   access: "write",

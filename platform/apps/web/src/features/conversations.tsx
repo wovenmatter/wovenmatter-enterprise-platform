@@ -16,6 +16,7 @@ import {
 import {
   ArrowUp,
   Ellipsis,
+  FolderOpen,
   LockKeyhole,
   ShieldCheck,
   Settings,
@@ -36,6 +37,7 @@ import {
   type Model,
   type Run,
   type Conversation,
+  type WorkspaceFolder,
 } from "../api";
 import { useWorkspace } from "../workspace";
 import { useSearchParams } from "react-router-dom";
@@ -109,6 +111,11 @@ export function ConversationsPage({ project }: { project: Project }) {
     `/enterprise/api/organizations/${org.id}/inference/models`,
   );
   useWorkspaceChanges(list.reload);
+  const folders = useResource<List<WorkspaceFolder>>(
+    `/enterprise/api/projects/${project.id}/folders`,
+    10000,
+  );
+  useWorkspaceChanges(folders.reload);
   const [query, setQuery] = useSearchParams();
   const requestedConversation = query.get("conversation") ?? undefined;
   const conversationId =
@@ -125,19 +132,33 @@ export function ConversationsPage({ project }: { project: Project }) {
     if (conversationId) writeWorkspaceValue(selectionKey, conversationId);
   }, [conversationId, selectionKey]);
   useEffect(() => {
-    if (requestedConversation || creating || !list.data) return;
+    if (
+      requestedConversation ||
+      creating ||
+      !list.data ||
+      query.has("folder") ||
+      query.has("trash")
+    )
+      return;
     const previous = readWorkspaceValue(selectionKey);
     if (previous && list.data.items.some((c) => c.id === previous))
       setQuery({ conversation: previous }, { replace: true });
   }, [requestedConversation, creating, list.data, selectionKey, setQuery]);
-  function select(id?: string) {
-    setQuery(id ? { conversation: id } : {});
+  function select(id?: string, folderId?: string | null) {
+    const next = new URLSearchParams(query);
+    next.delete("new");
+    if (folderId !== undefined) next.set("folder", folderId ?? "all");
+    if (id) next.set("conversation", id);
+    else next.delete("conversation");
+    setQuery(next);
   }
   function closeCreate() {
     const next = new URLSearchParams(query);
     next.delete("new");
     setQuery(next, { replace: true });
   }
+  if (query.get("trash") === "1")
+    return <ConversationTrash project={project} />;
   return (
     <div className="conversation-layout">
       <div className="conversation-main">
@@ -167,11 +188,18 @@ export function ConversationsPage({ project }: { project: Project }) {
           )
         ) : (
           <Empty
-            title={project.name}
+            title={
+              folders.data?.items.find((f) => f.id === query.get("folder"))
+                ?.name ?? "All Workspaces"
+            }
             action={
               <button
                 className="primary"
-                onClick={() => setQuery({ new: "1" })}
+                onClick={() => {
+                  const next = new URLSearchParams(query);
+                  next.set("new", "1");
+                  setQuery(next);
+                }}
               >
                 New conversation
               </button>
@@ -184,18 +212,33 @@ export function ConversationsPage({ project }: { project: Project }) {
       </div>
       {creating ? (
         <Modal title="New conversation" compact onClose={closeCreate}>
-          <ConversationForm
-            project={project}
-            onCancel={closeCreate}
-            onSave={async (body) => {
-              const c = await send<Conversation>(
-                `/enterprise/api/projects/${project.id}/conversations`,
-                body,
-              );
-              select(c.id);
-              workspaceChanged();
-            }}
-          />
+          {!folders.data ? (
+            <>
+              <Loading />
+              <ErrorNotice message={folders.error} />
+            </>
+          ) : query.get("folder") &&
+            query.get("folder") !== "all" &&
+            !folders.data.items.some((f) => f.id === query.get("folder")) ? (
+            <ErrorNotice message="This folder is unavailable. Choose All Workspaces or another folder." />
+          ) : (
+            <ConversationForm
+              project={project}
+              folders={folders.data?.items}
+              initialFolder={query.get("folder")}
+              onCancel={closeCreate}
+              onSave={async (body) => {
+                const navigationTarget = window.location.href;
+                const c = await send<Conversation>(
+                  `/enterprise/api/projects/${project.id}/conversations`,
+                  body,
+                );
+                if (window.location.href === navigationTarget)
+                  select(c.id, c.folderId);
+                workspaceChanged();
+              }}
+            />
+          )}
         </Modal>
       ) : null}
     </div>
@@ -280,12 +323,16 @@ function PiSDKSettings({ conversationId }: { conversationId: string }) {
 export function ConversationForm({
   project,
   conversation,
+  folders,
+  initialFolder,
   onSave,
   onCancel,
 }: {
   project?: Project;
   modelsError?: string;
   conversation?: Conversation;
+  folders?: WorkspaceFolder[];
+  initialFolder?: string | null;
   onSave: (body: unknown) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -303,7 +350,7 @@ export function ConversationForm({
                   subagentConcurrency: Number(d.get("subagentConcurrency")),
                 },
               }
-            : { mode: d.get("mode") },
+            : { mode: d.get("mode"), folderId: d.get("folderId") || null },
         )
       }
     >
@@ -344,21 +391,38 @@ export function ConversationForm({
           <PiSDKSettings conversationId={conversation.id} />
         </>
       ) : (
-        <Field
-          label="Session permissions"
-          hint="Access is fixed for this session."
-        >
-          <select
-            name="mode"
-            defaultValue={project?.access ?? "read"}
-            autoFocus
+        <>
+          <Field
+            label="Session permissions"
+            hint="Access is fixed for this session."
           >
-            <option value="read">Read-only</option>
-            {project?.access === "write" ? (
-              <option value="write">Full access</option>
-            ) : null}
-          </select>
-        </Field>
+            <select
+              name="mode"
+              defaultValue={project?.access ?? "read"}
+              autoFocus
+            >
+              <option value="read">Read-only</option>
+              {project?.access === "write" ? (
+                <option value="write">Full access</option>
+              ) : null}
+            </select>
+          </Field>
+          <Field label="Folder">
+            <select
+              name="folderId"
+              defaultValue={
+                initialFolder === "all" ? "" : (initialFolder ?? "")
+              }
+            >
+              <option value="">All Workspaces</option>
+              {folders?.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </>
       )}
     </AsyncForm>
   );
@@ -541,10 +605,17 @@ export function Thread({
   const { user, orgBase } = useWorkspace();
   const assetSaved = useRef(asset?.onSaved);
   assetSaved.current = asset?.onSaved;
+  const [, setWorkspaceQuery] = useSearchParams();
+  const folders = useResource<List<WorkspaceFolder>>(
+    !asset && project ? `/enterprise/api/projects/${project.id}/folders` : null,
+    10000,
+  );
+  useWorkspaceChanges(folders.reload);
   const detail = useResource<Conversation>(
     `/enterprise/api/conversations/${id}`,
     10000,
   );
+  useWorkspaceChanges(detail.reload);
   const activity = useConversationActivities(id);
   const [loadingRuns, setLoadingRuns] = useState<Set<string>>(new Set());
   const messages = useResource<Messages>(
@@ -938,6 +1009,15 @@ export function Thread({
             </button>
             {menuOpen ? (
               <div className="thread-menu-items">
+                <a href={`/enterprise/api/conversations/${id}/export`} download>
+                  Export messages
+                </a>
+                <a
+                  href={`/enterprise/api/conversations/${id}/export?full=1`}
+                  download
+                >
+                  Export full run
+                </a>
                 <button
                   onClick={() => {
                     setNativeOpen(true);
@@ -976,7 +1056,7 @@ export function Thread({
                         }}
                       >
                         <Trash2 size={15} />
-                        Delete conversation
+                        Move to Trash
                       </button>
                     ) : null}
                   </>
@@ -1253,6 +1333,67 @@ export function Thread({
                 <option value="comment">Comment</option>
               </select>
             </label>
+            {!asset ? (
+              <label className="composer-folder-control">
+                <FolderOpen size={13} />
+                <select
+                  aria-label="Conversation folder"
+                  value={detail.data?.folderId ?? ""}
+                  title={
+                    detail.data?.workingDirectory ??
+                    "Choose a working folder before sending"
+                  }
+                  disabled={
+                    !detail.data ||
+                    detail.data.workspaceLocked ||
+                    detail.data.createdBy !== user.id ||
+                    sending ||
+                    modelSaving ||
+                    uncertain
+                  }
+                  onChange={async (e) => {
+                    const navigationTarget = window.location.href;
+                    const folderId = e.target.value || null;
+                    setModelSaving(true);
+                    try {
+                      const updated = await send<Conversation>(
+                        `/enterprise/api/conversations/${id}/organization`,
+                        { folderId },
+                        "PATCH",
+                      );
+                      if (window.location.href === navigationTarget)
+                        setWorkspaceQuery(
+                          (current) => {
+                            const next = new URLSearchParams(current);
+                            next.set("folder", updated.folderId ?? "all");
+                            return next;
+                          },
+                          { replace: true },
+                        );
+                      detail.reload();
+                      workspaceChanged();
+                    } catch (e) {
+                      setError(errorMessage(e));
+                    } finally {
+                      setModelSaving(false);
+                    }
+                  }}
+                >
+                  <option value="">All Workspaces</option>
+                  {detail.data?.folderId &&
+                  !folders.data?.items.some(
+                    (f) => f.id === detail.data?.folderId,
+                  ) ? (
+                    <option value={detail.data.folderId}>Removed folder</option>
+                  ) : null}
+                  {folders.data?.items.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
             <ModelControls
               conversation={detail.data}
               models={models}
@@ -1359,13 +1500,14 @@ export function Thread({
       ) : null}
       {deleting ? (
         <Confirm
-          title="Delete conversation?"
+          title="Move to Trash?"
           onClose={() => setDeleting(false)}
           onConfirm={async () => {
+            const navigationTarget = window.location.href;
             await api(`/enterprise/api/conversations/${id}`, {
               method: "DELETE",
             });
-            onDeleted();
+            if (window.location.href === navigationTarget) onDeleted();
           }}
         >
           This removes access to the conversation for everyone in it.
@@ -1436,5 +1578,44 @@ function ThreadMembers({
         </AsyncForm>
       ) : null}
     </Modal>
+  );
+}
+
+function ConversationTrash({ project }: { project: Project }) {
+  const { user } = useWorkspace();
+  const chats = useResource<List<Conversation>>(
+    `/enterprise/api/projects/${project.id}/conversations?trash=1`,
+  );
+  useWorkspaceChanges(chats.reload);
+  return (
+    <div className="workspace-trash subpage">
+      <h1>Trash</h1>
+      <p>
+        Restoring a conversation preserves its history and working directory.
+        Working files are kept when a chat is moved to Trash.
+      </p>
+      <ErrorNotice message={chats.error} />
+      {chats.data?.items.map((c) => (
+        <div className="trash-conversation" key={c.id}>
+          <span>{c.title}</span>
+          {c.createdBy === user.id ? (
+            <button
+              onClick={async () => {
+                await send(`/enterprise/api/conversations/${c.id}/restore`, {});
+                chats.reload();
+                workspaceChanged();
+              }}
+            >
+              Restore conversation
+            </button>
+          ) : null}
+        </div>
+      ))}
+      {!chats.loading && !chats.data?.items.length ? (
+        <Empty title="Trash is empty">
+          Trashed conversations will appear here.
+        </Empty>
+      ) : null}
+    </div>
   );
 }

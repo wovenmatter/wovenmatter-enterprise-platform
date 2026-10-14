@@ -823,6 +823,8 @@ export class ProjectDockerRuntime implements Runtime {
           request.userId,
           request.assetId,
           request.workspaceLease,
+          request.workingDirectory,
+          request.workingDirectoryIdentity,
           request.pi,
         ]),
       )

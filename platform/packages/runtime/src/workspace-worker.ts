@@ -58,6 +58,8 @@ export async function launchWorkspaceWorker(
     request.access,
     request.mounts,
     brokerDirectory,
+    request.workingDirectory,
+    request.workingDirectoryIdentity,
   ).catch((error) => {
     broker.close();
     throw error;
@@ -203,6 +205,8 @@ export async function launchWorkspaceWorker(
       broker.setGateway(next.gateway);
       const payload: ContainerRequest = {
         runId: next.runId,
+        workingDirectory: next.workingDirectory,
+        workingDirectoryIdentity: next.workingDirectoryIdentity,
         ...(next.assetId ? { assetId: next.assetId } : {}),
         projectId: next.projectId,
         harness: next.harness,

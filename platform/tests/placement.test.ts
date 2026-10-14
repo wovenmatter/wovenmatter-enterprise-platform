@@ -221,6 +221,7 @@ test("two real mTLS supervisors authenticate separately, verify actual storage a
         organizationId: "org",
         conversationId: "t",
         harness: "pi",
+      workingDirectory: "/workspace",
         model: "synthetic",
         prompt: "Synthetic",
         access: "read",
