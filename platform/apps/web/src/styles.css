@@ -1832,7 +1832,7 @@ button.secondary:hover:not(:disabled) { background: var(--hover); }
   margin-left: auto;
 }
 .sidebar .organization-navigation {
-  margin: 0 8px 8px;
+  margin: 0 0 8px;
   flex: none;
 }
 .sidebar-footer {
