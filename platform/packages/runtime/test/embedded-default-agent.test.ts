@@ -11,3 +11,12 @@ test("embedded WovenMatter default-agent runtime loads durable session entrypoin
   assert.equal(typeof runtime.openDurableSession, "function");
   assert.match(runtime.root, /default-agent$/);
 });
+
+test("ordinary settings cannot self-authorize an Enterprise provider ID", async () => {
+  const runtime = await loadEmbeddedDefaultAgent();
+  const { validateConfig } = await import(new URL("src/config.mjs", `file://${runtime.root}/`).href);
+  const id = "local-server-11111111-1111-4111-8111-111111111111";
+  const config = { providers: [id], enterpriseProviderIds: [id] };
+  assert.deepEqual(validateConfig(config).providers, []);
+  assert.deepEqual(validateConfig(config, [id]).providers, [id]);
+});

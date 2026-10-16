@@ -8,6 +8,8 @@ import {
   chmod,
   rm,
   symlink,
+  stat,
+  readdir,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -122,6 +124,33 @@ process.stdin.destroy();
     },
   };
 }
+test("supervisor creates private native storage only for the exact placed thread and refuses symlink ancestors", async (t) => {
+  const f = await fixture(t);
+  await f.runtime.ensureProject(f.spec);
+  const root = join(f.sessions, "org1/project1/sessions");
+  await rm(root, { recursive: true, force: true });
+  await assert.rejects(
+    f.runtime.execute({
+      ...f.request,
+      sessionDirectory: join(root, "another-thread/pi/read"),
+    }, () => {}),
+    { code: "invalid_session" },
+  );
+  await assert.rejects(stat(root), { code: "ENOENT" });
+  const outside = join(f.root, "outside");
+  await mkdir(outside);
+  await mkdir(root);
+  await symlink(outside, join(root, "thread1"));
+  await assert.rejects(f.runtime.execute(f.request, () => {}));
+  assert.deepEqual(await readdir(outside), []);
+  await rm(join(root, "thread1"));
+  const events: string[] = [];
+  await f.runtime.execute(f.request, (e) => { events.push(e.type); });
+  assert.ok(events.includes("completed"));
+  const native = await stat(f.request.sessionDirectory);
+  assert.ok(native.isDirectory());
+  assert.equal(native.mode & 0o777, 0o700);
+});
 test("one persistent project survives multiple runs; process dispatch never tears down container or volumes", async (t) => {
   const f = await fixture(t);
   await f.runtime.ensureProject(f.spec);

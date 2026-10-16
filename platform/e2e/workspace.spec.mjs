@@ -2827,3 +2827,57 @@ test("a successful send acknowledged after navigation cannot restore an already-
     }),
   ).toHaveCount(1);
 });
+
+test("composer thinking choices follow each model and clear the previous override", async ({
+  page,
+}) => {
+  const f = await ensureFixture(page);
+  const session = await (
+    await page.request.get("/enterprise/api/session")
+  ).json();
+  const headers = { origin: f.origin, "x-csrf-token": session.csrfToken };
+  const response = await page.request.post(
+    `/enterprise/api/projects/${f.projectId}/conversations`,
+    {
+      headers,
+      data: {
+        title: "Model thinking controls",
+        mode: "write",
+        model: "gpt-test-fixture",
+      },
+    },
+  );
+  expect(response.status()).toBe(201);
+  const c = await response.json();
+  await page.goto(
+    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}?conversation=${c.id}&folder=all`,
+  );
+  const thinking = page.getByLabel("Thinking level", { exact: true });
+  const model = page.getByTitle("Model", { exact: true });
+  await expect(thinking.locator("option")).toHaveText([
+    "Model default",
+    "Off",
+    "Low",
+    "High",
+  ]);
+  await thinking.selectOption("high");
+  await expect(thinking).toHaveValue("high");
+  await model.selectOption("mandatory-thinking-fixture");
+  await expect(thinking).toHaveValue("");
+  await expect(thinking.locator("option")).toHaveText([
+    "Model default",
+    "Low",
+    "High",
+    "Max",
+  ]);
+  await thinking.selectOption("max");
+  await expect(thinking).toHaveValue("max");
+  await model.selectOption("no-thinking-fixture");
+  await expect(thinking).toHaveValue("");
+  await expect(thinking).toBeDisabled();
+  await expect(thinking.locator("option")).toHaveText(["Model default"]);
+  const stored = await (
+    await page.request.get(`/enterprise/api/conversations/${c.id}`)
+  ).json();
+  expect(stored.pi.thinking).toBeUndefined();
+});

@@ -131,3 +131,27 @@ and the draft/session root bindings. Dark follows #122, `codex/dark-theme` at
 `DashboardStyle.swift`. The current colored Pi Durable mark is copied from main's
 shared assets. See [Project workspaces](WORKSPACES.md) for source parity and the
 Enterprise-only host, authorization, storage, lifecycle and appearance adaptations.
+
+Enterprise OpenRouter/custom gateway registration supplies the resolved model
+capabilities through the same enterprise-provider mechanism as OpenAI/xAI.
+Reasoning, images, context and output limits are preserved rather than replaced
+by local-server defaults. The scoped Responses transport and provider identity
+remain unchanged. Current real-engine fixture coverage accepts High without
+contacting any external provider.
+
+Only provider IDs supplied by the trusted Enterprise runtime dependency are
+eligible for the additional engine allowlist; ordinary settings payloads cannot
+grant themselves provider IDs. Constructor and retained-engine updates apply
+that same trusted allowlist.
+
+
+Thinking options use each native model's pinned Pi capability map, and OpenRouter's
+public model reasoning metadata (exact supported efforts, mandatory reasoning,
+and provider defaults). Approved custom discovery may supply an exact effort
+list/map. Unknown capabilities expose Model default only; the platform never
+invents a provider-wide list. Normalized maps survive account discovery storage,
+and the same map reaches the runtime. Unsupported stale overrides fail before
+new input admission. Provider-default mode omits an invented effort; adaptive
+Anthropic uses native efforts and older Anthropic uses supported token budgets.
+These are Enterprise gateway adaptations to WovenMatter's model capability
+contract; no legacy SDK path or external-provider acceptance is implied.

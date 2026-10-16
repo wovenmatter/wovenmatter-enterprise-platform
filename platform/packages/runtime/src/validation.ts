@@ -137,6 +137,22 @@ export function validateContainerRequest(input: ContainerRequest): void {
       )
         throw new RuntimeError("invalid_request", "Invalid Pi model limit");
     }
+    const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    if (input.pi.thinkingLevelMap !== undefined &&
+      (!input.pi.thinkingLevelMap || typeof input.pi.thinkingLevelMap !== "object" ||
+       Array.isArray(input.pi.thinkingLevelMap) ||
+       Object.entries(input.pi.thinkingLevelMap).some(([key, value]) =>
+         !levels.includes(key) || (value !== null &&
+           (typeof value !== "string" || !value || value.length > 64 || /[\r\n\x00]/.test(value))))))
+      throw new RuntimeError("invalid_request", "Invalid model thinking capabilities");
+    if (input.pi.defaultThinkingLevel !== undefined && !levels.includes(input.pi.defaultThinkingLevel))
+      throw new RuntimeError("invalid_request", "Invalid model thinking default");
+    if (input.pi.modelCompat !== undefined &&
+      (!input.pi.modelCompat || typeof input.pi.modelCompat !== "object" ||
+       Array.isArray(input.pi.modelCompat) ||
+       Object.keys(input.pi.modelCompat).some(key => key !== "forceAdaptiveThinking") ||
+       (input.pi.modelCompat.forceAdaptiveThinking !== undefined && typeof input.pi.modelCompat.forceAdaptiveThinking !== "boolean")))
+      throw new RuntimeError("invalid_request", "Invalid model compatibility");
     if (
       input.pi.routeIdentity !== undefined &&
       (typeof input.pi.routeIdentity !== "string" ||

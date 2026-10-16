@@ -72,6 +72,9 @@ export interface RuntimeRequest {
     supportsNativeCompaction?: boolean;
     supportsImages?: boolean;
     supportsReasoning?: boolean;
+    thinkingLevelMap?: Partial<Record<"off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max", string | null>>;
+    defaultThinkingLevel?: string;
+    modelCompat?: { forceAdaptiveThinking?: boolean };
     routeIdentity?: string;
     accountAffinity?: "proxy-session-affinity";
   };

@@ -418,6 +418,18 @@ system.inference.models = async () => [
     thinkingLevels: ["off", "low", "high"],
   },
   {
+    id: "mandatory-thinking-fixture",
+    name: "Mandatory reasoning fixture",
+    provider: "openrouter",
+    thinkingLevels: ["low", "high", "max"],
+  },
+  {
+    id: "no-thinking-fixture",
+    name: "No effort control fixture",
+    provider: "custom",
+    thinkingLevels: [],
+  },
+  {
     id: "synthetic-asset-pi",
     name: "Asset fixture pi",
     provider: "openai",

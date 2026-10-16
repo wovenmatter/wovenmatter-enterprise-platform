@@ -21,6 +21,7 @@ import {
 import {
   identity,
   validateHostRequest,
+  validateContainerRequest,
   validateEvent,
   MAX_LINE,
   isWithin,
@@ -29,6 +30,7 @@ import { ensureStorageVolumes, volumeMount } from "./volumes.js";
 import { createIsolatedNetwork, validateNetworkPool } from "./networks.js";
 import type { DockerRuntimeOptions } from "./docker.js";
 import { sdkCatalogStatus } from "./sdk-catalog.js";
+import { openDirectory } from "./sandbox.js";
 const exec = promisify(execFile);
 const containerName = (id: string) =>
   id.startsWith("asset-")
@@ -733,11 +735,9 @@ export class ProjectDockerRuntime implements Runtime {
     emit: EventSink,
     signal?: AbortSignal,
   ) {
-    await validateHostRequest(
-      request,
-      this.options.storageRoots,
-      this.options.sessionRoot,
-    );
+    validateContainerRequest(request);
+    for (const key of ["organizationId", "projectId", "conversationId"] as const)
+      identity(request[key]);
     const p = await this.placement(request.projectId);
     if (p.status !== "ready" || p.organizationId !== request.organizationId)
       throw new RuntimeError(
@@ -776,7 +776,7 @@ export class ProjectDockerRuntime implements Runtime {
       request.harness,
       request.access,
     );
-    if (resolve(request.sessionDirectory) !== expectedSession)
+    if (request.sessionDirectory !== expectedSession)
       throw new RuntimeError(
         "invalid_session",
         "Native session belongs to a different thread.",
@@ -802,6 +802,22 @@ export class ProjectDockerRuntime implements Runtime {
         };
       }),
     );
+    // API UID10001 cannot traverse native storage. Only the supervisor creates
+    // this exact placed thread namespace, with no-follow descriptor lookups.
+    const session = await openDirectory(
+      this.options.sessionRoot,
+      relative(this.options.sessionRoot, expectedSession),
+      true,
+    );
+    try {
+      await validateHostRequest(
+        request,
+        this.options.storageRoots,
+        this.options.sessionRoot,
+      );
+    } finally {
+      await session.close();
+    }
     const file = join(
       this.options.journalRoot,
       "runs",

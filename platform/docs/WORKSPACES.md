@@ -55,7 +55,11 @@ The API verifies its own filesystem identities; the execution owner independentl
 captures and persists its local cwd identity in its private runtime journal.
 Identities from one host are never compared with another host's mount numbers.
 Directory descriptors pin the cwd through native launch; runtime-owned mounts
-are applied last and mount evidence is checked before Pi starts.
+are applied last and mount evidence is checked before Pi starts. Native session
+storage remains private to the execution owner: the API supplies the exact logical
+session path without creating directories. After placement/thread checks, the
+supervisor creates the namespace with no-follow descriptor lookups; the project
+daemon assigns only the final native leaf to the agent UID.
 
 This actively tested platform uses fresh deployment state. The port includes no
 old-layout migration/resume bridge, virtual-folder binding, archived old sessions,

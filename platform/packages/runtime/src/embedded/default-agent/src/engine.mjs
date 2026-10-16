@@ -13,11 +13,12 @@ import { SessionCLIContext } from './cli-context.mjs';
 
 export class DefaultAgentEngine {
   constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, enterpriseInstructions = '', enterpriseProviders = [] }) {
-    this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
-    this.claude = claude ?? new ClaudeRuntime(directory);
-    this.enterpriseInstructions = enterpriseInstructions;
     this.enterpriseProviders = Array.isArray(enterpriseProviders) ? enterpriseProviders : [];
     this.enterpriseProviderIds = new Set(this.enterpriseProviders.map(provider => provider?.id).filter(id => typeof id === 'string'));
+    // These IDs come only from trusted runtime dependencies, never settings payloads.
+    this.cwd = cwd; this.directory = directory; this.config = validateConfig({ ...emptyConfig, ...config }, [...this.enterpriseProviderIds]); this.supplied = credentials; this.credentialAccounts = credentialAccounts; this.vault = vault; this.requestCredentials = requestCredentials; this.sessions = new Map();
+    this.claude = claude ?? new ClaudeRuntime(directory);
+    this.enterpriseInstructions = enterpriseInstructions;
   }
   async initialize() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -74,7 +75,7 @@ export class DefaultAgentEngine {
   }
   async apply(payload) {
     if (payload.config) {
-      const config = validateConfig(payload.config);
+      const config = validateConfig(payload.config, [...this.enterpriseProviderIds]);
       for (const server of this.config.customServers) if (!config.customServers.some(s => s.id === server.id)) this.runtime.unregisterProvider(server.id);
       this.config = config;
       registerLocalServers(this.runtime, config.customServers);

@@ -22,7 +22,6 @@ import { migrateAssetConversations, workspaceId } from "../assets/schema.js";
 import type { Statement } from "../db/index.js";
 import { RuntimeError } from "../../../../packages/runtime/src/types.js";
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { RuntimeEvent } from "@wovenmatter-enterprise/runtime";
 import { AppError, type AppContext, type User } from "../context.js";
@@ -397,6 +396,22 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       return user.defaultModel;
     return catalog[0]!.id;
   }
+  private async validateThinking(
+    orgId: string,
+    model: string,
+    options: { thinking?: string },
+  ) {
+    if (!options.thinking || !this.dependencies.inference.models) return;
+    const selected = (await this.dependencies.inference.models(orgId)).find(
+      (item) => item.id === model,
+    );
+    if (!selected?.thinkingLevels?.includes(options.thinking))
+      throw new AppError(
+        400,
+        "invalid_pi_options",
+        "This thinking level is unavailable for the selected model. Choose a supported level or Model default.",
+      );
+  }
   async create(user: User, projectId: string, input: Record<string, unknown>) {
     const project = await this.ctx.requireProject(user, projectId);
     const mode =
@@ -413,6 +428,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         ? null
         : await requireFolder(this.ctx, projectId, input.folderId);
     const options = piOptions(input.pi);
+    await this.validateThinking(project.orgId, model, options);
     // Provisioning projects have no placed runtime yet; pin on their first usable turn.
     if (project.status === "ready" && this.dependencies.runtime.sdkCatalog)
       options.sdkGeneration = (
@@ -511,20 +527,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           : supplied;
       const nextPi = { ...previousPi, ...piOptions(updates) };
       if (clearThinking) delete nextPi.thinking;
-      if (nextPi.thinking && this.dependencies.inference.models) {
-        const selected = (
-          await this.dependencies.inference.models(c.org_id)
-        ).find((m) => m.id === model);
-        if (
-          selected?.thinkingLevels &&
-          !selected.thinkingLevels.includes(nextPi.thinking)
-        )
-          throw new AppError(
-            400,
-            "invalid_pi_options",
-            "This thinking level is unavailable for the selected model.",
-          );
-      }
+      await this.validateThinking(c.org_id, model, nextPi);
       const options = JSON.stringify(nextPi);
       const timestamp = now();
       const changed = await this.ctx.db.run(
@@ -1021,6 +1024,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "model_required",
           "Select a model before sending a message.",
         );
+      if (kind === "message" && !current)
+        await this.validateThinking(
+          c.org_id,
+          c.model,
+          piOptions(JSON.parse(c.pi_options ?? "{}"), true),
+        );
       if (c.asset_id && !c.project_id && kind === "message" && !current)
         await this.dependencies.assets!.initializeWorkspace(user, c.asset_id);
       if (!c.asset_id && kind === "message")
@@ -1511,9 +1520,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       );
       const stillOwned = Boolean(
         this.dependencies.runtime.attach &&
-          durable &&
-          ["dispatching", "running", "cancelling"].includes(durable.status) &&
-          !execution.cancelReason,
+        durable &&
+        ["dispatching", "running", "cancelling"].includes(durable.status) &&
+        !execution.cancelReason,
       );
       try {
         if (!stillOwned)
@@ -1657,6 +1666,11 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       run.harness,
       run.connection_id ?? undefined,
     );
+    await this.validateThinking(
+      run.org_id,
+      run.model,
+      piOptions(JSON.parse(conversation.pi_options ?? "{}"), true),
+    );
     const mounts = await this.mounts(user, run);
     execution.signature = JSON.stringify(mounts);
     const gateway = await this.dependencies.inference.issueGateway({
@@ -1780,10 +1794,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       run.harness,
       run.mode,
     );
-    await mkdir(sessionDirectory, {
-      recursive: true,
-      mode: 0o700,
-    });
+    // The trusted supervisor creates private native storage; the API cannot traverse it.
     let terminal = false;
     if (Buffer.byteLength(prompt) > 512 * 1024)
       throw new AppError(
@@ -1957,8 +1968,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     switch (event.type) {
       case "native_update": {
         const metadata = event.update._meta as
-          | Record<string, unknown>
-          | undefined;
+          Record<string, unknown> | undefined;
         const fragmentedSnapshot =
           (metadata?.wovenAssistantSnapshot ||
             metadata?.wovenThoughtSnapshot) &&

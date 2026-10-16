@@ -109,6 +109,7 @@ export function ConversationsPage({ project }: { project: Project }) {
   );
   const models = useResource<List<Model>>(
     `/enterprise/api/organizations/${org.id}/inference/models`,
+    60_000,
   );
   useWorkspaceChanges(list.reload);
   const folders = useResource<List<WorkspaceFolder>>(
@@ -510,7 +511,12 @@ function ModelControls({
           aria-label="Thinking level"
           title="Thinking level"
           value={thinking}
-          disabled={disabled || !canEdit || !conversation || !levels.length}
+          disabled={
+            disabled ||
+            !canEdit ||
+            !conversation ||
+            (!levels.length && !thinking)
+          }
           onChange={(e) => {
             const next = e.target.value;
             setThinking(next);
@@ -518,6 +524,11 @@ function ModelControls({
           }}
         >
           <option value="">Model default</option>
+          {thinking && !levels.includes(thinking) ? (
+            <option value={thinking} disabled>
+              {thinking} (unavailable)
+            </option>
+          ) : null}
           {levels.map((level) => (
             <option key={level} value={level}>
               {level === "xhigh"

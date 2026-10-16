@@ -26,7 +26,6 @@ type EngineRecord = {
   tokenDigest: string;
   optionsKey: string;
   sdkGeneration: string;
-  thinkingOverride?: string;
 };
 
 export type EnterprisePiDependencies = {
@@ -44,7 +43,6 @@ type PiProviderRoute = {
   baseUrl: string;
   api: "openai-responses" | "anthropic-messages" | "woven-claude-native";
   nativeCompaction: boolean;
-  customServer?: { id: string; url: string; models: string[] };
   enterpriseProvider?: {
     id: string;
     definition: Record<string, unknown>;
@@ -56,6 +54,15 @@ function piModelDefinition(request: ContainerRequest) {
     id: request.model,
     name: request.model,
     reasoning: request.pi?.supportsReasoning === true,
+    thinkingLevelMap:
+      request.pi?.thinking === undefined &&
+      request.pi?.defaultThinkingLevel === undefined
+        ? Object.fromEntries(
+            ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map(
+              (level) => [level, null],
+            ),
+          )
+        : request.pi?.thinkingLevelMap,
     input: request.pi?.supportsImages === true ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: request.pi?.contextWindow ?? 32768,
@@ -127,7 +134,16 @@ export function enterprisePiRoute(request: ContainerRequest): PiProviderRoute {
     baseUrl: `${gateway}/v1`,
     api: "openai-responses",
     nativeCompaction: false,
-    customServer: { id, url: `${gateway}/v1`, models: [request.model] },
+    enterpriseProvider: {
+      id,
+      definition: {
+        name: "WovenMatter Enterprise compatibility gateway",
+        baseUrl: `${gateway}/v1`,
+        api: "openai-responses",
+        authHeader: true,
+        models: [piModelDefinition(request)],
+      },
+    },
   };
 }
 
@@ -138,6 +154,16 @@ function routeKey(request: ContainerRequest) {
       `${route.provider}:${route.baseUrl}:${route.model}`,
     route.api,
     route.nativeCompaction ? "compact" : "no-compact",
+    JSON.stringify([
+      request.pi?.thinkingLevelMap,
+      request.pi?.defaultThinkingLevel,
+      request.pi?.modelCompat,
+      request.pi?.contextWindow,
+      request.pi?.maxOutputTokens,
+      request.pi?.supportsImages,
+      request.pi?.supportsReasoning,
+      request.pi?.thinking !== undefined,
+    ]),
   ].join(":");
 }
 
@@ -237,18 +263,20 @@ function validatedPiOptions(request: ContainerRequest) {
   return { codeMode, subagentConcurrency, thinking };
 }
 
-function defaultThinkingLevel(request: ContainerRequest) {
-  return request.pi?.supportsReasoning === true ? "medium" : "off";
-}
-
 function anthropicModelDefinition(request: ContainerRequest) {
   return {
     value: request.model,
     displayName: request.model,
-    supportedEffortLevels:
-      request.pi?.supportsReasoning === true
-        ? ["low", "medium", "high", "max"]
-        : [],
+    supportedEffortLevels: Object.entries(request.pi?.thinkingLevelMap ?? {})
+      .filter(([level, value]) => level !== "off" && value !== null)
+      .map(([level]) => level),
+    thinkingLevelMap: piModelDefinition(request).thinkingLevelMap,
+    useProviderDefaultThinking:
+      request.pi?.thinking === undefined &&
+      request.pi?.defaultThinkingLevel === undefined,
+    compat: request.pi?.modelCompat ?? {},
+    contextWindow: request.pi?.contextWindow,
+    maxTokens: request.pi?.maxOutputTokens,
   };
 }
 
@@ -439,7 +467,7 @@ async function createEngine(
       fallbackModels: [],
       codeMode: options.codeMode,
       subagentConcurrency: options.subagentConcurrency,
-      customServers: route.customServer ? [route.customServer] : [],
+      customServers: [],
     },
     credentials: {
       [route.provider]: {
@@ -462,7 +490,6 @@ async function createEngine(
     tokenDigest: tokenDigest(request),
     optionsKey: optionsKey(request),
     sdkGeneration: runtime.generation,
-    thinkingOverride: validatedPiOptions(request).thinking,
   };
 }
 
@@ -492,7 +519,7 @@ async function refreshEngine(record: EngineRecord, request: ContainerRequest) {
         fallbackModels: [],
         codeMode: options.codeMode,
         subagentConcurrency: options.subagentConcurrency,
-        customServers: route.customServer ? [route.customServer] : [],
+        customServers: [],
       },
     });
     record.optionsKey = nextOptionsKey;
@@ -561,29 +588,13 @@ export async function runEnterprisePi(
     record.sessionId = sessionId;
     await emit({ type: "native_session", sessionId });
     const options = validatedPiOptions(request);
-    if (options.thinking !== undefined) {
+    const thinking = options.thinking ?? request.pi?.defaultThinkingLevel;
+    if (thinking !== undefined)
       await record.engine.handle(
         "session/set_config_option",
-        { sessionId, configId: "thinking", value: options.thinking },
+        { sessionId, configId: "thinking", value: thinking },
         native.handle,
       );
-      record.thinkingOverride = options.thinking;
-    } else if (
-      record.thinkingOverride !== undefined ||
-      request.resumeId ||
-      retainedSessionId
-    ) {
-      await record.engine.handle(
-        "session/set_config_option",
-        {
-          sessionId,
-          configId: "thinking",
-          value: defaultThinkingLevel(request),
-        },
-        native.handle,
-      );
-      record.thinkingOverride = undefined;
-    }
     steering?.set(async (input) => {
       await record.engine.handle(
         "_session/steering",

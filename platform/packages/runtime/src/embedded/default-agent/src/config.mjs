@@ -30,11 +30,11 @@ export async function writePrivateJSON(path, value) {
     await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; });
   }
 }
-export function validateConfig(input) {
+export function validateConfig(input, enterpriseProviderIds = []) {
   if (!input || typeof input !== 'object') throw new Error('Invalid Pi Durable settings.');
   const uniqueStrings = (value) => Array.isArray(value) && value.length <= 2000 && value.every(v => typeof v === 'string' && v.length < 512) ? [...new Set(value)] : [];
   const customServers = localServers(input.customServers);
-  const supported = [...providers, ...customServers.map(s => s.id)];
+  const supported = [...providers, ...customServers.map(s => s.id), ...enterpriseProviderIds];
   return { customServers, providers: uniqueStrings(input.providers ?? providers).filter(p => supported.includes(p)),
     models: uniqueStrings(input.models), defaultModel: typeof input.defaultModel === 'string' ? input.defaultModel : null,
     fallbackModels: uniqueStrings(input.fallbackModels), searchProvider: 'exa', codeMode: ['on', 'only', 'off'].includes(input.codeMode) ? input.codeMode : 'on',

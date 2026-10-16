@@ -192,7 +192,25 @@ async function fixture(modelEntries?: Record<string, unknown>[]) {
       scope.projectId === projectId &&
       scope.userId === userId,
     fetcher: fakeFetch,
-    discoverModels: async () => ["gpt-example", "claude-example"],
+    discoverModels: async () => [
+      {
+        id: "gpt-example",
+        capabilities: {
+          supportsReasoning: false,
+          thinkingLevels: [],
+          thinkingLevelMap: {},
+        },
+      },
+      {
+        id: "claude-example",
+        capabilities: {
+          supportsReasoning: false,
+          thinkingLevels: [],
+          thinkingLevelMap: {},
+        },
+      },
+    ],
+    modelCatalogFetcher: async () => Response.json({ data: [] }),
     runtimeApiOrigin: "http://api.internal:4100",
   });
   await service.initialize();
@@ -490,6 +508,17 @@ test("model selection verifies the actual catalog and rejects non-Pi harnesses",
       supportsNativeCompaction: true,
       supportsImages: true,
       supportsReasoning: true,
+      thinkingLevelMap: {
+        off: null,
+        minimal: null,
+        low: null,
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+      defaultThinkingLevel: undefined,
+      modelCompat: undefined,
       routeIdentity: "openai:openai-responses:gpt-example",
       accountAffinity: "proxy-session-affinity",
     });
@@ -767,9 +796,8 @@ test("Pi capabilities use exact installed model metadata and preserve explicit f
     { id: "gpt-5-not-a-catalog-model", owned_by: "openai" },
   ]);
   try {
-    const { getBuiltinModels } = await import(
-      "@earendil-works/pi-ai/providers/all"
-    );
+    const { getBuiltinModels } =
+      await import("@earendil-works/pi-ai/providers/all");
     const expected = getBuiltinModels("openai").find(
       (model) => model.id === "gpt-4o",
     )!;
@@ -786,7 +814,122 @@ test("Pi capabilities use exact installed model metadata and preserve explicit f
       "gpt-5-not-a-catalog-model",
     );
     assert.equal(unknown.contextWindow, undefined);
-    assert.equal(unknown.supportsReasoning, undefined);
+    assert.equal(unknown.supportsReasoning, false);
+    assert.ok(
+      Object.values(unknown.thinkingLevelMap!).every((value) => value === null),
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("saved model capabilities preserve aliases and fresh snake_case metadata replaces them", async () => {
+  const modelEntries: Record<string, unknown>[] = [
+    { id: "custom-efforts", owned_by: "wme-capability-fixture" },
+  ];
+  const f = await fixture(modelEntries);
+  try {
+    await f.db.run(
+      "INSERT INTO inference_api_accounts(id,org_id,provider,label,group_family,state,created_at) VALUES(?,?,?,?,?,?,?)",
+      [
+        "capability-fixture",
+        f.orgId,
+        "custom",
+        "Synthetic model",
+        "openai-compatible",
+        "active",
+        new Date().toISOString(),
+      ],
+    );
+    await f.db.run(
+      "INSERT INTO inference_model_capabilities(account_id,model_id,capabilities) VALUES(?,?,?)",
+      [
+        "capability-fixture",
+        "custom-efforts",
+        JSON.stringify({
+          supportsReasoning: true,
+          thinkingLevels: ["low", "high"],
+          thinkingLevelMap: { low: "minimal", high: "high" },
+        }),
+      ],
+    );
+    assert.equal(
+      (await f.service.models(f.orgId))[0]!.thinkingLevelMap!.low,
+      "minimal",
+    );
+    modelEntries[0] = {
+      id: "custom-efforts",
+      owned_by: "wme-capability-fixture",
+      thinking_level_map: { max: "max" },
+    };
+    assert.deepEqual((await f.service.models(f.orgId))[0]!.thinkingLevels, [
+      "max",
+    ]);
+    modelEntries[0] = {
+      id: "custom-efforts",
+      owned_by: "wme-capability-fixture",
+      thinking_levels: ["low"],
+    };
+    const fresh = (await f.service.models(f.orgId))[0]!;
+    assert.deepEqual(fresh.thinkingLevels, ["low"]);
+    assert.equal(fresh.thinkingLevelMap!.low, "low");
+    modelEntries[0] = {
+      id: "custom-efforts",
+      owned_by: "wme-capability-fixture",
+      capabilities: { reasoning: false },
+    };
+    assert.deepEqual((await f.service.models(f.orgId))[0]!.thinkingLevels, []);
+  } finally {
+    await f.close();
+  }
+});
+
+test("an existing OpenRouter account uses current public model metadata without forwarding credentials", async () => {
+  const f = await fixture([
+    { id: "z-ai/glm-5.3-flash", owned_by: "wme-openrouter-fixture" },
+  ]);
+  try {
+    await f.db.run(
+      "INSERT INTO inference_api_accounts(id,org_id,provider,label,group_family,state,created_at) VALUES(?,?,?,?,?,?,?)",
+      [
+        "openrouter-fixture",
+        f.orgId,
+        "openrouter",
+        "Synthetic OR",
+        "openai-compatible",
+        "active",
+        new Date().toISOString(),
+      ],
+    );
+    let calls = 0;
+    f.service.options.modelCatalogFetcher = async (input, init) => {
+      calls++;
+      assert.equal(String(input), "https://openrouter.ai/api/v1/models");
+      assert.equal(new Headers(init?.headers).get("authorization"), null);
+      assert.equal(init?.redirect, "error");
+      return Response.json({
+        data: [
+          {
+            id: "z-ai/glm-5.3-flash",
+            reasoning: {
+              mandatory: true,
+              default_enabled: true,
+              supported_efforts: ["max", "high", "low"],
+              default_effort: "max",
+            },
+          },
+        ],
+      });
+    };
+    const model = (await f.service.models(f.orgId))[0]!;
+    assert.deepEqual(model.thinkingLevels, ["low", "high", "max"]);
+    assert.equal(model.defaultThinkingLevel, "max");
+    assert.equal(model.thinkingLevelMap!.off, null);
+    assert.equal(
+      (await f.service.resolvePiModel(f.orgId, model.id)).defaultThinkingLevel,
+      "max",
+    );
+    assert.equal(calls, 1);
   } finally {
     await f.close();
   }

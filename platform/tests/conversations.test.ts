@@ -2221,6 +2221,42 @@ test("permission-only launch resolves user defaults and thinking controls respec
   );
 });
 
+test("stale model thinking choices fail before message admission or workspace preparation", async (t) => {
+  const f = await fixture(t);
+  await assert.rejects(
+    f.service.create(f.users[0], f.project, {
+      model: "gpt-test",
+      pi: { thinking: "max" },
+    }),
+    { code: "invalid_pi_options" },
+  );
+  const c = await f.service.create(f.users[0], f.project, {
+    model: "gpt-test",
+    pi: { thinking: "high" },
+  });
+  f.deps.inference.models = async () => [
+    { id: "gpt-test", thinkingLevels: ["low"] },
+  ];
+  const before = await f.db.get<{ count: number }>(
+    "SELECT COUNT(*) count FROM conversation_messages WHERE conversation_id=?",
+    [c.id],
+  );
+  await assert.rejects(
+    f.service.admit(f.users[0], c.id, {
+      content: "capability-only fixture",
+      requestId: "stale-thinking-fixture",
+    }),
+    { code: "invalid_pi_options" },
+  );
+  assert.deepEqual(
+    await f.db.get(
+      "SELECT COUNT(*) count FROM conversation_messages WHERE conversation_id=?",
+      [c.id],
+    ),
+    before,
+  );
+});
+
 test("SDK activation and settings saves serialize without restoring a stale generation", async (t) => {
   const catalog = {
     bundledGeneration: "one",

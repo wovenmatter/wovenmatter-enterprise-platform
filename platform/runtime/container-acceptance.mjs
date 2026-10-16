@@ -223,10 +223,6 @@ async function request(
     harness,
     mode,
   );
-  await mkdir(sessionDirectory, {
-    recursive: true,
-    mode: 0o700,
-  });
   return {
     workingDirectory: "/workspace/.WovenMatter/Acceptance",
     runId: randomUUID(),

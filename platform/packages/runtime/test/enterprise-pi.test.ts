@@ -1092,6 +1092,40 @@ test("runPi keeps one durable session through model A to B to A across worker re
   assert.match(thirdPayload, /Beta from model B/);
 });
 
+test("OpenRouter and custom gateways preserve capabilities and accept High in the real Pi engine", async (t) => {
+  for (const provider of ["openrouter", "custom"] as const) {
+    const directory = await mkdtemp(join(tmpdir(), "wme-compatible-thinking-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    const g = gateway(t, [textStream("Reasoning accepted", "resp_compatible")]);
+    const input = {
+      ...request(g.baseUrl),
+      pi: {
+        provider,
+        thinking: "high" as const,
+        supportsReasoning: true,
+        supportsImages: true,
+        contextWindow: 131072,
+        maxOutputTokens: 32768,
+      },
+    };
+    const route = enterprisePiRoute(input);
+    const models = route.enterpriseProvider!.definition.models as Array<Record<string, unknown>>;
+    assert.equal(models[0]!.reasoning, true);
+    assert.deepEqual(models[0]!.input, ["text", "image"]);
+    assert.equal(models[0]!.contextWindow, 131072);
+    assert.equal(models[0]!.maxTokens, 32768);
+    assert.equal(route.nativeCompaction, false);
+    const events: RuntimeEvent[] = [];
+    await runEnterprisePi(input, (event) => { events.push(event); },
+      new AbortController().signal, undefined, undefined,
+      { sessionDirectory: directory, cwd: directory });
+    assert.ok(events.some((event) => event.type === "completed"));
+    const payload = JSON.stringify(g.requests.filter((entry) => entry.url === "/v1/responses"));
+    assert.match(payload, /"effort":"high"/);
+    assert.match(payload, /Reasoning accepted|fixture-model/);
+  }
+});
+
 test("runPi clears explicit thinking override back to model default", async (t) => {
   const directory = await mkdtemp(
     join(tmpdir(), "wme-enterprise-pi-thinking-"),
@@ -1137,7 +1171,7 @@ test("runPi clears explicit thinking override back to model default", async (t) 
   const payload = JSON.stringify(
     secondGateway.requests.filter((entry) => entry.url === "/v1/responses"),
   );
-  assert.match(payload, /medium/);
+  assert.doesNotMatch(payload, /"reasoning":/);
 });
 
 test("runPi executes embedded read tool and returns tool result to the model", async (t) => {

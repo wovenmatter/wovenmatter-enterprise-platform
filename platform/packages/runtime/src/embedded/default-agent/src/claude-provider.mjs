@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { getCurrentSystemPrompt, getCurrentTools } from '@earendil-works/pi-ai/utils/transcript';
+import { adjustMaxTokensForThinking, clampMaxTokensToContext } from '@earendil-works/pi-ai/api/simple-options';
 import { claudeExecutable, claudeProviders } from './claude-runtime.mjs';
 import { createClaudeAdmission } from './claude-admission.mjs';
 import { accessFailure, DefaultAgentError, operationErrorMessage } from './config.mjs';
@@ -137,13 +138,37 @@ export function claudeRequest(context, model, { accountID, authIdentity, compact
 function modelDefinitions(claude, provider) {
   return claude.models.map(model => ({
     id: model.value, name: claudeModelName(model), provider, api, baseUrl: 'process://claude-native',
-    reasoning: Boolean(model.supportedEffortLevels?.length), input: ['text', 'image'],
-    thinkingLevelMap: Object.fromEntries(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(level => [level,
+    reasoning: Boolean(model.supportedEffortLevels?.length || Object.entries(model.thinkingLevelMap ?? {}).some(([level, value]) => level !== 'off' && typeof value === 'string')), input: ['text', 'image'],
+    thinkingLevelMap: model.thinkingLevelMap ?? Object.fromEntries(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map(level => [level,
       level === 'off' || model.supportedEffortLevels?.includes(level) ? level : null])),
     // Discovery does not currently report context length. Use a conservative
     // host compaction budget instead of inventing a 1M entitlement for aliases.
-    contextWindow: 200000, maxTokens: 32000, cost: zeroCost(),
+    contextWindow: model.contextWindow ?? 200000, maxTokens: model.maxTokens ?? 32000, cost: zeroCost(),
+    // SDK-discovered efforts describe adaptive controls. Explicit Enterprise
+    // metadata also identifies older models that require token budgets.
+    useProviderDefaultThinking: model.useProviderDefaultThinking === true,
+    compat: model.compat ? { ...model.compat, forceAdaptiveThinking: model.compat.forceAdaptiveThinking === true } : { forceAdaptiveThinking: true },
   }));
+}
+
+function claudeThinkingOptions(model, context, options) {
+  const maxTokens = clampMaxTokensToContext(model, context, options.maxTokens ?? model.maxTokens);
+  if (model.useProviderDefaultThinking) return { max_tokens: maxTokens };
+  const level = options.reasoning;
+  if (level && model.thinkingLevelMap?.[level] === null) throw new DefaultAgentError('This thinking level is unavailable for the selected model.');
+  if (!level || level === 'off') return { max_tokens: maxTokens,
+    ...(model.thinkingLevelMap?.off === null ? {} : { thinking: { type: 'disabled' } }) };
+  if (!model.reasoning) throw new DefaultAgentError('This model does not support thinking.');
+  if (model.compat?.forceAdaptiveThinking === true) {
+    const mapped = model.thinkingLevelMap?.[level];
+    const effort = typeof mapped === 'string' ? mapped : level === 'minimal' ? 'low' : level;
+    return { max_tokens: maxTokens, thinking: { type: 'adaptive' }, output_config: { effort } };
+  }
+  const adjusted = adjustMaxTokensForThinking(maxTokens, model.maxTokens, level, options.thinkingBudgets);
+  const ceiling = clampMaxTokensToContext(model, context, adjusted.maxTokens);
+  const budget = Math.min(adjusted.thinkingBudget, Math.max(0, ceiling - 1024));
+  if (budget < 1024) throw new DefaultAgentError('This conversation has too little context remaining for thinking. Compact it or start a new conversation.');
+  return { max_tokens: ceiling, thinking: { type: 'enabled', budget_tokens: budget } };
 }
 
 export function registerClaudeProviders(modelRuntime, claude, credentials) {
@@ -251,6 +276,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
       };
       try {
         controller.signal.throwIfAborted();
+        const thinking = claudeThinkingOptions(model, context, options);
         const credential = model.provider === 'anthropic' ? await credentials.read('anthropic') : undefined;
         if (model.provider === 'anthropic' && !credential?.key) throw new DefaultAgentError('Authentication required. Add a Claude API key in Settings → Connections.');
         const env = await claude.environment(credential?.key);
@@ -272,12 +298,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
               projectionJSON: JSON.stringify(response) }]);
           }, ...dependencies.admission });
         directory = native.workspace;
-        const body = { tools: request.inventory.map(tool => ({ name: prefix + tool.name, description: tool.description, input_schema: tool.inputSchema })) };
-        if (options.maxTokens) body.max_tokens = options.maxTokens;
-        if (options.reasoning) {
-          if (model.reasoning) body.thinking = { type: 'adaptive' };
-          body.output_config = { effort: options.reasoning };
-        } else body.thinking = { type: 'disabled' };
+        const body = { tools: request.inventory.map(tool => ({ name: prefix + tool.name, description: tool.description, input_schema: tool.inputSchema })), ...thinking };
         await writeFile(join(directory, 'tools.json'), JSON.stringify(request.inventory), { mode: 0o600 });
         async function* input() {
           // Resume options may already identify an old native transcript. Hold
@@ -330,7 +351,7 @@ export function createClaudeStream(claude, credentials, dependencies = {}) {
           env: { ...env, ANTHROPIC_BASE_URL: gate.url, CLAUDE_CODE_EXTRA_BODY: JSON.stringify(body), ENABLE_TOOL_SEARCH: 'false', CLAUDE_CODE_MAX_RETRIES: '0',
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
             CLAUDE_CODE_TOTAL_TOKENS_REMINDER: 'off',
-            ...(options.maxTokens ? { CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(options.maxTokens) } : {}) },
+            CLAUDE_CODE_MAX_OUTPUT_TOKENS: String(body.max_tokens) },
           model: model.id, tools: [], skills: [], settingSources: [], strictMcpConfig: true,
           systemPrompt: { type: 'custom', prompt: request.system, snapshot: false },
           ...native.sdkOptions, maxTurns: 1, permissionMode: 'dontAsk', includePartialMessages: true,
