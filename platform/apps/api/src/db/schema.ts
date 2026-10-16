@@ -24,11 +24,15 @@ CREATE INDEX audit_org ON audit_events(org_id,created_at);
   await db.migrate(
     "foundation-v3-user-profile-reset",
     `
-ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'green' CHECK(theme IN ('green','cognac'));
+ALTER TABLE users ADD COLUMN theme TEXT NOT NULL DEFAULT 'green' CHECK(theme IN ('green','cognac','dark'));
 CREATE TABLE password_reset_tokens(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,token_hash TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,used_at TEXT,created_at TEXT NOT NULL,request_ip_hash TEXT);
 CREATE INDEX password_reset_tokens_user ON password_reset_tokens(user_id,created_at);
 CREATE INDEX password_reset_tokens_expiry ON password_reset_tokens(expires_at);
 `,
+  );
+  await db.migrate(
+    "foundation-v4-user-default-model",
+    "ALTER TABLE users ADD COLUMN default_model TEXT;",
   );
   await db.migrate(
     "platform-memberships-v1",

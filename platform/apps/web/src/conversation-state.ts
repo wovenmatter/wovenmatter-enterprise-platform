@@ -124,3 +124,56 @@ export function safeContentUrl(url: string): string | undefined {
     return;
   }
 }
+
+export function loadConversationDraft(
+  key: string,
+  storage = tabStorage(),
+): { content: string; kind: "message" | "comment" } | undefined {
+  try {
+    const value = JSON.parse(storage?.getItem(key) ?? "null");
+    if (
+      value &&
+      typeof value.content === "string" &&
+      value.content.length <= 100000 &&
+      ["message", "comment"].includes(value.kind)
+    )
+      return { content: value.content, kind: value.kind };
+  } catch {
+    /* Restricted storage must not prevent composing. */
+  }
+}
+export function saveConversationDraft(
+  key: string,
+  content: string,
+  kind: "message" | "comment",
+  storage = tabStorage(),
+) {
+  try {
+    if (content) storage?.setItem(key, JSON.stringify({ content, kind }));
+    else storage?.removeItem(key);
+  } catch {
+    /* The current draft remains available in memory. */
+  }
+}
+
+// A POST can settle after its component unmounts. Do not erase a newer draft
+// or another request's receipt when its older acknowledgement arrives.
+export function settleConversationInput(
+  pendingKey: string,
+  draftKey: string,
+  pending: PendingMessage,
+  storage = tabStorage(),
+) {
+  if (loadPendingMessage(pendingKey, storage)?.id !== pending.id) return;
+  const draft = loadConversationDraft(draftKey, storage);
+  if (
+    draft?.content === pending.content &&
+    draft.kind === (pending.kind ?? "message")
+  )
+    try {
+      storage?.removeItem(draftKey);
+    } catch {
+      /* Restricted storage. */
+    }
+  clearPendingMessage(pendingKey, storage);
+}

@@ -120,6 +120,14 @@ export function supervisorHandler(deps: SupervisorDependencies) {
           await file.close();
         }
       }
+      match = path.match(new RegExp(`^/v1/projects/(${ID})/sdk-catalog$`));
+      if (match && request.method === "GET") {
+        if (!deps.runtime.sdkCatalog)
+          return reply(response, 409, {
+            error: "sdk_catalog_unavailable",
+          });
+        return reply(response, 200, await deps.runtime.sdkCatalog(match[1]));
+      }
       match = path.match(new RegExp(`^/v1/organizations/(${ID})$`));
       if (match && ["GET", "PUT"].includes(request.method ?? "")) {
         return reply(response, 200, {

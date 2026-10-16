@@ -2,7 +2,7 @@ export const schema = `
 CREATE TABLE IF NOT EXISTS conversations (
  id TEXT PRIMARY KEY, org_id TEXT NOT NULL REFERENCES organizations(id), project_id TEXT NOT NULL REFERENCES projects(id),
  creator_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('read','write')),
- harness TEXT NOT NULL CHECK(harness IN ('codex','claude','grok','pi')), model TEXT NOT NULL, connection_id TEXT,
+ harness TEXT NOT NULL CHECK(harness = 'pi'), model TEXT NOT NULL, connection_id TEXT,
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT
 );
 CREATE TABLE IF NOT EXISTS conversation_members (

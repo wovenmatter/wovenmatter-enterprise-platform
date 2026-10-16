@@ -374,7 +374,7 @@ test("an unavailable sign-in service cannot prevent idle session or project revo
     now = new Date().toISOString();
   await f.db.batch([
     {
-      sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at) VALUES('background-thread',?,?,?,'Background work','write','codex','fixture-model',?,?)",
+      sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at) VALUES('background-thread',?,?,?,'Background work','write','pi','fixture-model',?,?)",
       params: [f.orgA, f.projectA, f.users.admin.id, now, now],
     },
     {
@@ -422,7 +422,7 @@ test("uncertain saved credentials stay fenced through a long outage and restart 
     projectId: f.projectA,
     userId: f.users.admin.id,
     runId: "fixture-run",
-    harness: "codex",
+    harness: "pi",
     model: "fixture-model",
   });
   f.setBeforeCommit(async () => {

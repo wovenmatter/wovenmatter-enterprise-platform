@@ -34,10 +34,10 @@ CREATE TABLE conversation_runtime_owners(conversation_id TEXT NOT NULL REFERENCE
 CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),project_id TEXT NOT NULL,generation INTEGER NOT NULL);
 ALTER TABLE conversation_runs ADD COLUMN runtime_ack INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE conversation_runs ADD COLUMN runtime_generation INTEGER NOT NULL DEFAULT 0;
-INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at,runtime_generation) VALUES('thread','org','project','owner','Fixture conversation','write','codex','fixture','now','now',3);
+INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at,runtime_generation) VALUES('thread','org','project','owner','Fixture conversation','write','pi','fixture','now','now',3);
 INSERT INTO conversation_members VALUES('thread','owner','owner','now');
 INSERT INTO conversation_messages(id,conversation_id,run_id,role,author_id,content,created_at) VALUES('user-message','thread','run','user','owner','fixture prompt','now'),('answer','thread','run','assistant',NULL,'fixture answer','now');
-INSERT INTO conversation_runs(id,conversation_id,org_id,project_id,user_id,request_id,user_message_id,assistant_message_id,status,mode,harness,model,created_at,runtime_cursor,runtime_ack,runtime_generation) VALUES('run','thread','org','project','owner','request','user-message','answer','completed','write','codex','fixture','now',4,3,3);
+INSERT INTO conversation_runs(id,conversation_id,org_id,project_id,user_id,request_id,user_message_id,assistant_message_id,status,mode,harness,model,created_at,runtime_cursor,runtime_ack,runtime_generation) VALUES('run','thread','org','project','owner','request','user-message','answer','completed','write','pi','fixture','now',4,3,3);
 INSERT INTO conversation_run_sources VALUES('run','file','fixture.txt','version');
 INSERT INTO conversation_events(conversation_id,run_id,type,data,created_at) VALUES('thread','run','assistant_delta','{}','now');
 INSERT INTO conversation_inputs(conversation_id,request_id,message_id,run_id,delivery) VALUES('thread','request','user-message','run','accepted');

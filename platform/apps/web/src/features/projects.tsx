@@ -1,20 +1,19 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Link,
-  NavLink,
   Route,
   Routes,
   useNavigate,
   useParams,
+  useSearchParams,
+  useLocation,
 } from "react-router-dom";
 import {
-  ArrowLeft,
   Cable,
   ChevronRight,
   Folder,
   PanelLeftClose,
   Plus,
-  Settings,
   Trash2,
   Users,
 } from "lucide-react";
@@ -29,6 +28,7 @@ import {
   type User,
 } from "../api";
 import { useWorkspace } from "../workspace";
+import { workspaceChanged, useWorkspaceChanges } from "../workspace-events";
 import {
   AsyncForm,
   Confirm,
@@ -56,7 +56,10 @@ export function ProjectsPage() {
   const projects = useResource<List<Project>>(
     `/enterprise/api/organizations/${org.id}/projects`,
   );
-  const [creating, setCreating] = useState(false);
+  const [query, setQuery] = useSearchParams();
+  const creating = query.get("new") === "1";
+  const setCreating = (value: boolean) => setQuery(value ? { new: "1" } : {});
+  useWorkspaceChanges(projects.reload);
   const navigate = useNavigate();
   return (
     <section>
@@ -143,6 +146,7 @@ export function ProjectsPage() {
               );
               setCreating(false);
               projects.reload();
+              workspaceChanged();
               navigate(`${orgBase}/projects/${p.id}`);
             }}
           />
@@ -175,7 +179,6 @@ function ProjectForm({
         onSave({
           name: data.get("name"),
           description: data.get("description"),
-          access: data.get("access"),
           ...(user.role === "owner" && !project && data.get("hostId")
             ? {
                 hostId: data.get("hostId"),
@@ -234,28 +237,21 @@ function ProjectForm({
           defaultValue={project?.description}
         />
       </Field>
-      <Field
-        label="Project access"
-        hint="Individual members may have more limited permissions."
-      >
-        <select name="access" defaultValue={project?.access ?? "write"}>
-          <option value="write">Full access</option>
-          <option value="read">Read-only</option>
-        </select>
-      </Field>
     </AsyncForm>
   );
 }
 export function ProjectPage() {
+  const location = useLocation();
   const { projectId } = useParams();
   const { isAdmin, org, orgBase, selectOrganization } = useWorkspace();
   const project = useResource<Project>(
     projectId ? `/enterprise/api/projects/${projectId}` : null,
+    10000,
   );
-  const [editing, setEditing] = useState(false);
   const [setupError, setSetupError] = useState("");
   const [deleting, setDeleting] = useState(false);
   const navigate = useNavigate();
+  useWorkspaceChanges(project.reload);
   useEffect(() => {
     if (project.data && project.data.orgId !== org.id)
       selectOrganization(project.data.orgId);
@@ -270,31 +266,11 @@ export function ProjectPage() {
   const p = project.data;
   return (
     <section className="project-page">
-      <Link to={`${orgBase}/projects`} className="breadcrumb">
-        <ArrowLeft size={15} />
-        Projects
-      </Link>
-      <PageHeader
-        title={p.name}
-        description={p.description}
-        actions={
-          isAdmin ? (
-            <>
-              <button className="secondary" onClick={() => setEditing(true)}>
-                <Settings size={16} />
-                Project settings
-              </button>
-              <button
-                className="icon-button danger"
-                aria-label="Delete project"
-                onClick={() => setDeleting(true)}
-              >
-                <Trash2 size={17} />
-              </button>
-            </>
-          ) : null
-        }
-      />
+      {/\/(files|members|settings)$/.test(location.pathname) ? (
+        <header className="project-pane-header">
+          <h1>{p.name}</h1>
+        </header>
+      ) : null}
       {p.status !== "ready" && p.status !== "active" ? (
         <div className="notice">
           <Status value={p.status} />
@@ -321,33 +297,27 @@ export function ProjectPage() {
         </div>
       ) : null}
       <ErrorNotice message={setupError} />
-      <nav className="tabs" aria-label="Project views">
-        <NavLink end to={`${orgBase}/projects/${p.id}`}>
-          Conversations
-        </NavLink>
-        <NavLink to={`${orgBase}/projects/${p.id}/files`}>Files</NavLink>
-        <NavLink to={`${orgBase}/projects/${p.id}/members`}>Members</NavLink>
-      </nav>
       <Suspense fallback={<Loading />}>
         <Routes>
           <Route index element={<ConversationsPage key={p.id} project={p} />} />
           <Route path="files" element={<FilesPage key={p.id} project={p} />} />
           <Route path="members" element={<ProjectMembers project={p} />} />
+          <Route
+            path="settings"
+            element={
+              isAdmin ? (
+                <ProjectSettings
+                  project={p}
+                  refresh={project.reload}
+                  onDelete={() => setDeleting(true)}
+                />
+              ) : (
+                <ErrorNotice message="Organization administrator access required." />
+              )
+            }
+          />
         </Routes>
       </Suspense>
-      {editing ? (
-        <Modal title="Project settings" onClose={() => setEditing(false)}>
-          <ProjectForm
-            project={p}
-            onCancel={() => setEditing(false)}
-            onSave={async (body) => {
-              await send(`/enterprise/api/projects/${p.id}`, body, "PATCH");
-              setEditing(false);
-              project.reload();
-            }}
-          />
-        </Modal>
-      ) : null}
       {deleting ? (
         <Confirm
           title="Delete project?"
@@ -363,6 +333,36 @@ export function ProjectPage() {
           files you need before continuing.
         </Confirm>
       ) : null}
+    </section>
+  );
+}
+function ProjectSettings({
+  project,
+  refresh,
+  onDelete,
+}: {
+  project: Project;
+  refresh: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <section className="subpage">
+      <PageHeader title="Project settings" />
+      <ProjectForm
+        project={project}
+        onCancel={() => window.history.back()}
+        onSave={async (body) => {
+          await send(`/enterprise/api/projects/${project.id}`, body, "PATCH");
+          refresh();
+          workspaceChanged();
+        }}
+      />
+      <div className="section-block">
+        <button className="text-button danger" onClick={onDelete}>
+          <Trash2 size={16} />
+          Delete project
+        </button>
+      </div>
     </section>
   );
 }
@@ -434,6 +434,7 @@ export function ProjectMembers({ project }: { project: Project }) {
                                 "PATCH",
                               );
                               members.reload();
+                              workspaceChanged();
                             } catch (e) {
                               setError((e as Error).message);
                             }
@@ -502,7 +503,7 @@ export function ProjectMembers({ project }: { project: Project }) {
               </select>
             </Field>
             <Field label="Access">
-              <select name="access">
+              <select name="access" defaultValue="write">
                 <option value="read">Read-only</option>
                 <option value="write">Full access</option>
               </select>

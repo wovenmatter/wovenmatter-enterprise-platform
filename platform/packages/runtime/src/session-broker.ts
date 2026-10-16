@@ -49,6 +49,10 @@ export async function sessionBroker(
               req.headers["content-type"] ?? "application/json",
             ),
             authorization: `Bearer ${grant.token}`,
+            ...(typeof req.headers["anthropic-beta"] === "string" &&
+            req.headers["anthropic-beta"].length <= 1024
+              ? { "anthropic-beta": req.headers["anthropic-beta"] }
+              : {}),
           },
         },
         (reply) => {

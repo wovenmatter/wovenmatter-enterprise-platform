@@ -18,13 +18,31 @@ export function identity(value: string): string {
   return value;
 }
 export function validateContainerRequest(input: ContainerRequest): void {
+  if (
+    typeof input.workingDirectory !== "string" ||
+    (input.workingDirectory !== "/workspace" &&
+      !/^\/workspace\/\.WovenMatter\/(?:scratch\/)?[^/\\\x00-\x1f\x7f]+$/.test(
+        input.workingDirectory,
+      )) ||
+    posix.normalize(input.workingDirectory) !== input.workingDirectory
+  )
+    throw new RuntimeError(
+      "invalid_working_directory",
+      "Invalid conversation working directory",
+    );
+  if (
+    input.workingDirectoryIdentity !== undefined &&
+    (!/^[0-9]+$/.test(input.workingDirectoryIdentity.device) ||
+      !/^[0-9]+$/.test(input.workingDirectoryIdentity.inode))
+  )
+    throw new RuntimeError(
+      "invalid_working_directory",
+      "Invalid directory identity",
+    );
   identity(input.runId);
   identity(input.projectId);
   if (input.assetId !== undefined) identity(input.assetId);
-  if (
-    !["codex", "claude", "grok", "pi"].includes(input.harness) ||
-    !["read", "write"].includes(input.access)
-  )
+  if (input.harness !== "pi" || !["read", "write"].includes(input.access))
     throw new RuntimeError("invalid_request", "Invalid harness or access mode");
   if (
     typeof input.prompt !== "string" ||
@@ -95,6 +113,64 @@ export function validateContainerRequest(input: ContainerRequest): void {
         "invalid_egress",
         "Invalid runtime egress capability",
       );
+  }
+  if (input.pi !== undefined) {
+    if (
+      input.pi.provider !== undefined &&
+      !["openai", "anthropic", "xai", "openrouter", "custom"].includes(
+        input.pi.provider,
+      )
+    )
+      throw new RuntimeError("invalid_request", "Invalid Pi provider");
+    if (
+      input.pi.api !== undefined &&
+      !["openai-responses", "anthropic-messages", "openai-compatible"].includes(
+        input.pi.api,
+      )
+    )
+      throw new RuntimeError("invalid_request", "Invalid Pi API");
+    for (const key of ["contextWindow", "maxOutputTokens"] as const) {
+      const value = input.pi[key];
+      if (
+        value !== undefined &&
+        (!Number.isSafeInteger(value) || value < 0 || value > 10_000_000)
+      )
+        throw new RuntimeError("invalid_request", "Invalid Pi model limit");
+    }
+    const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    if (input.pi.thinkingLevelMap !== undefined &&
+      (!input.pi.thinkingLevelMap || typeof input.pi.thinkingLevelMap !== "object" ||
+       Array.isArray(input.pi.thinkingLevelMap) ||
+       Object.entries(input.pi.thinkingLevelMap).some(([key, value]) =>
+         !levels.includes(key) || (value !== null &&
+           (typeof value !== "string" || !value || value.length > 64 || /[\r\n\x00]/.test(value))))))
+      throw new RuntimeError("invalid_request", "Invalid model thinking capabilities");
+    if (input.pi.defaultThinkingLevel !== undefined && !levels.includes(input.pi.defaultThinkingLevel))
+      throw new RuntimeError("invalid_request", "Invalid model thinking default");
+    if (input.pi.modelCompat !== undefined &&
+      (!input.pi.modelCompat || typeof input.pi.modelCompat !== "object" ||
+       Array.isArray(input.pi.modelCompat) ||
+       Object.keys(input.pi.modelCompat).some(key => key !== "forceAdaptiveThinking") ||
+       (input.pi.modelCompat.forceAdaptiveThinking !== undefined && typeof input.pi.modelCompat.forceAdaptiveThinking !== "boolean")))
+      throw new RuntimeError("invalid_request", "Invalid model compatibility");
+    if (
+      input.pi.routeIdentity !== undefined &&
+      (typeof input.pi.routeIdentity !== "string" ||
+        input.pi.routeIdentity.length > 512 ||
+        /[\r\n\x00]/.test(input.pi.routeIdentity))
+    )
+      throw new RuntimeError("invalid_request", "Invalid Pi route identity");
+    if (
+      input.pi.accountAffinity !== undefined &&
+      input.pi.accountAffinity !== "proxy-session-affinity"
+    )
+      throw new RuntimeError("invalid_request", "Invalid Pi account affinity");
+    if (
+      input.pi.sdkGeneration !== undefined &&
+      (typeof input.pi.sdkGeneration !== "string" ||
+        !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(input.pi.sdkGeneration))
+    )
+      throw new RuntimeError("invalid_request", "Invalid Pi SDK generation");
   }
 }
 export function isWithin(root: string, path: string): boolean {
@@ -202,6 +278,18 @@ function validateEventBody(value: unknown): RuntimeEvent {
     case "assistant_delta":
       if (typeof v.delta === "string" && Buffer.byteLength(v.delta) <= MAX_LINE)
         return { type: v.type, delta: v.delta };
+      break;
+    case "assistant_snapshot":
+      if (typeof v.text === "string" && Buffer.byteLength(v.text) <= MAX_LINE)
+        return { type: v.type, text: v.text };
+      break;
+    case "native_update":
+      if (v.update && typeof v.update === "object" && !Array.isArray(v.update))
+        return { type: v.type, update: v.update as Record<string, unknown> };
+      break;
+    case "native_records":
+      if (v.batch && typeof v.batch === "object" && !Array.isArray(v.batch))
+        return { type: v.type, batch: v.batch as Record<string, unknown> };
       break;
     case "citation":
       if (

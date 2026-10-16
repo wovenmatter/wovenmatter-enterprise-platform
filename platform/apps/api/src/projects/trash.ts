@@ -1,3 +1,4 @@
+import { purgeFolderStaging } from "./workspaces.js";
 import { projectRuntimeSpec } from "./runtime.js";
 import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
@@ -108,6 +109,7 @@ export async function purgeExpiredProject(ctx: AppContext, id: string) {
           if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
         }
       }
+      await purgeFolderStaging(ctx, id);
       const assets = await ctx.db.all<{ id: string }>(
         "SELECT id FROM reports WHERE project_id=?",
         [id],
@@ -198,10 +200,27 @@ export async function purgeExpiredProject(ctx: AppContext, id: string) {
           sql: "DELETE FROM conversation_events WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id=?)",
           params: [id],
         },
+        ...[
+          "conversation_activity_content",
+          "conversation_activity_snapshots",
+          "conversation_activity_state",
+        ].map((table) => ({
+          sql: `DELETE FROM ${table} WHERE run_id IN (SELECT id FROM conversation_runs WHERE project_id=?)`,
+          params: [id],
+        })),
+        ...[
+          "conversation_activity",
+          "conversation_native_records",
+          "conversation_inputs",
+        ].map((table) => ({
+          sql: `DELETE FROM ${table} WHERE conversation_id IN (SELECT id FROM conversations WHERE project_id=?)`,
+          params: [id],
+        })),
         {
-          sql: "UPDATE conversations SET title='Deleted thread',deleted_at=? WHERE project_id=?",
+          sql: "UPDATE conversations SET title='Deleted thread',deleted_at=?,folder_id=NULL,working_directory=NULL,scratch_name=NULL,directory_device=NULL,directory_inode=NULL WHERE project_id=?",
           params: [new Date().toISOString(), id],
         },
+        { sql: "DELETE FROM project_folders WHERE project_id=?", params: [id] },
         {
           sql: "DELETE FROM project_members WHERE project_id=?",
           params: [id],
