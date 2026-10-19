@@ -8,15 +8,7 @@ import {
   useSearchParams,
   useLocation,
 } from "react-router-dom";
-import {
-  Cable,
-  ChevronRight,
-  Folder,
-  PanelLeftClose,
-  Plus,
-  Trash2,
-  Users,
-} from "lucide-react";
+import { Cable, Folder, Plus, RefreshCw, Trash2, Users } from "lucide-react";
 import {
   api,
   date,
@@ -29,9 +21,13 @@ import {
 } from "../api";
 import { useWorkspace } from "../workspace";
 import { workspaceChanged, useWorkspaceChanges } from "../workspace-events";
+import { Icon, Switch } from "../components/controls";
 import {
   AsyncForm,
+  BackLink,
+  Card,
   Confirm,
+  DestinationRow,
   Empty,
   ErrorNotice,
   Field,
@@ -68,16 +64,16 @@ export function ProjectsPage() {
         actions={
           isAdmin ? (
             <button className="primary" onClick={() => setCreating(true)}>
-              <Plus size={17} />
+              <Icon icon={Plus} size={14} weight="control" />
               New project
             </button>
           ) : null
         }
       />
-      <ErrorNotice message={projects.error} />
-      {projects.loading ? (
+      <ErrorNotice message={projects.error} onRetry={projects.reload} />
+      {projects.loading && !projects.data ? (
         <Loading />
-      ) : (
+      ) : projects.error && !projects.data ? null : (
         <div className="table-wrap">
           {projects.data?.items.length ? (
             <table>
@@ -97,7 +93,7 @@ export function ProjectsPage() {
                         className="item-link"
                         to={`${orgBase}/projects/${p.id}`}
                       >
-                        <Folder size={20} />
+                        <Icon icon={Folder} size={16} />
                         <div>
                           <strong>{p.name}</strong>
                           {p.description ? (
@@ -276,6 +272,7 @@ export function ProjectPage() {
           <Status value={p.status} />
           <span>Project setup is managed in the background.</span>
           <button className="text-button" onClick={project.reload}>
+            <Icon icon={RefreshCw} size={12} weight="control" />
             Refresh status
           </button>
           {isAdmin && p.status === "needs_attention" ? (
@@ -346,23 +343,30 @@ function ProjectSettings({
   onDelete: () => void;
 }) {
   return (
-    <section className="subpage">
+    <section className="subpage settings-page">
       <PageHeader title="Project settings" />
-      <ProjectForm
-        project={project}
-        onCancel={() => window.history.back()}
-        onSave={async (body) => {
-          await send(`/enterprise/api/projects/${project.id}`, body, "PATCH");
-          refresh();
-          workspaceChanged();
-        }}
-      />
-      <div className="section-block">
-        <button className="text-button danger" onClick={onDelete}>
-          <Trash2 size={16} />
-          Delete project
-        </button>
-      </div>
+      <Card title="General">
+        <ProjectForm
+          project={project}
+          onCancel={() => window.history.back()}
+          onSave={async (body) => {
+            await send(`/enterprise/api/projects/${project.id}`, body, "PATCH");
+            refresh();
+            workspaceChanged();
+          }}
+        />
+      </Card>
+      <Card
+        title="Delete project"
+        detail="Removes the project and revokes its members’ access. Deleted projects can be restored for 30 days."
+      >
+        <div className="card-actions">
+          <button type="button" className="destructive" onClick={onDelete}>
+            <Icon icon={Trash2} size={14} />
+            Delete project
+          </button>
+        </div>
+      </Card>
     </section>
   );
 }
@@ -388,16 +392,16 @@ export function ProjectMembers({ project }: { project: Project }) {
         actions={
           isAdmin ? (
             <button className="primary" onClick={() => setAdding(true)}>
-              <Plus size={16} />
+              <Icon icon={Plus} size={14} weight="control" />
               Add member
             </button>
           ) : null
         }
       />
-      <ErrorNotice message={members.error || error} />
-      {members.loading ? (
+      <ErrorNotice message={members.error || error} onRetry={members.error ? members.reload : undefined} />
+      {members.loading && !members.data ? (
         <Loading />
-      ) : (
+      ) : members.error && !members.data ? null : (
         <div className="table-wrap">
           {members.data?.items.length ? (
             <table>
@@ -568,21 +572,17 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
   return (
     <section>
       {nested ? (
-        <Link
+        <BackLink
           to={`${orgBase}/settings`}
-          className="icon-button settings-back-link"
-          aria-label="Back to organization settings"
-          title="Back to organization settings"
-        >
-          <PanelLeftClose size={16} strokeWidth={1.75} />
-        </Link>
+          label="Back to organization settings"
+        />
       ) : null}
       <PageHeader
         title="Members"
         description="Manage the people who can work in your organization."
         actions={
           <button className="primary" onClick={() => setInvite(true)}>
-            <Plus size={17} />
+            <Icon icon={Plus} size={14} weight="control" />
             Invite member
           </button>
         }
@@ -603,10 +603,10 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
           />
         </div>
       ) : null}
-      <ErrorNotice message={members.error || error} />
-      {members.loading ? (
+      <ErrorNotice message={members.error || error} onRetry={members.error ? members.reload : undefined} />
+      {members.loading && !members.data ? (
         <Loading />
-      ) : (
+      ) : members.error && !members.data ? null : (
         <div className="table-wrap">
           {members.data?.items.length ? (
             <table>
@@ -626,7 +626,7 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
                   <tr key={m.id}>
                     <td>{m.name || "Invited member"}</td>
                     <td>{m.email}</td>
-                    <td>{m.role}</td>
+                    <td className="capitalize">{m.role}</td>
                     <td>
                       <Status
                         value={
@@ -764,14 +764,9 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
                 <option value="write">Full access</option>
               </select>
             </Field>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                name="enabled"
-                defaultChecked={edit.enabled}
-              />
+            <Switch name="enabled" defaultChecked={edit.enabled}>
               Organization membership enabled
-            </label>
+            </Switch>
           </AsyncForm>
         </Modal>
       ) : null}
@@ -808,9 +803,9 @@ export function SettingsPage() {
   >(user.role === "owner" ? "/enterprise/api/hosts" : null);
   const [saved, setSaved] = useState(false);
   return (
-    <section className="organization-settings">
+    <section className="organization-settings settings-page">
       <PageHeader title="Organization settings" />
-      <div className="settings-form">
+      <Card title="General">
         <AsyncForm
           key={org.id}
           onSubmit={async (d) => {
@@ -862,47 +857,29 @@ export function SettingsPage() {
           </Field>
         </AsyncForm>
         {saved ? <Success>Organization updated.</Success> : null}
-      </div>
-      <section className="section-block">
-        <h2>Management</h2>
-        <div className="settings-list">
-          <Link
-            className="setting-row setting-link"
+      </Card>
+      <Card title="Management">
+        <div className="destination-list">
+          <DestinationRow
             to={`${orgBase}/settings/deleted-projects`}
-          >
-            <div>
-              <strong>Deleted projects</strong>
-              <small>Restore projects or recover files within 30 days.</small>
-            </div>
-          </Link>
-          <Link
-            className="setting-row setting-link"
+            icon={Trash2}
+            title="Deleted projects"
+            detail="Restore projects or recover files within 30 days."
+          />
+          <DestinationRow
             to={`${orgBase}/settings/members`}
-          >
-            <Users size={16} />
-            <div>
-              <strong>Members</strong>
-              <small>
-                Invite people, update roles, and send password resets.
-              </small>
-            </div>
-            <ChevronRight size={11} className="destination-chevron" />
-          </Link>
-          <Link
-            className="setting-row setting-link"
+            icon={Users}
+            title="Members"
+            detail="Invite people, update roles, and send password resets."
+          />
+          <DestinationRow
             to={`${orgBase}/settings/connections`}
-          >
-            <Cable size={16} />
-            <div>
-              <strong>Connections</strong>
-              <small>
-                Manage inference accounts available to the organization.
-              </small>
-            </div>
-            <ChevronRight size={11} className="destination-chevron" />
-          </Link>
+            icon={Cable}
+            title="Connections"
+            detail="Manage inference accounts available to the organization."
+          />
         </div>
-      </section>
+      </Card>
     </section>
   );
 }

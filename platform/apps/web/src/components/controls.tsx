@@ -1,0 +1,555 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import {
+  Check,
+  ChevronDown,
+  Ellipsis,
+  Search,
+  type LucideIcon,
+} from "lucide-react";
+
+// WovenMatter DashboardStyle.swift glyph roles: normal 1.5, controls 1.75,
+// search/filter/alert 2, send arrows 2.5. Glyphs are decorative; controls
+// carry the accessible name.
+const strokes = { normal: 1.5, control: 1.75, search: 2, send: 2.5 } as const;
+export type IconWeight = keyof typeof strokes;
+export function Icon({
+  icon: Glyph,
+  size = 16,
+  weight = "normal",
+  className,
+}: {
+  icon: LucideIcon;
+  size?: number;
+  weight?: IconWeight;
+  className?: string;
+}) {
+  return (
+    <Glyph
+      size={size}
+      strokeWidth={strokes[weight]}
+      className={className}
+      aria-hidden="true"
+      focusable="false"
+    />
+  );
+}
+
+/** Trailing sidebar disclosure chevron: right when closed, down when open. */
+export function DisclosureChevron({ size = 12 }: { size?: number }) {
+  return (
+    <Icon
+      icon={ChevronDown}
+      size={size}
+      weight="control"
+      className="disclosure-chevron"
+    />
+  );
+}
+
+// One app popup is open at a time, matching native menus and popovers.
+let activePopup: { close(): void } | null = null;
+const margin = 8;
+function place(anchor: DOMRect, node: HTMLElement, align: "start" | "end") {
+  const width = node.offsetWidth,
+    height = node.offsetHeight,
+    viewWidth = document.documentElement.clientWidth,
+    viewHeight = window.innerHeight;
+  let top = anchor.bottom + 4;
+  if (top + height > viewHeight - margin) {
+    const above = anchor.top - 4 - height;
+    top = above >= margin ? above : Math.max(margin, viewHeight - margin - height);
+  }
+  let left = align === "end" ? anchor.right - width : anchor.left;
+  left = Math.min(Math.max(margin, left), Math.max(margin, viewWidth - margin - width));
+  return { top, left };
+}
+type Focus = "selected" | "first" | "last";
+function usePopup(align: "start" | "end") {
+  const [open, setOpen] = useState(false);
+  const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
+  const trigger = useRef<HTMLButtonElement>(null);
+  const popup = useRef<HTMLDivElement>(null);
+  const initialFocus = useRef<Focus>("selected");
+  const entry = useRef({ close: () => setOpen(false) });
+  const close = useCallback((restoreFocus: boolean) => {
+    setOpen(false);
+    if (restoreFocus) trigger.current?.focus({ preventScroll: true });
+  }, []);
+  const show = useCallback((focus: Focus) => {
+    initialFocus.current = focus;
+    setStyle({ visibility: "hidden" });
+    setOpen(true);
+  }, []);
+  useLayoutEffect(() => {
+    const node = popup.current;
+    if (!open || !node) return;
+    // The top layer keeps menus above dialogs and outside clipped rails.
+    if (typeof node.showPopover === "function" && !node.matches(":popover-open"))
+      node.showPopover();
+    if (activePopup && activePopup !== entry.current) activePopup.close();
+    activePopup = entry.current;
+    let frame = 0;
+    const update = () => {
+      const anchor = trigger.current?.getBoundingClientRect();
+      if (!anchor || anchor.bottom < 0 || anchor.top > window.innerHeight) {
+        close(false);
+        return;
+      }
+      const position = place(anchor, node, align);
+      // Position before focusing: hidden elements cannot take focus.
+      node.style.top = `${position.top}px`;
+      node.style.left = `${position.left}px`;
+      node.style.visibility = "visible";
+      setStyle(position);
+    };
+    update();
+    const items = focusable(node);
+    const selected =
+      initialFocus.current === "selected"
+        ? items.find((item) => item.getAttribute("aria-selected") === "true")
+        : undefined;
+    (selected ?? (initialFocus.current === "last" ? items.at(-1) : items[0]) ?? node)
+      .focus({ preventScroll: true });
+    let focused = document.activeElement as HTMLElement;
+    let focusedIndex = items.indexOf(focused);
+    const rememberFocus = () => {
+      focused = document.activeElement as HTMLElement;
+      focusedIndex = focusable(node).indexOf(focused);
+    };
+    // Canonical updates can disable or remove the focused action. Browsers
+    // then drop focus to body, outside this popup's keyboard handlers. Recover
+    // to an enabled neighbor (or the empty popup) without stealing focus from
+    // another control or a newly opened dialog.
+    const changes = new MutationObserver(() => {
+      const enabled = focusable(node);
+      const current = document.activeElement;
+      if (
+        focused !== node &&
+        !enabled.includes(focused) &&
+        (current === document.body || current === focused || node.contains(current))
+      ) {
+        (enabled[Math.max(0, Math.min(focusedIndex, enabled.length - 1))] ?? node)
+          .focus({ preventScroll: true });
+      }
+    });
+    node.addEventListener("focusin", rememberFocus);
+    changes.observe(node, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["disabled", "aria-disabled"],
+    });
+    const outside = (event: PointerEvent) => {
+      const element = event.target as Node;
+      if (!node.contains(element) && !trigger.current?.contains(element))
+        close(false);
+    };
+    const reposition = (event: Event) => {
+      if (event.target instanceof Node && node.contains(event.target)) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(update);
+    };
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      changes.disconnect();
+      node.removeEventListener("focusin", rememberFocus);
+      cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", outside, true);
+      document.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+      if (activePopup === entry.current) activePopup = null;
+    };
+  }, [open, align, close]);
+  function keys(event: KeyboardEvent<HTMLDivElement>, choose?: () => void) {
+    const node = popup.current;
+    if (!node) return;
+    const items = focusable(node);
+    const index = items.indexOf(document.activeElement as HTMLElement);
+    const move = (next: number) => {
+      event.preventDefault();
+      items[(next + items.length) % items.length]?.focus();
+    };
+    if (event.key === "ArrowDown") move(index + 1);
+    else if (event.key === "ArrowUp") move(index < 0 ? -1 : index - 1);
+    else if (event.key === "Home") move(0);
+    else if (event.key === "End") move(-1);
+    else if (event.key === "Escape" || event.key === "Tab") {
+      // Keep Escape from also closing an enclosing dialog or drawer.
+      event.preventDefault();
+      event.stopPropagation();
+      close(true);
+    } else if ((event.key === "Enter" || event.key === " ") && choose) {
+      event.preventDefault();
+      choose();
+    }
+  }
+  function triggerKeys(event: KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      show(event.key === "ArrowUp" ? "last" : "first");
+    }
+  }
+  return { open, show, close, style, trigger, popup, keys, triggerKeys };
+}
+function focusable(node: HTMLElement) {
+  return Array.from(
+    node.querySelectorAll<HTMLElement>(
+      '[role="menuitem"]:not(:disabled),[role="option"]:not([aria-disabled="true"])',
+    ),
+  );
+}
+
+const MenuContext = createContext<(restoreFocus: boolean) => void>(() => {});
+/**
+ * Compact action menu: a quiet icon trigger and a top-layer popup. Escape,
+ * Tab and outside clicks close it; keyboard dismissal returns focus to the
+ * trigger. Disabled actions stay visible and inert.
+ */
+export function Menu({
+  label,
+  children,
+  icon = Ellipsis,
+  iconSize = 16,
+  className = "",
+  align = "end",
+}: {
+  label: string;
+  children: ReactNode;
+  icon?: LucideIcon;
+  iconSize?: number;
+  className?: string;
+  align?: "start" | "end";
+}) {
+  const popup = usePopup(align);
+  const id = useId();
+  return (
+    <>
+      <button
+        ref={popup.trigger}
+        type="button"
+        className={`icon-button menu-trigger ${className}`}
+        aria-label={label}
+        title={label}
+        aria-haspopup="menu"
+        aria-expanded={popup.open}
+        aria-controls={popup.open ? id : undefined}
+        onClick={() => (popup.open ? popup.close(false) : popup.show("first"))}
+        onKeyDown={popup.triggerKeys}
+      >
+        <Icon icon={icon} size={iconSize} weight="control" />
+      </button>
+      {popup.open ? (
+        <div
+          ref={popup.popup}
+          id={id}
+          role="menu"
+          tabIndex={-1}
+          aria-label={label}
+          popover="manual"
+          className="popup menu"
+          style={popup.style}
+          onKeyDown={(event) => popup.keys(event)}
+        >
+          <MenuContext.Provider value={popup.close}>
+            {children}
+          </MenuContext.Provider>
+        </div>
+      ) : null}
+    </>
+  );
+}
+export function MenuItem({
+  children,
+  onSelect,
+  disabled,
+  danger,
+  icon,
+  title,
+}: {
+  children: ReactNode;
+  onSelect: () => void;
+  disabled?: boolean;
+  danger?: boolean;
+  icon?: LucideIcon;
+  title?: string;
+}) {
+  const close = useContext(MenuContext);
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={`menu-item${danger ? " danger" : ""}`}
+      disabled={disabled}
+      title={title}
+      onClick={() => {
+        close(true);
+        onSelect();
+      }}
+    >
+      {icon ? <Icon icon={icon} size={14} /> : null}
+      <span>{children}</span>
+    </button>
+  );
+}
+export function MenuLink({
+  href,
+  children,
+  download,
+}: {
+  href: string;
+  children: ReactNode;
+  download?: boolean;
+}) {
+  const close = useContext(MenuContext);
+  return (
+    <a
+      role="menuitem"
+      className="menu-item"
+      href={href}
+      download={download}
+      onClick={() => close(true)}
+    >
+      <span>{children}</span>
+    </a>
+  );
+}
+export function MenuSeparator() {
+  return <div role="separator" className="menu-separator" />;
+}
+
+export type PickerOption = {
+  value: string;
+  label: string;
+  /** Disambiguation shown only when needed, e.g. a provider. */
+  detail?: string;
+  description?: string;
+  disabled?: boolean;
+};
+/**
+ * WovenMatter composer selector: a full-height trigger with the current
+ * choice, and a titled popout listing full labels with a checked selection.
+ */
+export function Picker({
+  label,
+  heading,
+  icon,
+  value,
+  options,
+  placeholder,
+  disabled,
+  width = 288,
+  emptyMessage,
+  title,
+  className = "",
+  onChange,
+}: {
+  label: string;
+  heading: string;
+  title?: string;
+  className?: string;
+  icon: LucideIcon;
+  value: string;
+  options: PickerOption[];
+  placeholder: string;
+  disabled?: boolean;
+  width?: number;
+  emptyMessage?: string;
+  onChange: (value: string) => void;
+}) {
+  const popup = usePopup("start");
+  const close = popup.close;
+  useLayoutEffect(() => {
+    if (disabled && popup.open) close(true);
+  }, [disabled, popup.open, close]);
+  const id = useId();
+  const current = options.find((option) => option.value === value);
+  function choose(option?: PickerOption) {
+    if (disabled || !option || option.disabled) return;
+    popup.close(true);
+    if (option.value !== value) onChange(option.value);
+  }
+  return (
+    <>
+      <button
+        ref={popup.trigger}
+        type="button"
+        className={`composer-picker ${className}`}
+        data-value={value}
+        aria-haspopup="listbox"
+        aria-expanded={popup.open}
+        aria-controls={popup.open ? `${id}-list` : undefined}
+        aria-labelledby={`${id}-label ${id}-value`}
+        title={title ?? (current ? `${heading}: ${current.label}` : heading)}
+        // aria-disabled keeps keyboard focus when a pending save disables it.
+        aria-disabled={disabled || undefined}
+        onClick={() => {
+          if (disabled) return;
+          if (popup.open) popup.close(false);
+          else popup.show("selected");
+        }}
+        onKeyDown={(event) => {
+          if (!disabled) popup.triggerKeys(event);
+        }}
+      >
+        <span className="sr-only" id={`${id}-label`}>
+          {label}
+        </span>
+        <Icon icon={icon} size={14} weight="control" />
+        <span className="composer-picker-value" id={`${id}-value`}>
+          {current?.label ?? placeholder}
+        </span>
+        <Icon icon={ChevronDown} size={14} weight="control" />
+      </button>
+      {popup.open ? (
+        <div
+          ref={popup.popup}
+          tabIndex={-1}
+          popover="manual"
+          className="popup picker"
+          style={{ ...popup.style, width }}
+          onKeyDown={(event) =>
+            popup.keys(event, () =>
+              choose(
+                options.find(
+                  (_, index) =>
+                    `${id}-option-${index}` === document.activeElement?.id,
+                ),
+              ),
+            )
+          }
+        >
+          <div className="picker-heading" id={`${id}-heading`}>
+            {heading}
+          </div>
+          {options.length ? (
+            <div
+              role="listbox"
+              id={`${id}-list`}
+              aria-labelledby={`${id}-heading`}
+              className="picker-list"
+            >
+              {options.map((option, index) => {
+                const selected = option.value === value;
+                return (
+                  <div
+                    key={`${index}:${option.value}`}
+                    id={`${id}-option-${index}`}
+                    role="option"
+                    tabIndex={-1}
+                    aria-selected={selected}
+                    aria-disabled={disabled || option.disabled || undefined}
+                    data-value={option.value}
+                    className="picker-option"
+                    title={[option.label, option.detail, option.description]
+                      .filter(Boolean)
+                      .join("\n")}
+                    onClick={() => choose(option)}
+                  >
+                    <span className="picker-option-text">
+                      <span>{option.label}</span>
+                      {option.detail ? <small>{option.detail}</small> : null}
+                      {option.description ? (
+                        <small className="picker-option-description">
+                          {option.description}
+                        </small>
+                      ) : null}
+                    </span>
+                    {selected ? (
+                      <Icon icon={Check} size={14} weight="control" />
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="picker-empty">{emptyMessage}</p>
+          )}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** DashboardSwitchToggleStyle: 28 × 16 switch before its label. */
+export function Switch({
+  children,
+  ...input
+}: {
+  children: ReactNode;
+  name?: string;
+  checked?: boolean;
+  defaultChecked?: boolean;
+  disabled?: boolean;
+  onChange?: (event: ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <label className="switch">
+      <input type="checkbox" role="switch" {...input} />
+      <span className="switch-track" aria-hidden="true" />
+      <span className="switch-label">{children}</span>
+    </label>
+  );
+}
+
+/** DashboardSearchField: 34-point whisper field with Clear when populated. */
+export function SearchField({
+  label,
+  placeholder,
+  value,
+  onChange,
+}: {
+  label: string;
+  placeholder: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  return (
+    <div className="search-field">
+      <Icon icon={Search} size={14} weight="search" />
+      <input
+        ref={input}
+        type="search"
+        aria-label={label}
+        placeholder={placeholder}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          // Escape clears a populated search; an empty one lets the drawer close.
+          if (event.key === "Escape" && value) {
+            event.preventDefault();
+            event.stopPropagation();
+            onChange("");
+          }
+        }}
+      />
+      {value ? (
+        <button
+          type="button"
+          className="search-clear"
+          aria-label="Clear search"
+          onClick={() => {
+            onChange("");
+            input.current?.focus();
+          }}
+        >
+          Clear
+        </button>
+      ) : null}
+    </div>
+  );
+}

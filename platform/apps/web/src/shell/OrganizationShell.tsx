@@ -1,15 +1,13 @@
 import { lazy, type ReactNode } from "react";
 import {
-  Link,
   Navigate,
   Route,
   Routes,
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { PanelLeftClose } from "lucide-react";
 import type { Organization, User } from "../api";
-import { ErrorNotice } from "../components/ui";
+import { BackLink, ErrorNotice } from "../components/ui";
 import {
   ProjectsPage,
   ProjectPage,
@@ -155,14 +153,10 @@ function SettingsNested({
   const { orgBase } = useWorkspace();
   return (
     <div className="settings-nested">
-      <Link
+      <BackLink
         to={`${orgBase}/settings`}
-        className="icon-button settings-back-link"
-        aria-label="Back to organization settings"
-        title="Back to organization settings"
-      >
-        <PanelLeftClose size={16} strokeWidth={1.75} />
-      </Link>
+        label="Back to organization settings"
+      />
       <span className="sr-only">{title}</span>
       {children}
     </div>

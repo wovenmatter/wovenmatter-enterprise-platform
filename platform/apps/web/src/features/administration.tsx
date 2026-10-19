@@ -2,6 +2,7 @@ import { Link, Navigate } from "react-router-dom";
 import { Folder, Plus } from "lucide-react";
 import type { Organization, User } from "../api";
 import { Empty, PageHeader } from "../components/ui";
+import { Icon } from "../components/controls";
 
 export function AdministrationPage({
   user,
@@ -26,7 +27,7 @@ export function AdministrationPage({
         actions={
           user.role === "owner" ? (
             <button className="primary" onClick={onCreate}>
-              <Plus size={17} />
+              <Icon icon={Plus} size={14} weight="control" />
               Create organization
             </button>
           ) : null
@@ -46,7 +47,7 @@ export function AdministrationPage({
                 <tr key={org.id}>
                   <td>
                     <Link className="item-link" to={`/organizations/${org.id}/projects`}>
-                      <Folder size={20} />
+                      <Icon icon={Folder} size={16} />
                       <strong>{org.name}</strong>
                     </Link>
                   </td>

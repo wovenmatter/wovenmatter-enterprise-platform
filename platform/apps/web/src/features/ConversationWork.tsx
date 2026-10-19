@@ -1,8 +1,23 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Copy, Search } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  ChevronUp,
+  Circle,
+  CircleDot,
+  Copy,
+  ListChecks,
+  LoaderCircle,
+  Search,
+  Sparkles,
+  TriangleAlert,
+  Wrench,
+} from "lucide-react";
 import { api, errorMessage } from "../api";
 import { Modal } from "../components/ui";
+import { Icon } from "../components/controls";
 import { RichText } from "../components/RichText";
+import { useCopyFeedback } from "../components/useCopyFeedback";
 import {
   mergeActivities,
   workParts,
@@ -10,6 +25,12 @@ import {
   type ActivityPage,
 } from "../activity-state";
 
+/** Work disclosure indicator: follows its label, right closed and down open. */
+function WorkChevron({ size = 11 }: { size?: number }) {
+  return (
+    <Icon icon={ChevronRight} size={size} weight="search" className="work-chevron" />
+  );
+}
 export function useConversationActivities(id: string) {
   const [items, setItems] = useState<Activity[]>([]);
   const activeId = useRef(id);
@@ -214,10 +235,9 @@ const TextActivity = memo(function TextActivity({
 }) {
   const { ref, visible } = useVisible<HTMLDivElement>();
   const detail = useDetail(id, item, visible);
-  const [copyState, setCopyState] = useState("");
+  const { copyState, copy: copyFeedback } = useCopyFeedback(`${id}:${item.key}:${item.revision}`);
   async function copy() {
-    setCopyState("Copying…");
-    try {
+    await copyFeedback(async () => {
       let offset = 0,
         complete = "";
       for (;;) {
@@ -231,10 +251,7 @@ const TextActivity = memo(function TextActivity({
         offset = page.nextOffset!;
       }
       await navigator.clipboard.writeText(complete);
-      setCopyState("Copied");
-    } catch (e) {
-      setCopyState(errorMessage(e));
-    }
+    });
   }
   return (
     <div
@@ -255,12 +272,16 @@ const TextActivity = memo(function TextActivity({
         <div className="response-actions">
           <button
             type="button"
-            className="icon-button"
+            className="icon-button small"
             aria-label="Copy response"
-            title="Copy response"
+            title="Copy complete response"
             onClick={() => void copy()}
           >
-            {copyState === "Copied" ? <Check size={15} /> : <Copy size={15} />}
+            <Icon
+              icon={copyState === "Copied" ? Check : Copy}
+              size={12}
+              weight="control"
+            />
           </button>
           <small role="status">{copyState}</small>
         </div>
@@ -291,10 +312,11 @@ const ActivityDetails = memo(function ActivityDetails({
         if (next) onInspect();
       }}
     >
-      <summary>
-        <span>
+      <summary data-status={item.status}>
+        <span className="work-title">
           {item.title || (item.kind === "thinking" ? "Thinking" : "Work")}
         </span>
+        <WorkChevron size={10} />
         <small>{item.status}</small>
         {item.kind === "subagent" && item.metadata.model ? (
           <small>{String(item.metadata.model)}</small>
@@ -334,6 +356,8 @@ function WorkGroup({
   const working = items.some((item) =>
     ["running", "working", "cancelling", "pending"].includes(item.status),
   );
+  const failed = items.some((item) => item.status === "failed");
+  const thoughtOnly = items.every((item) => item.kind === "thinking");
   const [open, setOpen] = useState(false);
   const label = tools
     ? commands === tools
@@ -355,12 +379,28 @@ function WorkGroup({
         if (event.currentTarget.open) onInspect();
       }}
     >
-      <summary>
-        <ChevronDown size={14} />
-        <span>{label}</span>
-        {working ? (
-          <span className="native-working" aria-label="Working" />
-        ) : null}
+      <summary
+        className={failed && !working ? "is-failed" : thoughtOnly ? "is-thought" : ""}
+      >
+        <span className="work-icon">
+          <Icon
+            icon={
+              working
+                ? LoaderCircle
+                : failed
+                  ? TriangleAlert
+                  : thoughtOnly
+                    ? Sparkles
+                    : Wrench
+            }
+            size={12}
+            weight="control"
+            className={working ? "spin" : undefined}
+          />
+        </span>
+        <span className="work-title">{label}</span>
+        <WorkChevron size={10} />
+        {working ? <span className="sr-only">Working</span> : null}
       </summary>
       {open
         ? items.map((item) => (
@@ -437,13 +477,19 @@ export const ConversationRunWork = memo(function ConversationRunWork({
             }
           }}
         >
-          <summary>
-            {status === "completed"
-              ? "Worked"
-              : status === "cancelled"
-                ? "Stopped"
-                : "Work interrupted"}
-            {duration === undefined ? "" : " for " + duration + "s"}
+          <summary className={status === "completed" || status === "cancelled" ? "" : "is-failed"}>
+            {status === "completed" || status === "cancelled" ? null : (
+              <Icon icon={TriangleAlert} size={13} weight="search" />
+            )}
+            <span>
+              {status === "completed"
+                ? "Worked"
+                : status === "cancelled"
+                  ? "Stopped"
+                  : "Work interrupted"}
+              {duration === undefined ? "" : " for " + duration + "s"}
+            </span>
+            <WorkChevron />
           </summary>
           {work.map(render)}
         </details>
@@ -492,32 +538,74 @@ export function NativeChecklist({
           }[])
         : [],
     );
+  const [expanded, setExpanded] = useState(false);
   if (!tasks.length) return null;
   const done = tasks.filter((item) => item.status === "completed").length;
-  const current = tasks.find((item) => item.status === "in_progress");
+  const current =
+    tasks.find((item) => item.status === "in_progress") ??
+    tasks.find((item) => item.status !== "completed") ??
+    tasks.at(-1);
+  const statusName = (status: string) =>
+    status === "completed"
+      ? "Completed"
+      : status === "in_progress"
+        ? "Running"
+        : status === "cancelled"
+          ? "Cancelled"
+          : "Pending";
   return (
-    <details className="native-task-badge">
-      <summary>
-        <span>{current?.content || "Task progress"}</span>
-        <small>
+    <div className="native-task-badge">
+      <button
+        type="button"
+        className="task-summary"
+        aria-expanded={expanded}
+        aria-label={`${expanded ? "Collapse tasks" : "Tasks"}: ${done} of ${tasks.length} complete. Current task: ${current?.content ?? ""}`}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="task-icon">
+          <Icon icon={ListChecks} size={12} weight="control" />
+        </span>
+        <span className="task-label">Tasks</span>
+        <span className="task-current">{current?.content}</span>
+        <span className={`task-count${done === tasks.length ? " complete" : ""}`}>
           {done}/{tasks.length}
-        </small>
-      </summary>
-      <ul>
-        {tasks.map((item, index) => (
-          <li key={item.id + ":" + index} data-status={item.status}>
-            <span>
-              {item.status === "completed"
-                ? "✓"
-                : item.status === "in_progress"
-                  ? "•"
-                  : "○"}
-            </span>
-            {item.content}
-          </li>
-        ))}
-      </ul>
-    </details>
+        </span>
+        {tasks.length >= 2 && tasks.length <= 10 ? (
+          <span className="task-segments" aria-hidden="true">
+            {tasks.map((item, index) => (
+              <span key={item.id + ":" + index} data-status={item.status} />
+            ))}
+          </span>
+        ) : null}
+        <Icon icon={ChevronUp} size={10} weight="search" className="task-chevron" />
+      </button>
+      {expanded ? (
+        <ul aria-label={`Task list. ${done} of ${tasks.length} complete.`}>
+          {tasks.map((item, index) => (
+            <li
+              key={item.id + ":" + index}
+              data-status={item.status}
+              aria-label={`${statusName(item.status)}: ${item.content}`}
+            >
+              <span className="task-icon" aria-hidden="true">
+                <Icon
+                  icon={
+                    item.status === "completed"
+                      ? Check
+                      : item.status === "in_progress"
+                        ? CircleDot
+                        : Circle
+                  }
+                  size={11}
+                  weight="search"
+                />
+              </span>
+              <span>{item.content}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 function HistoryRecord({
@@ -550,9 +638,16 @@ function HistoryRecord({
     return () => abort.abort();
   }, [id, ordinal, open]);
   return (
-    <details open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details
+      className="history-record"
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
       <summary>
-        {kind} · {new Date(createdAt).toLocaleString()}
+        <span>
+          {kind} · {new Date(createdAt).toLocaleString()}
+        </span>
+        <WorkChevron size={10} />
       </summary>
       {open ? <pre>{error || payload || "Loading capture…"}</pre> : null}
     </details>
@@ -639,6 +734,7 @@ export function NativeHistory({
           }}
         >
           <form
+            className="history-search"
             onSubmit={(e) => {
               e.preventDefault();
               void search();
@@ -659,16 +755,20 @@ export function NativeHistory({
               className="icon-button"
               aria-label="Search history"
             >
-              <Search size={16} />
+              <Icon icon={Search} size={14} weight="search" />
             </button>
             <a
-              className="text-button"
+              className="secondary button-link"
               href={"/enterprise/api/conversations/" + id + "/archive/export"}
             >
               Export
             </a>
           </form>
-          {error ? <p className="danger">{error}</p> : null}
+          {error ? (
+            <p className="danger" role="alert">
+              {error}
+            </p>
+          ) : null}
           <div className="native-history-results">
             {page?.items.map((item) => (
               <HistoryRecord

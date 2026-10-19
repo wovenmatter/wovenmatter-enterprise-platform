@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download } from "lucide-react";
 import { ErrorNotice, Loading, PageHeader } from "../components/ui";
 import { errorMessage } from "../api";
+import { Icon } from "../components/controls";
 import { useWorkspace } from "../workspace";
 import {
   boundedBytes,
@@ -137,7 +138,7 @@ export function SourcePage() {
             : `${orgBase}/library`
         }
       >
-        <ArrowLeft size={15} />
+        <Icon icon={ArrowLeft} size={13} weight="control" />
         Back to files
       </Link>
       <PageHeader
@@ -145,7 +146,7 @@ export function SourcePage() {
         description={`${versionId ? "Saved document version" : "Current document"}${page ? ` · Page ${page}` : ""}`}
         actions={
           <a className="primary button-link" href={contentUrl} download>
-            <Download size={16} />
+            <Icon icon={Download} size={14} weight="control" />
             Download original
           </a>
         }
@@ -161,7 +162,7 @@ export function SourcePage() {
           referrerPolicy="no-referrer"
         />
       ) : preview?.kind === "image" ? (
-        <div className="image-preview">
+        <div className="image-preview" tabIndex={0} aria-label={`Image preview of ${preview.filename}`}>
           <img
             src={preview.url}
             alt={preview.filename}
@@ -180,13 +181,19 @@ export function SourcePage() {
           />
         </div>
       ) : preview?.kind === "text" ? (
-        <pre className="text-preview">{preview.text}</pre>
+        <pre
+          className="text-preview"
+          tabIndex={0}
+          aria-label={`Text of ${preview.filename}`}
+        >
+          {preview.text}
+        </pre>
       ) : preview ? (
         <div className="preview-fallback">
           <h2>Open the original document</h2>
           <p>{preview.message}</p>
           <a className="secondary button-link" href={contentUrl} download>
-            <Download size={16} />
+            <Icon icon={Download} size={14} weight="control" />
             Download original
           </a>
         </div>

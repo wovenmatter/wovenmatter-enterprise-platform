@@ -1,5 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
+// Composer selectors are titled popouts (WovenMatter composer pickers):
+// open the real trigger, then choose the visible option.
+async function choose(page, label, value) {
+  await page.getByRole("button", { name: new RegExp(`^${label}\\b`) }).click();
+  await page.locator(`[role="option"][data-value="${value}"]`).click();
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+}
+const picker = (page, label) =>
+  page.getByRole("button", { name: new RegExp(`^${label}\\b`) });
 const evidence = process.env.WME_E2E_OUTPUT ?? "/tmp/wme-e2e-evidence";
 const fixturePath = `${evidence}/fixture.json`;
 const ensureFixture = async (page) => {
@@ -173,7 +182,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
   await page.unroute("**/api/me");
   await page.reload();
   await page.getByLabel("Display name").fill("Example Browser Owner");
-  await page.getByLabel("Theme").selectOption("cognac");
+  await page.getByRole("radio", { name: "Cognac theme" }).check();
   await page
     .getByRole("button", {
       name: "Save profile",
@@ -186,7 +195,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
   await expect(page.getByLabel("Display name")).toHaveValue(
     "Example Browser Owner",
   );
-  await expect(page.getByLabel("Theme")).toHaveValue("cognac");
+  await expect(page.getByRole("radio", { name: "Cognac theme" })).toBeChecked();
   await page.screenshot({
     path: `${evidence}/personal-settings-cognac-desktop.png`,
     fullPage: true,
@@ -215,7 +224,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
     }),
   ).toBeEnabled();
   await page.unroute("**/api/password-reset/request");
-  await page.getByLabel("Theme").selectOption("green");
+  await page.getByRole("radio", { name: "Green theme" }).check();
   await page
     .getByRole("button", {
       name: "Save profile",
@@ -245,7 +254,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
   await expect(page.locator(".account")).not.toContainText("Platform owner");
   await page
     .getByRole("button", {
-      name: "New Organization",
+      name: "New organization",
       exact: true,
     })
     .click();
@@ -418,7 +427,8 @@ test("project creation, ordinary files, organization sharing and revocation", as
       exact: true,
     }),
   ).toBeVisible();
-  await page.getByLabel("Actions for case-notes.txt").selectOption("rename");
+  await page.getByRole("button", { name: "Actions for case-notes.txt" }).click();
+  await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
   await page
     .getByLabel("Name", {
       exact: true,
@@ -506,8 +516,11 @@ test("project creation, ordinary files, organization sharing and revocation", as
     })
     .click();
   await page
-    .getByLabel("Actions for Shared references")
-    .selectOption("sharing");
+    .getByRole("button", { name: "Actions for Shared references" })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Share with projects", exact: true })
+    .click();
   await page
     .getByLabel("Project", {
       exact: true,
@@ -575,8 +588,11 @@ test("project creation, ordinary files, organization sharing and revocation", as
     })
     .click();
   await page
-    .getByLabel("Actions for Shared references")
-    .selectOption("sharing");
+    .getByRole("button", { name: "Actions for Shared references" })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Share with projects", exact: true })
+    .click();
   await page
     .getByRole("button", {
       name: "Unshare",
@@ -631,11 +647,13 @@ test("durable conversation streams and can add a project colleague", async ({
       exact: true,
     })
     .click();
-  await expect(
-    page.getByLabel("Conversation model", { exact: true }),
-  ).toHaveValue("gpt-test-fixture");
-  await page.getByLabel("Thinking level", { exact: true }).selectOption("high");
-  await expect(page.getByLabel("Thinking level", { exact: true })).toHaveValue(
+  await expect(picker(page, "Conversation model")).toHaveAttribute(
+    "data-value",
+    "gpt-test-fixture",
+  );
+  await choose(page, "Thinking level", "high");
+  await expect(picker(page, "Thinking level")).toHaveAttribute(
+    "data-value",
     "high",
   );
   await expect(
@@ -648,12 +666,12 @@ test("durable conversation streams and can add a project colleague", async ({
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Conversation settings", exact: true })
+    .getByRole("menuitem", { name: "Conversation settings", exact: true })
     .click();
   await page.getByLabel("Title", { exact: true }).fill("Browser conversation");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.getByLabel("Message mode").selectOption("comment");
+  await choose(page, "Message mode", "comment");
   await page.getByLabel("Message your agent").fill("Background comment only");
   await page
     .getByRole("button", {
@@ -674,12 +692,8 @@ test("durable conversation streams and can add a project colleague", async ({
       },
     ),
   ).toHaveCount(0);
-  await page.getByLabel("Message mode").selectOption("message");
-  await page
-    .getByLabel("Conversation model", {
-      exact: true,
-    })
-    .selectOption("gpt-test-fixture");
+  await choose(page, "Message mode", "message");
+  await choose(page, "Conversation model", "gpt-test-fixture");
   await page.getByLabel("Message your agent").fill("Test durable delivery");
   await page
     .getByRole("button", {
@@ -707,8 +721,7 @@ test("durable conversation streams and can add a project colleague", async ({
   await page
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
-  const stopBackground = page.getByRole("button", {
-    name: "Stop background work",
+  const stopBackground = page.getByRole("menuitem", { name: "Stop background work",
     exact: true,
   });
   await expect(stopBackground).toBeVisible();
@@ -1070,7 +1083,7 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
     .click();
   await page
     .getByRole("button", {
-      name: "New Organization",
+      name: "New organization",
       exact: true,
     })
     .click();
@@ -2117,9 +2130,7 @@ test("organization assets start without projects from Files and Assets, remain p
   await page
     .getByRole("button", { name: "Start session", exact: true })
     .click();
-  await page
-    .getByLabel("Conversation model", { exact: true })
-    .selectOption("synthetic-asset-pi");
+  await choose(page, "Conversation model", "synthetic-asset-pi");
   await page
     .getByLabel("Message your agent", { exact: true })
     .fill("Prepare an overview with a useful generated data table.");
@@ -2404,16 +2415,14 @@ test("native streaming retains chronological work, task progress, full copy and 
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Conversation settings", exact: true })
+    .getByRole("menuitem", { name: "Conversation settings", exact: true })
     .click();
   await page
     .getByLabel("Title", { exact: true })
     .fill("Native streaming review");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page
-    .getByLabel("Conversation model", { exact: true })
-    .selectOption("gpt-test-fixture");
+  await choose(page, "Conversation model", "gpt-test-fixture");
   await page
     .getByLabel("Message your agent")
     .fill("[native-stream] Inspect the record.");
@@ -2484,7 +2493,7 @@ test("native streaming retains chronological work, task progress, full copy and 
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Native history", exact: true })
+    .getByRole("menuitem", { name: "Native history", exact: true })
     .click();
   await page.getByRole("button", { name: "Search history" }).click();
   await expect(page.locator(".native-history-results")).toContainText(
@@ -2504,12 +2513,12 @@ test("native streaming retains chronological work, task progress, full copy and 
   await page
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
-  await page.getByRole("button", { name: "Conversation settings" }).click();
+  await page.getByRole("menuitem", { name: "Conversation settings" }).click();
   await expect(
-    page.getByLabel("Pi Durable version", { exact: true }),
+    page.getByLabel("Pi Durable SDK version", { exact: true }),
   ).toHaveValue("fixture-sdk-one");
   await page
-    .getByLabel("Pi Durable version", { exact: true })
+    .getByLabel("Pi Durable SDK version", { exact: true })
     .selectOption("fixture-sdk-two");
   await page
     .getByRole("button", { name: "Apply version", exact: true })
@@ -2521,7 +2530,7 @@ test("native streaming retains chronological work, task progress, full copy and 
     .getByRole("button", { name: "Check for updates", exact: true })
     .click();
   await expect(
-    page.getByLabel("Pi Durable version", { exact: true }),
+    page.getByLabel("Pi Durable SDK version", { exact: true }),
   ).toHaveValue("fixture-sdk-two");
   expect(errors).toEqual([]);
 });
@@ -2551,16 +2560,14 @@ test("older replies outside the activity window expose complete text and their p
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
   await page
-    .getByRole("button", { name: "Conversation settings", exact: true })
+    .getByRole("menuitem", { name: "Conversation settings", exact: true })
     .click();
   await page
     .getByLabel("Title", { exact: true })
     .fill("Retained reply recovery");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page
-    .getByLabel("Conversation model", { exact: true })
-    .selectOption("gpt-test-fixture");
+  await choose(page, "Conversation model", "gpt-test-fixture");
   await page
     .getByLabel("Message your agent")
     .fill("[retained-reply] Generate an older complete reply.");
@@ -2581,7 +2588,7 @@ test("older replies outside the activity window expose complete text and their p
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
   await expect(
-    page.getByRole("button", { name: "Stop background work", exact: true }),
+    page.getByRole("menuitem", { name: "Stop background work", exact: true }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Conversation actions", exact: true })
@@ -2730,7 +2737,7 @@ test("one persistent rail leaves the chat full width and preserves URL selection
     ),
   ).toBe(true);
   const modelControls = await page
-    .locator(".composer-model-controls label")
+    .locator(".composer-model-controls > button")
     .evaluateAll((labels) =>
       labels.map((label) => {
         const r = label.getBoundingClientRect();
@@ -2852,32 +2859,79 @@ test("composer thinking choices follow each model and clear the previous overrid
   await page.goto(
     `/enterprise/organizations/${f.orgId}/projects/${f.projectId}?conversation=${c.id}&folder=all`,
   );
-  const thinking = page.getByLabel("Thinking level", { exact: true });
-  const model = page.getByTitle("Model", { exact: true });
-  await expect(thinking.locator("option")).toHaveText([
+  const thinking = picker(page, "Thinking level");
+  const model = picker(page, "Conversation model");
+  // The popout carries a title-case heading and full option labels.
+  await thinking.click();
+  await expect(page.getByText("Thinking Level", { exact: true })).toBeVisible();
+  await expect(page.getByRole("option")).toHaveText([
     "Model default",
     "Off",
     "Low",
     "High",
   ]);
-  await thinking.selectOption("high");
-  await expect(thinking).toHaveValue("high");
-  await model.selectOption("mandatory-thinking-fixture");
-  await expect(thinking).toHaveValue("");
-  await expect(thinking.locator("option")).toHaveText([
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+  await expect(thinking).toBeFocused();
+  await choose(page, "Thinking level", "high");
+  await expect(thinking).toHaveAttribute("data-value", "high");
+  await choose(page, "Conversation model", "mandatory-thinking-fixture");
+  await expect(thinking).toHaveAttribute("data-value", "");
+  await thinking.click();
+  await expect(page.getByRole("option")).toHaveText([
     "Model default",
     "Low",
     "High",
     "Max",
   ]);
-  await thinking.selectOption("max");
-  await expect(thinking).toHaveValue("max");
-  await model.selectOption("no-thinking-fixture");
-  await expect(thinking).toHaveValue("");
+  await page.keyboard.press("Escape");
+  await choose(page, "Thinking level", "max");
+  await expect(thinking).toHaveAttribute("data-value", "max");
+  await choose(page, "Conversation model", "no-thinking-fixture");
+  await expect(thinking).toHaveAttribute("data-value", "");
   await expect(thinking).toBeDisabled();
-  await expect(thinking.locator("option")).toHaveText(["Model default"]);
   const stored = await (
     await page.request.get(`/enterprise/api/conversations/${c.id}`)
   ).json();
   expect(stored.pi.thinking).toBeUndefined();
+});
+
+
+test("expanded Markdown survives a real local SSE background comment and canonical read", async ({ page }) => {
+  const f = await ensureFixture(page);
+  const session = await (await page.request.get("/enterprise/api/session")).json();
+  const headers = { origin: f.origin, "x-csrf-token": session.csrfToken };
+  const response = await page.request.post(`/enterprise/api/projects/${f.projectId}/conversations`, {
+    headers, data: { title: "Canonical table refresh", model: "gpt-test-fixture" },
+  });
+  expect(response.status()).toBe(201);
+  const conversation = await response.json();
+  let canonicalReads = 0;
+  await page.route(`**/api/conversations/${conversation.id}/messages?*`, async route => {
+    const result = await route.fetch();
+    const body = await result.json();
+    canonicalReads++;
+    // Keep local durable IDs, revisions, authority and real SSE. Only substitute
+    // a deterministic Markdown body so table state is observable.
+    body.items = body.items.map(message => message.role === "assistant" ? {
+      ...message, content: "| Canonical record | Count |\n| --- | --- |\n| Retained table | 8 |",
+    } : message);
+    await route.fulfill({ response: result, json: body });
+  });
+  await page.goto(`/enterprise/organizations/${f.orgId}/projects/${f.projectId}?conversation=${conversation.id}`);
+  await page.getByLabel("Message your agent").fill("Create the synthetic retained response");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await page.getByRole("button", { name: "Expand", exact: true }).click();
+  const table = page.getByRole("dialog", { name: "Table", exact: true });
+  await expect(table).toBeVisible();
+  const before = canonicalReads;
+  const comment = await page.request.post(`/enterprise/api/conversations/${conversation.id}/messages`, {
+    headers, data: { content: "An independently arriving canonical comment", kind: "comment", requestId: "parity-background-comment" },
+  });
+  expect(comment.ok(), await comment.text()).toBe(true);
+  await expect(page.getByText("An independently arriving canonical comment", { exact: true })).toBeAttached();
+  expect(canonicalReads).toBeGreaterThan(before);
+  await expect(table).toBeVisible();
+  await expect(table.getByRole("cell", { name: "Retained table", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape"); await expect(table).toHaveCount(0);
 });

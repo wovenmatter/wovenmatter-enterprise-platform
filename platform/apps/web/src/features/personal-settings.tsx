@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Folder, PanelLeftClose } from "lucide-react";
+import { Check, Folder } from "lucide-react";
 import {
   api,
   errorMessage,
@@ -10,8 +10,11 @@ import {
   type User,
 } from "../api";
 import { safeContentUrl } from "../conversation-state";
+import { Icon } from "../components/controls";
 import {
   AsyncForm,
+  BackLink,
+  Card,
   Empty,
   ErrorNotice,
   Field,
@@ -19,6 +22,12 @@ import {
   PageHeader,
   Success,
 } from "../components/ui";
+
+const themes = [
+  ["green", "Green"],
+  ["cognac", "Cognac"],
+  ["dark", "Dark"],
+] as const;
 
 export function PersonalSettings({
   user,
@@ -79,38 +88,34 @@ export function PersonalSettings({
     ? safeContentUrl(requestedReturn)
     : undefined;
   return (
-    <section className="personal-settings">
-      {returnTo ? (
-        <Link className="breadcrumb" to={returnTo}>
-          <PanelLeftClose size={16} strokeWidth={1.75} />
-          Back to organization
-        </Link>
-      ) : null}
+    <section className="personal-settings settings-page">
+      {returnTo ? <BackLink to={returnTo} label="Back to organization" /> : null}
       <PageHeader
         title="Personal settings"
         description="Manage your profile and preferences."
       />
       {profile.loading ? <Loading /> : null}
-      <ErrorNotice message={profile.error} />
-      <div className="settings-form">
-        <AsyncForm
-          key={`${current.id}:${current.name}:${current.theme}:${current.defaultModel ?? ""}`}
-          submitLabel="Save profile"
-          onSubmit={async (data) => {
-            const updated = await send<User>(
-              "/enterprise/api/me",
-              {
-                name: data.get("name"),
-                theme: data.get("theme"),
-                defaultModel: data.get("defaultModel") || null,
-              },
-              "PATCH",
-            );
-            onUserChange(updated);
-            profile.reload();
-            setSaved("Profile updated.");
-          }}
-        >
+      <ErrorNotice message={profile.error} onRetry={profile.reload} />
+      <AsyncForm
+        key={`${current.id}:${current.name}:${current.theme}:${current.defaultModel ?? ""}`}
+        className="settings-form"
+        submitLabel="Save profile"
+        onSubmit={async (data) => {
+          const updated = await send<User>(
+            "/enterprise/api/me",
+            {
+              name: data.get("name"),
+              theme: data.get("theme"),
+              defaultModel: data.get("defaultModel") || null,
+            },
+            "PATCH",
+          );
+          onUserChange(updated);
+          profile.reload();
+          setSaved("Profile updated.");
+        }}
+      >
+        <Card title="Profile">
           <Field label="Display name">
             <input
               name="name"
@@ -119,7 +124,10 @@ export function PersonalSettings({
               defaultValue={current.name}
             />
           </Field>
-          <Field label="Default model">
+          <Field
+            label="Default model"
+            hint="New sessions use this model when it is available. You can switch models in the conversation."
+          >
             <select
               name="defaultModel"
               defaultValue={current.defaultModel ?? ""}
@@ -137,128 +145,148 @@ export function PersonalSettings({
                 </option>
               ))}
             </select>
-            <small>
-              New sessions use this model when it is available. You can switch
-              models in the conversation.
-            </small>
           </Field>
           <ErrorNotice message={modelsError} />
-          <Field label="Theme">
-            <select name="theme" defaultValue={current.theme}>
-              <option value="green">Green</option>
-              <option value="cognac">Cognac</option>
-              <option value="dark">Dark</option>
-            </select>
-          </Field>
-        </AsyncForm>
-        {saved ? <Success>{saved}</Success> : null}
-      </div>
-      <section className="section-block">
-        <h2>Profile</h2>
-        <div className="settings-list">
-          <div className="setting-row">
-            <div>
-              <strong>Email</strong>
-              <small>{current.email}</small>
-            </div>
-          </div>
-          <div className="setting-row">
-            <div>
-              <strong>Role</strong>
-              <small>
-                {current.role === "owner" ? "Platform owner" : current.role}
-              </small>
-            </div>
-          </div>
-        </div>
-      </section>
-      <section className="section-block">
-        <h2>Password</h2>
-        <button
-          className="secondary"
-          disabled={resetPending || Boolean(profile.error)}
-          onClick={async () => {
-            setReset("");
-            setResetError("");
-            setResetPending(true);
-            try {
-              const result = await send<{ message: string }>(
-                "/enterprise/api/password-reset/request",
-                { email: current.email },
-              );
-              setReset(result.message);
-            } catch (error) {
-              setResetError(errorMessage(error));
-            } finally {
-              setResetPending(false);
-            }
-          }}
+        </Card>
+        <Card
+          title="Appearance"
+          detail="Your theme applies across organizations when you save your profile."
         >
-          {resetPending ? "Requesting…" : "Request password reset"}
-        </button>
+          <fieldset className="theme-choices">
+            <legend className="sr-only">Theme</legend>
+            {themes.map(([value, title]) => (
+              <label className="theme-choice" key={value}>
+                <input
+                  type="radio"
+                  name="theme"
+                  value={value}
+                  defaultChecked={current.theme === value}
+                />
+                <span className="theme-preview" data-preview={value} aria-hidden="true">
+                  <span className="theme-preview-rail" />
+                  <span className="theme-preview-pane">
+                    <span className="theme-preview-primary" />
+                    <span className="theme-preview-line" />
+                  </span>
+                  <span className="theme-preview-rail" />
+                </span>
+                <span className="theme-choice-label">
+                  <span>
+                    {title}
+                    <span className="sr-only"> theme</span>
+                  </span>
+                  <Icon icon={Check} size={12} weight="search" className="theme-check" />
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        </Card>
+      </AsyncForm>
+      {saved ? <Success>{saved}</Success> : null}
+      <Card title="Account">
+        <div className="value-row">
+          <span>Email</span>
+          <strong>{current.email}</strong>
+        </div>
+        <div className="value-row">
+          <span>Role</span>
+          <strong className="capitalize">
+            {current.role === "owner" ? "Platform owner" : current.role}
+          </strong>
+        </div>
+      </Card>
+      <Card
+        title="Password"
+        detail="Request a private reset link at your account email."
+      >
+        <div className="card-actions">
+          <button
+            type="button"
+            className="secondary"
+            disabled={resetPending || Boolean(profile.error)}
+            onClick={async () => {
+              setReset("");
+              setResetError("");
+              setResetPending(true);
+              try {
+                const result = await send<{ message: string }>(
+                  "/enterprise/api/password-reset/request",
+                  { email: current.email },
+                );
+                setReset(result.message);
+              } catch (error) {
+                setResetError(errorMessage(error));
+              } finally {
+                setResetPending(false);
+              }
+            }}
+          >
+            {resetPending ? "Requesting…" : "Request password reset"}
+          </button>
+        </div>
         <ErrorNotice message={resetError} />
         {reset ? <Success>{reset}</Success> : null}
-      </section>
-      <section className="section-block">
-        <h2>Accessible organizations</h2>
-        <div className="table-wrap">
-          <table>
-            <tbody>
-              {organizations.map((org) => (
-                <tr key={org.id}>
-                  <td>
-                    <Link
-                      className="item-link"
-                      to={`/organizations/${org.id}/projects`}
-                    >
-                      <Folder size={18} />
-                      <strong>{org.name}</strong>
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!profile.loading && !profile.error && !organizations.length ? (
-            <Empty title="No organization access">
-              Your account has no organization access.
-            </Empty>
-          ) : null}
-        </div>
-      </section>
-      <section className="section-block">
-        <h2>Accessible projects</h2>
-        <div className="table-wrap">
-          <table>
-            <tbody>
-              {projects.map((project) => (
-                <tr key={project.id}>
-                  <td>
-                    <Link
-                      className="item-link"
-                      to={`/organizations/${project.orgId}/projects/${project.id}`}
-                    >
-                      <Folder size={18} />
-                      <div>
-                        <strong>{project.name}</strong>
-                        <small>{project.organizationName}</small>
-                      </div>
-                    </Link>
-                  </td>
-                  <td>
-                    {project.access === "write" ? "Full access" : "Read-only"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!profile.loading && !profile.error && !projects.length ? (
-            <Empty title="No project access">
-              Projects you can open will appear here.
-            </Empty>
-          ) : null}
-        </div>
-      </section>
+      </Card>
+      <Card title="Accessible organizations">
+        {organizations.length ? (
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                {organizations.map((org) => (
+                  <tr key={org.id}>
+                    <td>
+                      <Link
+                        className="item-link"
+                        to={`/organizations/${org.id}/projects`}
+                      >
+                        <Icon icon={Folder} size={16} />
+                        <strong>{org.name}</strong>
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : !profile.loading && !profile.error ? (
+          <Empty title="No organization access">
+            Your account has no organization access.
+          </Empty>
+        ) : null}
+      </Card>
+      <Card title="Accessible projects">
+        {projects.length ? (
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                {projects.map((project) => (
+                  <tr key={project.id}>
+                    <td>
+                      <Link
+                        className="item-link"
+                        to={`/organizations/${project.orgId}/projects/${project.id}`}
+                      >
+                        <Icon icon={Folder} size={16} />
+                        <div>
+                          <strong>{project.name}</strong>
+                          <small>{project.organizationName}</small>
+                        </div>
+                      </Link>
+                    </td>
+                    <td>
+                      {project.access === "write" ? "Full access" : "Read-only"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : !profile.loading && !profile.error ? (
+          <Empty title="No project access">
+            Projects you can open will appear here.
+          </Empty>
+        ) : null}
+      </Card>
     </section>
   );
 }
