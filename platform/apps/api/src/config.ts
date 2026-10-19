@@ -5,6 +5,7 @@ export interface AppConfig {
   host: string;
   port: number;
   secureCookies: boolean;
+  sessionCookieName?: string;
   [key: string]: unknown;
 }
 export function loadConfig(env = process.env): AppConfig {
@@ -36,6 +37,11 @@ export function loadConfig(env = process.env): AppConfig {
   )
     throw new Error("Invalid or conflicting egress port");
   const secureCookies = publicOrigin.startsWith("https://");
+  const sessionCookieName = env.WME_SESSION_COOKIE_NAME ?? "wme_session";
+  if (!/^[a-z][a-z0-9_]{0,63}$/.test(sessionCookieName))
+    throw new Error(
+      "WME_SESSION_COOKIE_NAME must be a lowercase cookie name without a prefix",
+    );
   if (env.NODE_ENV === "production" && !secureCookies)
     throw new Error("Production public origin must use HTTPS");
   function concurrency(name: string, fallback: number) {
@@ -66,5 +72,6 @@ export function loadConfig(env = process.env): AppConfig {
     host: env.WME_HOST ?? "127.0.0.1",
     port,
     secureCookies,
+    sessionCookieName,
   };
 }

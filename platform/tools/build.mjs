@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { cp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 
 // Deleted or moved sources must not survive as stale runnable code or tests.
@@ -7,4 +7,10 @@ const result = spawnSync(process.execPath, [
   "node_modules/typescript/bin/tsc", "-p", "platform/tsconfig.json",
 ], { stdio: "inherit" });
 if (result.error) throw result.error;
+if ((result.status ?? 1) === 0)
+  await cp(
+    new URL("../packages/runtime/src/embedded/default-agent/", import.meta.url),
+    new URL("../dist/packages/runtime/src/embedded/default-agent/", import.meta.url),
+    { recursive: true },
+  );
 process.exitCode = result.status ?? 1;

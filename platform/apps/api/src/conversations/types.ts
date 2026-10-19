@@ -1,8 +1,16 @@
 import type { Runtime } from "@wovenmatter-enterprise/runtime";
 import type { AppContext, User } from "../context.js";
-export type Harness = "codex" | "claude" | "grok" | "pi";
+export type Harness = "pi";
 export type Mode = "read" | "write";
 export interface ConversationRow {
+  folder_id?: string | null;
+  working_directory?: string | null;
+  directory_device?: string | null;
+  directory_inode?: string | null;
+  scratch_name?: string | null;
+  workspace_locked?: number;
+  pinned?: number;
+  pi_options?: string;
   runtime_generation?: number;
   id: string;
   org_id: string;
@@ -42,7 +50,10 @@ export interface RunRow {
   completed_at: string | null;
 }
 export interface MessageRow {
+  content_truncated?: number;
+  activity_count?: number;
   id: string;
+  request_id?: string;
   conversation_id: string;
   run_id: string;
   role: "user" | "assistant";
@@ -84,7 +95,14 @@ export interface ConversationDependencies {
     ): Promise<{ fileId: string; path: string; versionId: string }[]>;
   };
   inference: {
-    defaultHarness(orgId: string, model: string): Promise<Harness>;
+    resolvePiModel?(
+      orgId: string,
+      model: string,
+    ): Promise<
+      NonNullable<
+        import("../../../../packages/runtime/src/types.js").RuntimeRequest["pi"]
+      >
+    >;
     issueGateway(input: {
       orgId: string;
       projectId: string;
@@ -103,6 +121,9 @@ export interface ConversationDependencies {
       harness: string,
       connectionId?: string,
     ): Promise<void>;
+    models?(
+      orgId: string,
+    ): Promise<Array<{ id: string; thinkingLevels?: string[] }>>;
   };
   recheckIntervalMs?: number;
   maxConcurrentRuns?: number;
@@ -116,8 +137,16 @@ export function conversationView(c: ConversationRow) {
     assetId: c.asset_id ?? null,
     createdBy: c.creator_id,
     title: c.title,
+    folderId: c.folder_id ?? null,
+    workingDirectory: c.working_directory
+      ? `/workspace/${c.working_directory}`
+      : null,
+    workspaceLocked: !!c.workspace_locked,
+    pinned: !!c.pinned,
+    deletedAt: c.deleted_at,
     mode: c.mode,
     harness: c.harness,
+    pi: JSON.parse(c.pi_options ?? "{}"),
     model: c.model,
     connectionId: c.connection_id,
     createdAt: c.created_at,
@@ -148,6 +177,7 @@ export function runView(r: RunRow) {
 export function messageView(m: MessageRow) {
   return {
     id: m.id,
+    requestId: m.request_id,
     conversationId: m.conversation_id,
     runId: m.run_id,
     role: m.role,
@@ -158,6 +188,8 @@ export function messageView(m: MessageRow) {
     authorId: m.author_id,
     authorName: m.author_name ?? null,
     content: m.content,
+    contentTruncated: Boolean(m.content_truncated),
+    activityCount: m.activity_count ?? undefined,
     citations: JSON.parse(m.citations),
     createdAt: m.created_at,
   };

@@ -65,6 +65,7 @@ export async function shareFile(
         "Files cannot be shared between organizations.",
       );
     const alias = cleanName(name ?? path.posix.basename(row.path));
+    if(alias.toLowerCase()===".wovenmatter") throw new AppError(400,"reserved_name",".WovenMatter is reserved for this project's managed workspace.");
     const root = await ensureRoot(ctx, {
       orgId: row.org_id,
       projectId,
@@ -213,13 +214,8 @@ export async function resolveProjectMounts(
   user: User,
   projectId: string,
   mode: Access,
-  threadAuthority = false,
 ): Promise<RuntimeMount[]> {
-  const project = await ctx.requireProject(
-    user,
-    projectId,
-    threadAuthority ? "read" : mode,
-  );
+  const project = await ctx.requireProject(user, projectId, mode);
   const root = await ensureRoot(ctx, {
     orgId: project.orgId,
     projectId,
@@ -228,8 +224,7 @@ export async function resolveProjectMounts(
     {
       source: root,
       target: "/workspace",
-      readOnly:
-        mode !== "write" || (!threadAuthority && project.access !== "write"),
+      readOnly: mode !== "write",
     },
   ];
   const shares = await ctx.db.all<
@@ -260,10 +255,7 @@ export async function resolveProjectMounts(
     mounts.push({
       source: path.join(sourceRoot, share.path),
       target: `/workspace/${share.name}`,
-      readOnly:
-        mode !== "write" ||
-        (!threadAuthority && project.access !== "write") ||
-        share.access !== "write",
+      readOnly: mode !== "write" || share.access !== "write",
       fileId: share.file_id,
     });
   }

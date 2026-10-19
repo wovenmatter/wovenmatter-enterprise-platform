@@ -80,6 +80,9 @@ export class WorkspaceService {
       replayBytes: 256 * 1024 * 1024,
       retentionMs: 30 * 86400000,
     },
+    private captureDirectory?: (
+      path: string,
+    ) => Promise<{ device: string; inode: string }>,
   ) {}
   private lane<T>(id: string, action: () => Promise<T>): Promise<T> {
     const next = (this.lanes.get(id) ?? Promise.resolve())
@@ -117,6 +120,7 @@ CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY,conversation TEXT NOT NULL,t
 CREATE INDEX IF NOT EXISTS running_thread ON runs(conversation,terminal);
 CREATE TABLE IF NOT EXISTS events(run TEXT NOT NULL REFERENCES runs(id),sequence INTEGER NOT NULL,data TEXT NOT NULL,PRIMARY KEY(run,sequence));
 CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,path TEXT NOT NULL,device TEXT NOT NULL,inode TEXT NOT NULL);
 `);
     for (const row of this.db
       .prepare("SELECT conversation,generation FROM fences")
@@ -242,12 +246,38 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
     const generation = request.generation ?? 0;
     if (!Number.isSafeInteger(generation) || generation < 0)
       throw failure("invalid_generation");
-    const signature = digest([request.mounts, request.access, request.assetId]);
+    if (this.captureDirectory) {
+      const identity = await this.captureDirectory(request.workingDirectory);
+      const saved = this.db
+        .prepare("SELECT * FROM working_directories WHERE conversation=?")
+        .get(request.conversationId);
+      if (
+        saved &&
+        (saved.path !== request.workingDirectory ||
+          saved.device !== identity.device ||
+          saved.inode !== identity.inode)
+      )
+        throw failure("working_directory_changed");
+      this.db
+        .prepare("INSERT OR IGNORE INTO working_directories VALUES(?,?,?,?)")
+        .run(
+          request.conversationId,
+          request.workingDirectory,
+          identity.device,
+          identity.inode,
+        );
+      request = { ...request, workingDirectoryIdentity: identity };
+    }
+    const signature = digest([
+      request.mounts,
+      request.access,
+      request.assetId,
+      request.workingDirectory,
+      request.workingDirectoryIdentity,
+    ]);
     const sessionKey = digest([
       request.conversationId,
       request.harness,
-      request.model,
-      request.connectionId,
       request.access,
       generation,
     ]);
@@ -261,10 +291,15 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
       request.access,
       request.prompt,
       request.resumeId,
+      request.pi,
+      request.gateway,
+      request.egressProxyUrl,
       generation,
       request.userId,
       request.assetId,
       request.workspaceLease,
+      request.workingDirectory,
+      request.workingDirectoryIdentity,
     ]);
     const pending = await this.lane(
       request.conversationId,
@@ -304,8 +339,13 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
           ) >= this.limits.replayBytes
         )
           throw failure("journal_full");
+        const previousOwner = [...this.sessions.values()].find(
+          (value) => value.conversationId === request.conversationId,
+        );
+        if (previousOwner?.stopped) throw failure("session_stopping");
+        if (previousOwner && previousOwner.key !== sessionKey)
+          throw failure("authority_changed");
         let session = this.sessions.get(sessionKey);
-        if (session?.stopped) throw failure("session_stopping");
         if (session && session.signature !== signature)
           throw failure("authority_changed");
         if (!session) {
@@ -534,7 +574,7 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
     if (!Number.isSafeInteger(generation) || generation < 0)
       throw failure("invalid_generation");
     // Persist the fence before touching processes, including when stop must be retried.
-    await this.lane(conversationId, async () => {
+    const victims = await this.lane(conversationId, async () => {
       this.fences.set(
         conversationId,
         Math.max(generation, this.fences.get(conversationId) ?? 0),
@@ -544,12 +584,14 @@ CREATE TABLE IF NOT EXISTS fences(conversation TEXT PRIMARY KEY,generation INTEG
           "INSERT INTO fences(conversation,generation) VALUES(?,?) ON CONFLICT(conversation) DO UPDATE SET generation=MAX(generation,excluded.generation)",
         )
         .run(conversationId, this.fences.get(conversationId)!);
+      const victims = [...this.sessions.values()].filter(
+        (session) =>
+          session.conversationId === conversationId &&
+          session.generation < generation,
+      );
+      for (const session of victims) session.stopped = true;
+      return victims;
     });
-    const victims = [...this.sessions.values()].filter(
-      (session) =>
-        session.conversationId === conversationId &&
-        session.generation < generation,
-    );
     await Promise.all(
       victims.map(async (session) => {
         session.stopped = true;

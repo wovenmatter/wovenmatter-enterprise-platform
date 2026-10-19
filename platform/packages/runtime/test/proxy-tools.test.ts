@@ -118,6 +118,7 @@ test(
         runId: "fixture-run",
         projectId: "fixture-project",
         harness: "pi",
+      workingDirectory: "/workspace",
         model: "fixture-model",
         prompt: "Synthetic test",
         access: "read",

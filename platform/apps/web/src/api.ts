@@ -113,7 +113,8 @@ export type User = {
   name: string;
   role: "owner" | "admin" | "member";
   enabled: boolean;
-  theme: "green" | "cognac";
+  theme: "green" | "cognac" | "dark";
+  defaultModel?: string | null;
   invitationPending?: boolean;
   libraryAccess?: "read" | "write";
 };
@@ -131,9 +132,50 @@ export type Project = {
   orgId: string;
   name: string;
   description: string;
+  /** The caller's effective access to this project. */
   access: "read" | "write";
   status: string;
   createdAt: string;
+};
+export type Model = {
+  id: string;
+  name: string;
+  provider: string;
+  thinkingLevels?: string[];
+};
+export type Run = {
+  id: string;
+  status: string;
+  error?: {
+    code: string;
+    message: string;
+  } | null;
+  createdAt: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+export type Conversation = {
+  folderId: string | null;
+  workingDirectory: string | null;
+  workspaceLocked: boolean;
+  pinned: boolean;
+  deletedAt: string | null;
+  id: string;
+  title: string;
+  mode: "read" | "write";
+  effectiveMode?: "read" | "write";
+  harness: string;
+  pi?: {
+    codeMode?: string;
+    subagentConcurrency?: number;
+    thinking?: string;
+    sdkGeneration?: string;
+  };
+  model: string;
+  createdBy: string;
+  lastEventId?: number;
+  activeRun?: Run | null;
+  members?: User[];
 };
 export type List<T> = { items: T[] };
 export const date = (value?: string) =>
@@ -147,3 +189,14 @@ export const errorMessage = (error: unknown) =>
   error instanceof Error
     ? error.message
     : "Something went wrong. Please try again.";
+
+export type WorkspaceFolder = {
+  removalPending: boolean;
+  id: string;
+  projectId: string;
+  name: string;
+  rootPath: string;
+  pinned: boolean;
+  position: number;
+  referencePaths: string[];
+};

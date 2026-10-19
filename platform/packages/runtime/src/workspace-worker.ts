@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -48,21 +47,19 @@ export async function launchWorkspaceWorker(
       return { origin: current.egressProxyUrl, token: current.egressToken };
     },
   );
-  const stateKey = createHash("sha256")
-    .update(JSON.stringify([request.model, request.connectionId]))
-    .digest("hex");
   const sandbox = await prepareSandbox(
     join(
       "sessions",
       request.conversationId,
       request.harness,
       request.access,
-      "environments",
-      stateKey,
+      "environment",
     ),
     request.access,
     request.mounts,
     brokerDirectory,
+    request.workingDirectory,
+    request.workingDirectoryIdentity,
   ).catch((error) => {
     broker.close();
     throw error;
@@ -208,10 +205,13 @@ export async function launchWorkspaceWorker(
       broker.setGateway(next.gateway);
       const payload: ContainerRequest = {
         runId: next.runId,
+        workingDirectory: next.workingDirectory,
+        workingDirectoryIdentity: next.workingDirectoryIdentity,
         ...(next.assetId ? { assetId: next.assetId } : {}),
         projectId: next.projectId,
         harness: next.harness,
         model: next.model,
+        ...(next.pi ? { pi: next.pi } : {}),
         prompt: next.prompt,
         access: next.access,
         mountEvidence: sandbox.attestations,

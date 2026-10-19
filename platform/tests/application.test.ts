@@ -20,6 +20,9 @@ async function fixture(t: test.TestContext) {
         type: "started",
       });
       await emit({
+        type: "input_accepted",
+      });
+      await emit({
         type: "assistant_delta",
         delta: "Deterministic protocol fixture",
       });
@@ -179,6 +182,9 @@ test("assembled platform provisions a project, renders a safe report and immedia
 });
 test("assembled admission uses real SQLite and remains private until a project member is added", async (t) => {
   const s = await fixture(t);
+  s.inference.models = async () => [
+    { id: "gpt-test", name: "GPT Test", provider: "openai" },
+  ];
   s.inference.validateSelection = async () => {};
   s.inference.issueGateway = async () => ({
     baseUrl: "http://fixture.invalid",
@@ -234,7 +240,6 @@ test("assembled admission uses real SQLite and remains private until a project m
     payload: {
       title: "Private work",
       mode: "write",
-      harness: "codex",
       model: "gpt-test",
     },
   });
@@ -258,13 +263,13 @@ test("assembled admission uses real SQLite and remains private until a project m
   let result: any;
   for (let i = 0; i < 100; i++) {
     result = await s.ctx.db.get(
-      "SELECT status FROM conversation_runs WHERE conversation_id=?",
+      "SELECT status,error_code,error_message FROM conversation_runs WHERE conversation_id=?",
       [id],
     );
     if (result?.status === "completed") break;
     await new Promise((r) => setTimeout(r, 10));
   }
-  assert.equal(result?.status, "completed");
+  assert.equal(result?.status, "completed", JSON.stringify(result));
   const added = await s.app.inject({
     method: "POST",
     url: `/enterprise/api/conversations/${id}/members`,

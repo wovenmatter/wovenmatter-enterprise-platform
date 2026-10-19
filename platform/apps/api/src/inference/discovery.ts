@@ -1,3 +1,4 @@
+import { modelCapabilities, type ModelCapabilities } from "./capabilities.js";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { request as httpsRequest } from "node:https";
@@ -10,7 +11,7 @@ export async function discoverProviderModels(
   apiKey: string,
   approvedOrigins: string[] = [],
   provider = "custom",
-): Promise<string[]> {
+): Promise<Array<{ id: string; capabilities: ModelCapabilities }>> {
   let url: URL;
   try {
     url = new URL(
@@ -94,7 +95,7 @@ export async function discoverProviderModels(
         let size = 0;
         response.on("data", (chunk: Buffer) => {
           size += chunk.length;
-          if (size > 2 * 1024 * 1024) {
+          if (size > 8 * 1024 * 1024) {
             req.destroy();
             rejectSafe();
             return;
@@ -128,7 +129,10 @@ export async function discoverProviderModels(
       ),
     ].slice(0, 500);
     if (!names.length) throw new Error("empty");
-    return names;
+    return names.map(id => ({
+      id,
+      capabilities: modelCapabilities(provider, id, items.map(object).find(item => item.id === id), true),
+    }));
   } catch {
     throw new InferenceError(
       502,

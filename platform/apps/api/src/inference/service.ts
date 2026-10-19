@@ -1,3 +1,8 @@
+import {
+  modelCapabilities,
+  openRouterModelCatalog,
+  type ModelCapabilities,
+} from "./capabilities.js";
 import { setTimeout as wait } from "node:timers/promises";
 import { discoverProviderModels } from "./discovery.js";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -31,13 +36,38 @@ export interface InferenceOptions {
   runtimeApiOrigin?: string;
   fetcher?: typeof fetch;
   discoverModels?: typeof discoverProviderModels;
+  modelCatalogFetcher?: typeof fetch;
   /** Operator-approved additional origins, including self-hosted model endpoints. */
   customProviderOrigins?: string[];
 }
-export type InferenceModel = {
+export type InferenceModel = Partial<ModelCapabilities> & {
   id: string;
   name: string;
   provider: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  supportsImages?: boolean;
+  supportsReasoning?: boolean;
+  thinkingLevels?: string[];
+};
+export type PiProvider =
+  "openai" | "anthropic" | "xai" | "openrouter" | "custom";
+export type PiGatewayApi =
+  "openai-responses" | "anthropic-messages" | "openai-compatible";
+export type ResolvedPiModel = {
+  model: string;
+  provider: PiProvider;
+  api: PiGatewayApi;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  supportsNativeCompaction: boolean;
+  supportsImages?: boolean;
+  supportsReasoning?: boolean;
+  routeIdentity: string;
+  accountAffinity: "proxy-session-affinity";
+  thinkingLevelMap?: ModelCapabilities["thinkingLevelMap"];
+  defaultThinkingLevel?: ModelCapabilities["defaultThinkingLevel"];
+  modelCompat?: ModelCapabilities["modelCompat"];
 };
 type ApiProvider = "openai" | "anthropic" | "openrouter" | "xai" | "custom";
 type SubscriptionProvider = "openai" | "anthropic" | "xai";
@@ -142,6 +172,28 @@ export class InferenceService {
     { controller: AbortController; task: Promise<void> }
   >();
   private closing = false;
+  private publicModelCatalog?: {
+    expires: number;
+    value: Promise<Map<string, Record<string, unknown>>>;
+  };
+  private publicModelSnapshot = new Map<string, Record<string, unknown>>();
+  private openRouterModels() {
+    if (
+      !this.publicModelCatalog ||
+      this.publicModelCatalog.expires <= Date.now()
+    )
+      this.publicModelCatalog = {
+        expires: Date.now() + 300_000,
+        value: openRouterModelCatalog(this.options.modelCatalogFetcher ?? fetch)
+          .then((models) => (this.publicModelSnapshot = models))
+          .catch(() => {
+            if (this.publicModelCatalog)
+              this.publicModelCatalog.expires = Date.now() + 30_000;
+            return this.publicModelSnapshot;
+          }),
+      };
+    return this.publicModelCatalog.value;
+  }
   private readonly mutations = new Map<string, Promise<unknown>>();
   constructor(
     readonly ctx: AppContext,
@@ -185,6 +237,10 @@ DROP TABLE inference_gateway_tokens;
 ALTER TABLE inference_gateway_next RENAME TO inference_gateway_tokens;
 CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
 `,
+    );
+    await this.ctx.db.migrate(
+      "inference-model-capabilities-v1",
+      "CREATE TABLE inference_model_capabilities(account_id TEXT NOT NULL REFERENCES inference_api_accounts(id) ON DELETE CASCADE,model_id TEXT NOT NULL,capabilities TEXT NOT NULL,PRIMARY KEY(account_id,model_id));",
     );
     const pending = await this.ctx.db.all<OAuthRow>(
       "SELECT * FROM inference_oauth_sessions WHERE protocol=1 AND status IN ('starting','pending','cancelling')",
@@ -423,7 +479,7 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
           this.options.customProviderOrigins,
           input.provider,
         )
-      ).map((id) => ({
+      ).map(({ id }) => ({
         id,
         name: id,
         provider: input.provider,
@@ -498,8 +554,9 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
       this.options.customProviderOrigins,
       input.provider,
     );
-    const modelNames = input.models?.length ? input.models : discovered;
-    if (modelNames.some((model) => !discovered.includes(model)))
+    const discoveredIds = discovered.map((model) => model.id);
+    const modelNames = input.models?.length ? input.models : discoveredIds;
+    if (modelNames.some((model) => !discoveredIds.includes(model)))
       throw new InferenceError(
         400,
         "model_unavailable",
@@ -542,6 +599,14 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
           "pending",
           new Date().toISOString(),
         ],
+      );
+      await this.ctx.db.batch(
+        discovered
+          .filter((model) => modelNames.includes(model.id))
+          .map((model) => ({
+            sql: "INSERT INTO inference_model_capabilities(account_id,model_id,capabilities) VALUES(?,?,?)",
+            params: [id, model.id, JSON.stringify(model.capabilities ?? {})],
+          })),
       );
       const group = {
         name: `wme-${id}`,
@@ -1250,21 +1315,78 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
     const configuredProviders = new Map(
       accounts.map((account) => [`wme-${account.id}`, account.provider]),
     );
+    const saved = await this.ctx.db.all<{
+      account_id: string;
+      model_id: string;
+      capabilities: string;
+    }>(
+      "SELECT c.* FROM inference_model_capabilities c JOIN inference_api_accounts a ON a.id=c.account_id WHERE a.org_id=?",
+      [orgId],
+    );
+    const descriptors = new Map(
+      saved.map((item) => [
+        `wme-${item.account_id}:${item.model_id}`,
+        JSON.parse(item.capabilities),
+      ]),
+    );
+    const publicModels = [...configuredProviders.values()].includes(
+      "openrouter",
+    )
+      ? await this.openRouterModels()
+      : new Map();
     return data.data
       .map(object)
       .filter((item) => typeof item.id === "string" && item.id.length <= 240)
-      .map((item) => ({
-        id: String(item.id),
-        name: text(item.name) ?? String(item.id),
-        provider:
-          configuredProviders.get(String(item.owned_by ?? item.provider)) ??
-          familyProvider(item.owned_by ?? item.provider),
-      }));
+      .map((item) => {
+        const id = String(item.id),
+          owner = String(item.owned_by ?? item.provider),
+          provider = configuredProviders.get(owner) ?? familyProvider(owner);
+        const descriptor = { ...descriptors.get(`${owner}:${id}`), ...item };
+        // Fresh maps/lists replace stored discovery metadata, including alternate aliases.
+        if (
+          (Object.hasOwn(item, "reasoning") &&
+            typeof item.reasoning !== "boolean") ||
+          [
+            "thinkingLevelMap",
+            "thinking_level_map",
+            "thinkingLevels",
+            "thinking_levels",
+          ].some((key) => Object.hasOwn(item, key))
+        ) {
+          for (const key of [
+            "thinkingLevelMap",
+            "thinking_level_map",
+            "thinkingLevels",
+            "thinking_levels",
+            "defaultThinkingLevel",
+            "default_thinking_level",
+            "supportsReasoning",
+            "supports_reasoning",
+          ])
+            if (!Object.hasOwn(item, key)) delete descriptor[key];
+        }
+        const capabilities = object(item.capabilities);
+        if (typeof capabilities.reasoning === "boolean")
+          descriptor.supportsReasoning = capabilities.reasoning;
+        if (typeof item.reasoning === "boolean")
+          descriptor.supportsReasoning = item.reasoning;
+        return {
+          id,
+          name: text(item.name) ?? id,
+          provider,
+          ...modelCapabilities(
+            provider,
+            id,
+            provider === "openrouter" && publicModels.has(id)
+              ? publicModels.get(id)
+              : descriptor,
+            provider === "openrouter" && publicModels.has(id),
+          ),
+        };
+      });
   }
-  async defaultHarness(
-    orgId: string,
-    model: string,
-  ): Promise<"codex" | "claude" | "grok" | "pi"> {
+
+  async resolvePiModel(orgId: string, model: string): Promise<ResolvedPiModel> {
     const selected = (await this.models(orgId)).find(
       (item) => item.id === model,
     );
@@ -1274,13 +1396,35 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
         "model_unavailable",
         "This model is not available in the organization inference pool.",
       );
-    return selected.provider === "openai"
-      ? "codex"
-      : selected.provider === "anthropic"
-        ? "claude"
-        : selected.provider === "xai"
-          ? "grok"
-          : "pi";
+    const provider = (
+      ["openai", "anthropic", "xai", "openrouter"].includes(selected.provider)
+        ? selected.provider
+        : "custom"
+    ) as PiProvider;
+    const fallback = modelCapabilities(provider, selected.id);
+    const api: PiGatewayApi =
+      provider === "anthropic"
+        ? "anthropic-messages"
+        : provider === "openai" || provider === "xai"
+          ? "openai-responses"
+          : "openai-compatible";
+    return {
+      model: selected.id,
+      provider,
+      api,
+      contextWindow: selected.contextWindow ?? fallback?.contextWindow,
+      maxOutputTokens: selected.maxOutputTokens ?? fallback?.maxOutputTokens,
+      supportsNativeCompaction:
+        provider === "openai" || provider === "anthropic" || provider === "xai",
+      supportsImages: selected.supportsImages ?? fallback?.supportsImages,
+      supportsReasoning:
+        selected.supportsReasoning ?? fallback?.supportsReasoning,
+      thinkingLevelMap: selected.thinkingLevelMap,
+      defaultThinkingLevel: selected.defaultThinkingLevel,
+      modelCompat: selected.modelCompat,
+      routeIdentity: `${provider}:${api}:${selected.id}`,
+      accountAffinity: "proxy-session-affinity",
+    };
   }
   async validateSelection(
     orgId: string,
@@ -1288,11 +1432,11 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
     harness: string,
     connectionId?: string,
   ) {
-    if (!["codex", "claude", "grok", "pi"].includes(harness))
+    if (harness !== "pi")
       throw new InferenceError(
         400,
         "invalid_harness",
-        "Choose a supported agent.",
+        "Sessions use Pi Durable.",
       );
     if (connectionId)
       throw new InferenceError(
@@ -1308,17 +1452,6 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
         400,
         "model_unavailable",
         "This model is not available in the organization inference pool.",
-      );
-    const expected: Record<string, string> = {
-      codex: "openai",
-      claude: "anthropic",
-      grok: "xai",
-    };
-    if (harness !== "pi" && selected.provider !== expected[harness])
-      throw new InferenceError(
-        400,
-        "harness_model_mismatch",
-        "Choose the native agent for this model, or choose Pi.",
       );
   }
   async usage(orgId: string) {

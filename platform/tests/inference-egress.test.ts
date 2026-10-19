@@ -36,7 +36,7 @@ function seed(filename: string) {
       "INSERT INTO projects(id,org_id,name,status,access,created_at) VALUES(?,?,'Synthetic network probe','ready','read',?)",
     ).run(project, org, now);
     db.prepare(
-      "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at) VALUES(?,?,?,?,'Synthetic GET-only probe','read','codex','fixture',?,?)",
+      "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,created_at,updated_at) VALUES(?,?,?,?,'Synthetic GET-only probe','read','pi','fixture',?,?)",
     ).run(conversation, org, project, user, now, now);
     db.prepare("INSERT INTO conversation_members VALUES(?,?,?,?)").run(
       conversation,
@@ -59,7 +59,7 @@ function seed(filename: string) {
         now,
       );
     db.prepare(
-      "INSERT INTO conversation_runs(id,conversation_id,org_id,project_id,user_id,request_id,user_message_id,assistant_message_id,status,mode,harness,model,created_at,started_at) VALUES(?,?,?,?,?,?,?,?,'running','read','codex','fixture',?,?)",
+      "INSERT INTO conversation_runs(id,conversation_id,org_id,project_id,user_id,request_id,user_message_id,assistant_message_id,status,mode,harness,model,created_at,started_at) VALUES(?,?,?,?,?,?,?,?,'running','read','pi','fixture',?,?)",
     ).run(
       run,
       conversation,
@@ -73,7 +73,7 @@ function seed(filename: string) {
       now,
     );
     db.prepare(
-      "INSERT INTO inference_gateway_tokens(token_hash,org_id,project_id,user_id,run_id,conversation_id,model,harness,expires_at,revoked) VALUES(?,?,?,?,?,?,'fixture','codex',?,0)",
+      "INSERT INTO inference_gateway_tokens(token_hash,org_id,project_id,user_id,run_id,conversation_id,model,harness,expires_at,revoked) VALUES(?,?,?,?,?,?,'fixture','pi',?,0)",
     ).run(
       createHash("sha256").update(token).digest("hex"),
       org,

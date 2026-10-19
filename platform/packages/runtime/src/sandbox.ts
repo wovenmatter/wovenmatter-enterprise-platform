@@ -101,6 +101,7 @@ export function sandboxArguments(
   sessionFd: number,
   homeFd: number,
   brokerFd: number,
+  workingDirectory = "/workspace",
 ) {
   const args = [
     "--die-with-parent",
@@ -130,7 +131,11 @@ export function sandboxArguments(
   // Runtime-owned paths are overlaid LAST. A malicious share target symlink may
   // never replace the launcher, its libraries, the current session, or its broker.
   for (const m of mounts) {
-    if (m.target !== "/workspace" && !/^\/workspace\/[^/\\]+$/.test(m.target))
+    if (
+      m.target !== "/workspace" &&
+      m.target !== workingDirectory &&
+      !/^\/workspace\/[^/\\]+$/.test(m.target)
+    )
       throw new Error("Invalid mount target");
     args.push(
       mode === "read" || m.access === "read" ? "--ro-bind" : "--bind",
@@ -161,7 +166,7 @@ export function sandboxArguments(
   );
   args.push(
     "--chdir",
-    "/workspace",
+    workingDirectory,
     "--",
     "/usr/bin/aa-exec",
     "-p",

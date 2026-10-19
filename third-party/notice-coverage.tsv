@@ -1,20 +1,23 @@
 package	version	coverage_limitation
-@anthropic-ai/claude-agent-sdk-darwin-arm64	0.3.278	not installed for this platform
-@anthropic-ai/claude-agent-sdk-darwin-x64	0.3.278	not installed for this platform
-@anthropic-ai/claude-agent-sdk-linux-arm64	0.3.278	not installed for this platform
-@anthropic-ai/claude-agent-sdk-linux-arm64-musl	0.3.278	not installed for this platform
-@anthropic-ai/claude-agent-sdk-linux-x64-musl	0.3.278	not installed for this platform
-@anthropic-ai/claude-agent-sdk-win32-arm64	0.3.278	not installed for this platform
-@anthropic-ai/claude-agent-sdk-win32-x64	0.3.278	not installed for this platform
+@anthropic-ai/claude-agent-sdk-darwin-arm64	0.3.284	not installed for this platform
+@anthropic-ai/claude-agent-sdk-darwin-x64	0.3.284	not installed for this platform
+@anthropic-ai/claude-agent-sdk-linux-arm64	0.3.284	not installed for this platform
+@anthropic-ai/claude-agent-sdk-linux-arm64-musl	0.3.284	not installed for this platform
+@anthropic-ai/claude-agent-sdk-linux-x64-musl	0.3.284	not installed for this platform
+@anthropic-ai/claude-agent-sdk-win32-arm64	0.3.284	not installed for this platform
+@anthropic-ai/claude-agent-sdk-win32-x64	0.3.284	not installed for this platform
 @aws-sdk/credential-provider-http	3.972.74	no top-level license/notice file in installed package
 @aws-sdk/credential-provider-login	3.972.79	no top-level license/notice file in installed package
 @aws-sdk/nested-clients	3.997.46	no top-level license/notice file in installed package
-@earendil-works/chord	0.86.1	no top-level license/notice file in installed package
-@earendil-works/pi-agent-core	0.86.1	no top-level license/notice file in installed package
-@earendil-works/pi-ai	0.86.1	no top-level license/notice file in installed package
-@earendil-works/pi-coding-agent	0.86.1	no top-level license/notice file in installed package
-@earendil-works/pi-telemetry	0.86.1	no top-level license/notice file in installed package
-@earendil-works/pi-tui	0.86.1	no top-level license/notice file in installed package
+@earendil-works/chord	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-agent-core	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-ai	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-codemode	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-coding-agent	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-durable	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-mcp	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-telemetry	1.1.0	no top-level license/notice file in installed package
+@earendil-works/pi-tui	1.1.0	no top-level license/notice file in installed package
 @esbuild/aix-ppc64	0.28.2	not installed for this platform
 @esbuild/android-arm	0.28.2	not installed for this platform
 @esbuild/android-arm64	0.28.2	not installed for this platform
