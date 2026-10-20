@@ -128,3 +128,7 @@ still clear retained conversation data through the existing resource hook.
 Browser regressions cover 390/760/761-pixel breakpoints, keyboard return,
 empty/filtered/populated polling, stable selection and disclosure state,
 retryable failures, and access loss.
+
+The frontend build tool is pinned to Vite 8.3.4 to clear the newly reported
+launch-editor security audit gate. Native SDK pins and runtime behavior remain
+unchanged; the update is limited to the frontend toolchain and its lock entries.
