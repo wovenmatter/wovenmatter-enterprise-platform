@@ -343,3 +343,101 @@ test('coarse-pointer actions retain 44-point targets and Markdown utility strips
     expect(errors).toEqual([]);
   } finally { await context.close(); }
 });
+
+
+test('narrow navigation opens from the left and preserves keyboard return across breakpoints', async ({ page, baseURL }, testInfo) => {
+  const state = await parityFixture(page, { baseURL });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(`${base}/projects`);
+  await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
+  const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
+  const sidebar = page.locator('.sidebar');
+  for (const width of [390, 760]) {
+    await page.setViewportSize({ width, height: 844 });
+    const box = await menu.boundingBox();
+    const title = await page.locator('.mobile-title').boundingBox();
+    expect(box.x).toBeLessThan(16);
+    expect(box.x + box.width).toBeLessThan(title.x);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(sidebar).toBeHidden();
+    await menu.focus(); await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog', { name: 'Navigation', exact: true })).toBeVisible();
+    expect((await sidebar.boundingBox()).x).toBeLessThan(16);
+    await page.keyboard.press('Escape');
+    await expect(sidebar).toBeHidden(); await expect(menu).toBeFocused();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('sidebar-mobile-left.png') });
+  await menu.click();
+  await sidebar.getByRole('link', { name: 'Parity workspace', exact: true }).click();
+  await expect(page).toHaveURL(/\/projects\/parity-project$/);
+  await expect(sidebar).toBeHidden(); await expect(menu).toBeFocused();
+  await page.setViewportSize({ width: 761, height: 844 });
+  await expect(menu).toBeHidden(); await expect(sidebar).toBeVisible();
+  await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
+  expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
+});
+
+for (const initial of ['empty', 'no-match', 'populated']) {
+  test(`sidebar ${initial} state stays still during polling and selection, then respects authorization loss`, async ({ page, baseURL }, testInfo) => {
+    await page.clock.install();
+    const state = await parityFixture(page, { baseURL });
+    const chat = { id: 'parity-chat', title: 'Retained parity conversation', mode: 'write', effectiveMode: 'write', harness: 'pi', pi: {}, createdBy: 'parity-owner', folderId: folder.id, model: 'parity-model' };
+    let items = initial === 'empty' ? [] : [chat], hold = false, status = 200;
+    const pending = [];
+    await page.route('**/projects/parity-project/conversations', async route => {
+      if (hold) await new Promise(resolve => pending.push(resolve));
+      await route.fulfill(status === 200
+        ? { json: { items } }
+        : { status, json: { error: { message: `Synthetic chat refresh ${status}` } } });
+    });
+    try {
+      await page.goto(`${base}/projects/parity-project/settings`);
+      const rail = page.locator('.workspace-navigation');
+      const tools = page.getByRole('navigation', { name: 'Project navigation', exact: true });
+      const chatLink = rail.getByRole('link', { name: chat.title, exact: true });
+      const label = page.getByText(initial === 'no-match' ? 'No matching conversations.' : 'No conversations yet.', { exact: true });
+      if (initial === 'no-match') await page.getByRole('searchbox', { name: 'Search conversations', exact: true }).fill('absent conversation');
+      if (initial === 'populated') await expect(chatLink).toBeVisible();
+      else await expect(label).toBeVisible();
+      const agents = rail.locator('details').filter({ has: page.locator(':scope > summary', { hasText: /^Agents$/ }) });
+      await agents.locator(':scope > summary').click(); await expect(agents).not.toHaveAttribute('open', '');
+      const before = await tools.boundingBox();
+      await rail.evaluate(node => { window.retainedRail = node; });
+      hold = true;
+      await page.clock.fastForward(10000);
+      await expect.poll(() => pending.length).toBe(1);
+      if (initial === 'populated') await expect(chatLink).toBeVisible();
+      else await expect(label).toBeVisible();
+      for (const name of ['Files', 'Members', 'Project settings']) {
+        await tools.getByRole('link', { name, exact: true }).click();
+        await expect(tools.getByRole('link', { name, exact: true })).toHaveAttribute('aria-current', 'page');
+        expect((await tools.boundingBox()).y).toBe(before.y);
+        expect(await rail.evaluate(node => node === window.retainedRail)).toBe(true);
+        await expect(agents).not.toHaveAttribute('open', '');
+      }
+      if (initial === 'empty') await page.screenshot({ path: testInfo.outputPath('sidebar-refresh-stable.png') });
+      const refreshed = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 200);
+      hold = false; pending.splice(0).forEach(resolve => resolve()); await refreshed;
+      // A retryable error keeps authorized data; access denial must clear it.
+      status = 503;
+      const failed = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 503);
+      await page.evaluate(() => dispatchEvent(new Event('workspace-changed'))); await failed;
+      await expect(rail.getByRole('alert')).toContainText('Synthetic chat refresh 503');
+      if (initial === 'populated') await expect(chatLink).toBeVisible();
+      else await expect(label).toBeVisible();
+      expect((await tools.boundingBox()).y).toBeGreaterThan(before.y); // The explicit error notice occupies space.
+      status = 403;
+      const denied = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 403);
+      await page.evaluate(() => dispatchEvent(new Event('workspace-changed'))); await denied;
+      await expect(rail.getByRole('alert')).toContainText('Synthetic chat refresh 403');
+      await expect(chatLink).toHaveCount(0); await expect(rail.locator('.rail-empty')).toHaveCount(0);
+      status = 200; items = [];
+      const restored = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 200);
+      await page.evaluate(() => dispatchEvent(new Event('workspace-changed'))); await restored;
+      await expect(rail.getByRole('alert')).toHaveCount(0);
+      await expect(page.getByText(initial === 'no-match' ? 'No matching conversations.' : 'No conversations yet.', { exact: true })).toBeVisible();
+      expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
+    } finally { hold = false; pending.splice(0).forEach(resolve => resolve()); }
+  });
+}

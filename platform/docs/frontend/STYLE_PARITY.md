@@ -114,3 +114,17 @@ ordering across Green/Cognac/Dark. Their request-intercepted fixture has no real
 account or provider access. The existing 23 integrated synthetic workflows remain
 in the suite. Screenshots, commands, logs and final validation results are kept
 outside Git in the requested implementation evidence, not in this source matrix.
+
+## Sidebar iteration after preview testing
+
+The narrow header places its navigation trigger first in DOM and visual order,
+matching the left drawer. Desktop rail placement is unchanged. Escape returns
+focus to the trigger and the drawer closes after route selection.
+
+An empty or filtered Recents list keeps its canonical empty label during
+background polling. Previously that label disappeared on every refresh,
+moving the following navigation rows by about 39 pixels. Authorization failures
+still clear retained conversation data through the existing resource hook.
+Browser regressions cover 390/760/761-pixel breakpoints, keyboard return,
+empty/filtered/populated polling, stable selection and disclosure state,
+retryable failures, and access loss.

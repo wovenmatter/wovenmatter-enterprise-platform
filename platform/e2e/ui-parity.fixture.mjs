@@ -48,6 +48,7 @@ export async function parityFixture(page, { theme = 'green', emptyModels = false
     const list = (items) => ({ items });
     if (path === '/session') result = { user: { id: 'parity-owner', role: 'owner', name: 'Synthetic owner', email: 'parity@example.test', theme }, csrfToken: null };
     else if (path === '/organizations') result = list([org]);
+    else if (path === '/hosts') result = list([{ id: 'local', name: 'Synthetic host' }]);
     else if (path.endsWith('/projects')) result = list([project]);
     else if (path === `/projects/${project.id}`) result = project;
     else if (path.endsWith('/folders')) result = list([folder]);

@@ -489,7 +489,8 @@ function WorkspaceRail({
       <ErrorNotice message={error || folders.error || chats.error} />
       <RailSection title="Recents" className="recents">
         {recents.map(chatRow)}
-        {!recents.length && !chats.loading ? (
+        {/* Polling retains authorized empty results too, so the rail does not jump. */}
+        {!recents.length && chats.data ? (
           <p className="rail-empty">
             {search.trim() ? "No matching conversations." : "No conversations yet."}
           </p>

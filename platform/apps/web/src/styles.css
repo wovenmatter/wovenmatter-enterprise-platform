@@ -3127,12 +3127,15 @@ details[open] > summary .work-chevron {
     z-index: 20;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 12px;
     height: 52px;
-    padding: 0 6px 0 16px;
+    padding: 0 16px 0 6px;
     border-bottom: 1px solid var(--line);
     background: var(--workspace);
+  }
+  .mobile-title {
+    flex: 1;
   }
   .sidebar {
     position: fixed;

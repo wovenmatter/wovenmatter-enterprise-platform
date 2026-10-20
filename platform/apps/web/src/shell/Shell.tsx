@@ -82,7 +82,6 @@ export function Shell({
         Skip to content
       </a>
       <header className="mobile-header" inert={mobileOpen}>
-        <strong className="mobile-title">{mobileTitle}</strong>
         <button
           ref={menuButton}
           className="icon-button"
@@ -91,6 +90,7 @@ export function Shell({
         >
           <Icon icon={Menu} size={18} weight="control" />
         </button>
+        <strong className="mobile-title">{mobileTitle}</strong>
       </header>
       {mobileOpen ? (
         <button
