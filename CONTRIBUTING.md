@@ -25,7 +25,7 @@ local database/backup exports must remain private. Only reviewed generic
 
 ## Validation
 
-Use Node.js 24.21.0 and npm 12.2.0. Install dependencies with `npm ci`,
+Use Node.js 24.22.1 and npm 12.2.0. Install dependencies with `npm ci`,
 then run `npm run check` for the build and deterministic tests. Run
 `npm run test:coverage` when checking coverage, and install Chromium with
 `npx playwright install chromium` before `npm run test:e2e` for browser

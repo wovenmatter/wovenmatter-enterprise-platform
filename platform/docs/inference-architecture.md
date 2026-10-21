@@ -2,7 +2,7 @@
 
 WovenMatter Enterprise Platform owns organization authorization, UI, admin audit records, provider connection metadata and run-scoped inference grants. A separately pinned CLIProxyAPI v8 process per organization owns upstream OAuth access/refresh tokens, API keys, credential refresh, cooldowns, account priority and account selection. Do not combine organizations into one proxy pool.
 
-The Go source pin is `acdace936fa7df2905500c7f5e0a97d683138dea`, MIT. References checked against that revision: `docs/management-api-v8.md`, `internal/api/server_management_v8.go`, `internal/api/handlers/management/auth_files.go`, `auth_files_fields.go`, `auth_files_refresh.go`, `api_key_usage.go`, `oauth_callback.go`, `config.example.yaml`, `sdk/cliproxy/auth/selector.go`, and `sdk/cliproxy/session/identity.go`. Old SDK examples targeting v6 are not used.
+The Go source pin is `0db19025571684b198a2ef508f99b41c717337e8`, MIT. References checked against that revision: `docs/management-api-v8.md`, `internal/api/server_management_v8.go`, `internal/api/handlers/management/auth_files.go`, `auth_files_fields.go`, `auth_files_refresh.go`, `api_key_usage.go`, `oauth_callback.go`, `config.example.yaml`, `sdk/cliproxy/auth/selector.go`, and `sdk/cliproxy/session/identity.go`. Old SDK examples targeting v6 are not used.
 
 ## Deployment contract
 

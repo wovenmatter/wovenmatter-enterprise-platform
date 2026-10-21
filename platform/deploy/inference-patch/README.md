@@ -1,6 +1,16 @@
 # Structured remote subscription sign-in
 
-This patch is applied only to CLIProxyAPI commit `acdace936fa7df2905500c7f5e0a97d683138dea`. The inference Dockerfile checks that pin, applies `upstream.patch`, copies the added Go files, runs their focused tests and builds the ordinary inference binary. No extra service or provider CLI is launched. Preserve the upstream MIT license and source attribution in `THIRD_PARTY_NOTICES.md`.
+This patch is applied only to CLIProxyAPI commit `0db19025571684b198a2ef508f99b41c717337e8`. The inference Dockerfile checks that pin, applies `upstream.patch`, copies the added Go files, then applies the locked `go-security.patch`. It verifies modules, runs storage/network and focused provider tests, and builds the ordinary inference binary. No extra service or provider CLI is launched. Preserve the upstream MIT license and source attribution in `THIRD_PARTY_NOTICES.md`.
+
+The October 21 security overlay updates go-git to v6.0.0-beta.1, x/crypto to
+v0.58.0, x/net to v0.61.0, x/text to v0.43.0 and klauspost/compress to v1.20.3,
+including their required module closure and checksums. These resolve the
+advisories found by `govulncheck` in the pinned upstream graph. Go-git's newer
+rooted filesystem reports a missing pack as a wrapped path error; the adapter
+recognizes only that specific missing-pack case and preserves fail-closed
+recovery. Corruption fixtures reopen after deleting pack files so cached handles
+cannot hide disk damage. The full storage tests and a narrow error-classification
+regression run in the image build. CI additionally runs govulncheck v1.9.0.
 
 The added management routes run behind the existing management authentication middleware:
 

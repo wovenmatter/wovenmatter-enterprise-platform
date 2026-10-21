@@ -15,7 +15,7 @@ Ordinary files are usable immediately with the agent's native tools. The applica
 
 ## Develop and test
 
-Use Node.js 24.21.0 and npm 12.2.0.
+Use Node.js 24.22.1 and npm 12.2.0.
 
 ```sh
 npm ci
