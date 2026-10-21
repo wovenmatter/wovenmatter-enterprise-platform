@@ -46,8 +46,7 @@ export function App() {
   if (error)
     return (
       <main className="auth-page">
-        <ErrorNotice message={error} />
-        <button onClick={() => window.location.reload()}>Retry</button>
+        <ErrorNotice message={error} onRetry={() => window.location.reload()} />
       </main>
     );
   if (!session) return <Loading />;

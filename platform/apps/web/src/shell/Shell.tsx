@@ -18,6 +18,7 @@ import {
   type User,
 } from "../api";
 import { Brand } from "../components/Brand";
+import { Icon } from "../components/controls";
 import {
   AsyncForm,
   ErrorNotice,
@@ -81,15 +82,15 @@ export function Shell({
         Skip to content
       </a>
       <header className="mobile-header" inert={mobileOpen}>
-        <strong className="mobile-title">{mobileTitle}</strong>
         <button
           ref={menuButton}
           className="icon-button"
           aria-label="Open navigation"
           onClick={() => setMobileOpen(true)}
         >
-          <Menu size={22} />
+          <Icon icon={Menu} size={18} weight="control" />
         </button>
+        <strong className="mobile-title">{mobileTitle}</strong>
       </header>
       {mobileOpen ? (
         <button
@@ -149,7 +150,7 @@ export function Shell({
               aria-label="Close navigation"
               onClick={() => setMobileOpen(false)}
             >
-              <X size={20} />
+              <Icon icon={X} size={16} weight="control" />
             </button>
           </div>
         )}
@@ -183,21 +184,22 @@ export function Shell({
             to={`/personal-settings${accountReturn}`}
             title={`Settings · ${user.name || user.email}`}
           >
-            <Settings size={18} />
+            <Icon icon={Settings} size={13} />
             <span className="account-label">
               Settings{" "}
               <span className="account-name">· {user.name || user.email}</span>
             </span>
           </Link>
           <button
+            type="button"
             className="nav-link"
             onClick={() => {
               setError("");
               logout().catch((e) => setError(e.message));
             }}
           >
-            <LogOut size={18} />
-            Sign out
+            <Icon icon={LogOut} size={13} />
+            <span>Sign out</span>
           </button>
           <ErrorNotice message={error} />
         </div>

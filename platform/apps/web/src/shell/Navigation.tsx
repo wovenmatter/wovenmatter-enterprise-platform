@@ -7,6 +7,7 @@ import {
   Settings,
 } from "lucide-react";
 import type { Organization, User } from "../api";
+import { Icon } from "../components/controls";
 import { ProjectNavigation } from "./ProjectNavigation";
 
 export function AdministrationNav({
@@ -22,9 +23,9 @@ export function AdministrationNav({
     <nav aria-label="Administration navigation">
       {user.role === "owner" ? (
         <>
-          <button className="nav-link" onClick={onCreate}>
-            <Plus size={19} />
-            New Organization
+          <button type="button" className="nav-link" onClick={onCreate}>
+            <Icon icon={Plus} size={13} />
+            <span>New organization</span>
           </button>
           {organizations.map((org) => (
             <Link
@@ -33,7 +34,7 @@ export function AdministrationNav({
               to={`/organizations/${org.id}/projects`}
               title={org.name}
             >
-              <Folder size={19} />
+              <Icon icon={Folder} size={13} />
               <span className="organization-nav-name">{org.name}</span>
             </Link>
           ))}
@@ -44,7 +45,8 @@ export function AdministrationNav({
           end
           className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
         >
-          <Folder size={19} /> Access
+          <Icon icon={Folder} size={13} />
+          <span>Access</span>
         </NavLink>
       )}
     </nav>
@@ -85,10 +87,12 @@ export function OrganizationNav({
             aria-label="Back to administration"
             title="Back to administration"
           >
-            <PanelLeftClose size={16} strokeWidth={1.75} />
+            <Icon icon={PanelLeftClose} size={16} weight="control" />
           </Link>
         ) : organizations.length > 1 ? (
-          <Link to="/">Switch organization</Link>
+          <Link className="text-button" to="/">
+            Switch organization
+          </Link>
         ) : null}
       </div>
       <ProjectNavigation
@@ -98,14 +102,14 @@ export function OrganizationNav({
         isAdmin={isAdmin}
       />
       <nav aria-label="Main navigation" className="organization-navigation">
-        {links.map(({ to, label, icon: Icon }) => (
+        {links.map(({ to, label, icon: Glyph }) => (
           <NavLink
             key={to}
             to={to}
             className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
           >
-            <Icon size={19} />
-            {label}
+            <Icon icon={Glyph} size={13} />
+            <span>{label}</span>
           </NavLink>
         ))}
       </nav>

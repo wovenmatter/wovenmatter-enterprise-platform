@@ -1,6 +1,15 @@
 // Extends workspace.spec.mjs after its fresh-owner (zero-organization) coverage.
 import { test, expect } from "@playwright/test";
 import { readFile, writeFile } from "node:fs/promises";
+// Composer selectors are titled popouts (WovenMatter composer pickers):
+// open the real trigger, then choose the visible option.
+async function choose(page, label, value) {
+  await page.getByRole("button", { name: new RegExp(`^${label}\\b`) }).click();
+  await page.locator(`[role="option"][data-value="${value}"]`).click();
+  await expect(page.getByRole("listbox")).toHaveCount(0);
+}
+const picker = (page, label) =>
+  page.getByRole("button", { name: new RegExp(`^${label}\\b`) });
 const evidence = process.env.WME_E2E_OUTPUT ?? "/tmp/wme-e2e-evidence";
 async function organization(page, name, project = false) {
   const { origin } = JSON.parse(
@@ -53,9 +62,7 @@ async function create(page, f, name, project = false) {
   await page
     .getByRole("button", { name: "Start session", exact: true })
     .click();
-  await page
-    .getByLabel("Conversation model", { exact: true })
-    .selectOption("synthetic-asset-pi");
+  await choose(page, "Conversation model", "synthetic-asset-pi");
 }
 function errors(page) {
   const values = [];
@@ -91,6 +98,11 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
   });
   expect(upload.status()).toBe(200);
   await create(page, f, "Resumable asset");
+  // A dialog must preserve the shared composer surface, rather than inherit
+  // the filled text-field treatment used by its metadata form.
+  const editor = page.getByLabel("Message your agent", { exact: true });
+  await expect(editor).toBeVisible();
+  expect(await editor.evaluate(node => getComputedStyle(node).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
   await page.getByText("Library sources (0)", { exact: true }).click();
   await page
     .getByRole("button", { name: "Open folder Read-only inputs" })

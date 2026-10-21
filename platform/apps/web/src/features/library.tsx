@@ -1,7 +1,8 @@
 import { useCallback, useState } from "react";
-import { ExternalLink, Plus } from "lucide-react";
+import { ExternalLink, FileText, Plus } from "lucide-react";
 import { api, date, send, useResource, type List, type Project } from "../api";
 import { useWorkspace } from "../workspace";
+import { Icon } from "../components/controls";
 import {
   AsyncForm,
   Confirm,
@@ -68,13 +69,14 @@ export function LibraryPage() {
   const writable =
     projects.data?.items.filter((p) => p.access === "write") ?? [];
   const canCreate = isAdmin || writable.length > 0;
-  const action = (
+  const action = (primary: boolean) => (
     <button
-      className="primary"
+      className={primary ? "primary" : "secondary"}
       disabled={!canCreate}
       onClick={() => setCreating(true)}
     >
-      <Plus size={17} /> New asset
+      <Icon icon={Plus} size={14} weight="control" />
+      New asset
     </button>
   );
   return (
@@ -100,7 +102,13 @@ export function LibraryPage() {
           </div>
         }
       />
-      <ErrorNotice message={assets.error || projects.error} />
+      <ErrorNotice
+        message={assets.error || projects.error}
+        onRetry={() => {
+          assets.reload();
+          projects.reload();
+        }}
+      />
       {!canCreate && !projects.loading ? (
         <p className="muted">
           Full project access is needed to create a project asset. Organization
@@ -108,17 +116,17 @@ export function LibraryPage() {
         </p>
       ) : null}
       <div hidden={view !== "files"}>
-        <FilesPage embedded leadingActions={action} />
+        <FilesPage embedded leadingActions={action(false)} />
       </div>
       {view === "assets" ? (
         <section className="section-block">
           <div className="section-heading-row">
             <h2>Assets</h2>
-            <div className="actions">{action}</div>
+            <div className="actions">{action(true)}</div>
           </div>
-          {assets.loading ? (
+          {assets.loading && !assets.data ? (
             <Loading />
-          ) : assets.data?.items.length ? (
+          ) : assets.error && !assets.data ? null : assets.data?.items.length ? (
             <div className="table-wrap">
               <table>
                 <thead>
@@ -135,17 +143,32 @@ export function LibraryPage() {
                       <td>
                         {a.canManage ? (
                           <button
-                            className="text-button item-link"
+                            className="item-link"
                             onClick={() => setSelected(a.id)}
                           >
-                            {a.name}
+                            <Icon icon={FileText} size={16} />
+                            <span>
+                              <strong>{a.name}</strong>
+                              {a.description ? <small>{a.description}</small> : null}
+                            </span>
                           </button>
                         ) : (
-                          <a href={a.url} target="_blank" rel="noreferrer">
-                            {a.name} <ExternalLink size={15} />
+                          <a
+                            className="item-link"
+                            href={a.url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            <Icon icon={FileText} size={16} />
+                            <span>
+                              <strong>
+                                {a.name}{" "}
+                                <Icon icon={ExternalLink} size={12} weight="control" />
+                              </strong>
+                              {a.description ? <small>{a.description}</small> : null}
+                            </span>
                           </a>
                         )}
-                        {a.description ? <small>{a.description}</small> : null}
                       </td>
                       <td>
                         {a.projectId
@@ -157,7 +180,7 @@ export function LibraryPage() {
                       <td>
                         <Status value={a.status} />
                       </td>
-                      <td>{a.visibility}</td>
+                      <td className="capitalize">{a.visibility}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -255,6 +278,7 @@ function AssetDetail({
           <div className="asset-summary">
             <Status value={a.status} />
             <span>{a.projectId ? "Project asset" : "Organization asset"}</span>
+            <span>Revision {a.revision}</span>
           </div>
           <nav className="tabs" aria-label="Asset views">
             {[
@@ -287,21 +311,28 @@ function AssetDetail({
                   ? "This draft has unpublished changes. Preview your saved draft before publishing."
                   : "The saved content matches the published version."}
               </p>
-              <a
-                className="secondary button-link"
-                href={`${a.url}/preview`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Preview draft <ExternalLink size={16} />
-              </a>
-              {a.publishedVersion ? (
-                <p>
-                  <a href={a.url} target="_blank" rel="noreferrer">
-                    Open published asset <ExternalLink size={16} />
+              <div className="card-actions">
+                <a
+                  className="secondary button-link"
+                  href={`${a.url}/preview`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Preview draft
+                  <Icon icon={ExternalLink} size={14} weight="control" />
+                </a>
+                {a.publishedVersion ? (
+                  <a
+                    className="secondary button-link"
+                    href={a.url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open published asset
+                    <Icon icon={ExternalLink} size={14} weight="control" />
                   </a>
-                </p>
-              ) : null}
+                ) : null}
+              </div>
               {a.canEdit ? (
                 <AsyncForm
                   key={a.revision}
@@ -330,7 +361,8 @@ function AssetDetail({
             <div className="asset-section">
               <h3>Published versions</h3>
               {a.versions?.length ? (
-                a.versions.map((v) => (
+                <div className="row-list">
+                {a.versions.map((v) => (
                   <div className="setting-row" key={v.number}>
                     <div>
                       <strong>
@@ -356,9 +388,10 @@ function AssetDetail({
                       />
                     ) : null}
                   </div>
-                ))
+                ))}
+                </div>
               ) : (
-                <p>No published versions yet.</p>
+                <p className="muted">No published versions yet.</p>
               )}
               <p className="muted">
                 Restoring a version changes the private draft. Publish it to
@@ -425,12 +458,15 @@ function AssetDetail({
               ) : (
                 <p>This draft is private until you publish it.</p>
               )}
-              <button
-                className="secondary danger"
-                onClick={() => setRemoving(true)}
-              >
-                Remove asset
-              </button>
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="destructive"
+                  onClick={() => setRemoving(true)}
+                >
+                  Remove asset
+                </button>
+              </div>
             </div>
           ) : null}
           {removing ? (
