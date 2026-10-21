@@ -8,14 +8,14 @@ FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b34
 WORKDIR /build
 COPY package.json package-lock.json ./
 COPY platform ./platform
-RUN npm ci --ignore-scripts && npm run build:server
+RUN npm install --global npm@12.2.0 && npm ci --ignore-scripts && npm run build:server
 
 FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS dependencies
 WORKDIR /opt/runtime
 COPY package.json package-lock.json ./
 COPY platform/apps/web/package.json ./platform/apps/web/package.json
 COPY platform/packages ./platform/packages
-RUN npm ci --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
+RUN npm install --global npm@12.2.0 && npm ci --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
 
 FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205
 RUN test "$(dpkg --print-architecture)" = amd64 \
@@ -28,6 +28,7 @@ RUN test "$(dpkg --print-architecture)" = amd64 \
  && mkdir -p /workspace /session /home/agent \
  && chown 10001:10001 /workspace /session /home/agent
 WORKDIR /opt/runtime
+RUN npm install --global npm@12.2.0 && npm cache clean --force
 COPY platform/runtime/document-requirements.txt /opt/document-requirements.txt
 RUN python3 -m venv /opt/document-tools \
  && /opt/document-tools/bin/pip install --no-cache-dir --no-deps -r /opt/document-requirements.txt \

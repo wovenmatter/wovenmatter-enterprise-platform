@@ -4,7 +4,8 @@ The [Node.js October security release](https://nodejs.org/en/blog/vulnerability/
 requires Node 24.22.1 on the supported 24.x line. Updating npm packages alone
 does not patch the runtime. All application, supervisor, project-runner and
 build image stages now select that release by immutable image digest; CI and
-the documented developer toolchain use the same version.
+the documented developer toolchain use the same version. npm is explicitly
+updated to 12.2.0 in build stages and shipped images.
 
 This maintenance also refreshes all direct npm dependencies to current stable
 releases, retaining Node 24-compatible type definitions. The resolved lockfile
@@ -15,7 +16,8 @@ Pi 1.3.0, Claude Agent SDK 0.3.306 and Playwright 1.64.1. The lockfile and
 versions and declared licenses.
 
 Document tools update pypdf to 6.21.2, lxml to 6.1.3 and typing-extensions to
-4.16.0. The image now checks the pinned Python dependency closure with
+4.16.0, with pip 26.2.2 and setuptools 84.2.1 replacing the older venv bootstrap
+tools. The image now checks the pinned Python dependency closure with
 `pip check`. Debian packages receive available updates when images are built.
 The supervisor's Docker CLI is 29.9.2. The inference service advances to
 CLIProxyAPI v8.0.38 at `0db19025571684b198a2ef508f99b41c717337e8`, built with

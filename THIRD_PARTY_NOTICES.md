@@ -36,7 +36,7 @@ Provider endpoints and subscription integrations remain subject to each provider
 
 ## Document tools and container packages
 
-The Python pins are pypdf 6.21.2 (BSD-3-Clause), python-docx 1.2.0 (MIT), openpyxl 3.1.5 (MIT), lxml 6.1.3 (BSD-3-Clause), et-xmlfile 2.0.0 (MIT), and typing-extensions 4.16.0 (PSF-2.0), based on their versioned PyPI release metadata. Binary wheels can bundle other libraries (notably lxml's XML/XSLT libraries); retain their license files and assess the actual selected wheel.
+The Python pins are pypdf 6.21.2 (BSD-3-Clause), python-docx 1.2.0 (MIT), openpyxl 3.1.5 (MIT), lxml 6.1.3 (BSD-3-Clause), et-xmlfile 2.0.0 (MIT), and typing-extensions 4.16.0 (PSF-2.0), based on their versioned PyPI release metadata. The environment also updates pip to 26.2.2 and setuptools to 84.2.1 (both MIT, with separately licensed vendored components). Binary wheels can bundle other libraries (notably lxml's XML/XSLT libraries); retain their license files and assess the actual selected wheel.
 
 Images also contain Node.js, Debian packages and libraries, and, depending on the image, Docker CLI, Python, Git, Poppler, ripgrep, curl, unzip, bubblewrap and AppArmor utilities. These have separate licenses, including GPL/LGPL components; Poppler and Git are not MIT-only packages. Preserve the images' `/usr/share/doc/*/copyright` files, package metadata and source/license obligations. Platform variants and apt resolution mean this source inventory is not a complete image SBOM or image-distribution clearance.
 
