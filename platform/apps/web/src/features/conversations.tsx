@@ -14,10 +14,16 @@ import {
   useState,
 } from "react";
 import {
+  ArrowDown,
   ArrowUp,
-  Ellipsis,
+  Brain,
+  Check,
+  ChevronDown,
+  Copy,
+  Cpu,
   FolderOpen,
   LockKeyhole,
+  MessageSquare,
   ShieldCheck,
   Settings,
   Square,
@@ -29,6 +35,7 @@ import {
   ApiError,
   date,
   errorMessage,
+  providerNames,
   send,
   useResource,
   type List,
@@ -47,8 +54,18 @@ import {
   readWorkspaceValue,
   writeWorkspaceValue,
 } from "../workspace-events";
-import { RichText } from "../components/RichText";
-import { sourcePathFromContentUrl } from "../source-preview";
+import { ContentLink, RichText } from "../components/RichText";
+import { useCopyFeedback } from "../components/useCopyFeedback";
+import {
+  Icon,
+  Menu,
+  MenuItem,
+  MenuLink,
+  MenuSeparator,
+  Picker,
+  type PickerOption,
+} from "../components/controls";
+import { Link } from "react-router-dom";
 import {
   mergeMessages,
   emptyAssistantLabel,
@@ -67,6 +84,7 @@ import {
   Field,
   Loading,
   Modal,
+  PageHeader,
   Status,
 } from "../components/ui";
 export type { Model, Conversation } from "../api";
@@ -160,6 +178,11 @@ export function ConversationsPage({ project }: { project: Project }) {
   }
   if (query.get("trash") === "1")
     return <ConversationTrash project={project} />;
+  const selectedFolder = folders.data?.items.find(
+    (f) => f.id === query.get("folder"),
+  );
+  const folderChats =
+    list.data?.items.filter((c) => c.folderId === selectedFolder?.id) ?? [];
   return (
     <div className="conversation-layout">
       <div className="conversation-main">
@@ -188,26 +211,39 @@ export function ConversationsPage({ project }: { project: Project }) {
             />
           )
         ) : (
-          <Empty
-            title={
-              folders.data?.items.find((f) => f.id === query.get("folder"))
-                ?.name ?? "All Workspaces"
-            }
-            action={
-              <button
-                className="primary"
-                onClick={() => {
-                  const next = new URLSearchParams(query);
-                  next.set("new", "1");
-                  setQuery(next);
-                }}
-              >
-                New conversation
-              </button>
-            }
-          >
-            Ask a question, analyze your files, or work through ideas.
-          </Empty>
+          <div className="workspace-home">
+            <Empty
+              title={selectedFolder?.name ?? "All Workspaces"}
+              action={
+                <button
+                  className="primary"
+                  onClick={() => {
+                    const next = new URLSearchParams(query);
+                    next.set("new", "1");
+                    setQuery(next);
+                  }}
+                >
+                  New conversation
+                </button>
+              }
+            >
+              Ask a question, analyze your files, or work through ideas.
+            </Empty>
+            {selectedFolder && folderChats.length ? (
+              <nav className="folder-conversations" aria-label={`Conversations in ${selectedFolder.name}`}>
+                {folderChats.map((c) => (
+                  <Link
+                    key={c.id}
+                    className="nav-link"
+                    to={`?${new URLSearchParams({ folder: selectedFolder.id, conversation: c.id })}`}
+                  >
+                    <Icon icon={MessageSquare} size={13} />
+                    <span className="rail-title">{c.title}</span>
+                  </Link>
+                ))}
+              </nav>
+            ) : null}
+          </div>
         )}
         {!conversationId ? <ErrorNotice message={list.error} /> : null}
       </div>
@@ -261,8 +297,8 @@ function PiSDKSettings({ conversationId }: { conversationId: string }) {
   return (
     <div className="pi-sdk-settings">
       <Field
-        label="Pi Durable version"
-        hint="Updates are published and verified by your platform maintainer. Applying one stops this conversation's idle background work and keeps its history."
+        label="Pi Durable SDK version"
+        hint="Pi Durable SDK updates are published and verified by your platform maintainer. Applying one stops this conversation's idle background work and keeps its history."
       >
         <select
           value={selected}
@@ -366,8 +402,16 @@ export function ConversationForm({
               autoFocus
             />
           </Field>
-          <details className="pi-options">
-            <summary>Pi Durable settings</summary>
+          <details className="settings-disclosure pi-options">
+            <summary>
+              <Icon
+                icon={ChevronDown}
+                size={12}
+                weight="control"
+                className="disclosure-chevron"
+              />
+              <span>Pi Durable settings</span>
+            </summary>
             <Field label="Code mode">
               <select
                 name="codeMode"
@@ -474,70 +518,74 @@ function ModelControls({
       onSaving(false);
     }
   }
+  const modelOptions: PickerOption[] = [
+    ...(current && !models.some((m) => m.id === current)
+      ? [{ value: current, label: `${current} (unavailable)`, disabled: true }]
+      : []),
+    ...models.map((m) => {
+      const label = m.name || m.id;
+      // Native popouts disambiguate repeated labels with their attribution.
+      const repeated = models.some(
+        (other) => other !== m && (other.name || other.id) === label,
+      );
+      return {
+        value: m.id,
+        label,
+        detail: repeated
+          ? `${providerNames[m.provider] ?? m.provider} · ${m.id}`
+          : undefined,
+      };
+    }),
+  ];
+  const thinkingOptions: PickerOption[] = [
+    { value: "", label: "Model default" },
+    ...(thinking && !levels.includes(thinking)
+      ? [{ value: thinking, label: `${thinking} (unavailable)`, disabled: true }]
+      : []),
+    ...levels.map((level) => ({
+      value: level,
+      label:
+        level === "xhigh"
+          ? "Extra high"
+          : level.charAt(0).toUpperCase() + level.slice(1),
+    })),
+  ];
   return (
     <div className="composer-model-controls">
-      <label>
-        <span className="sr-only">Model</span>
-        <select
-          aria-label="Conversation model"
-          title="Model"
-          value={value}
-          disabled={disabled || !canEdit || !conversation}
-          onChange={(e) => {
-            const model = e.target.value;
-            setValue(model);
-            setThinking("");
-            void change({ model });
-          }}
-        >
-          <option value="" disabled>
-            Select a model
-          </option>
-          {current && !models.some((m) => m.id === current) ? (
-            <option value={current} disabled>
-              {current} (unavailable)
-            </option>
-          ) : null}
-          {models.map((m) => (
-            <option key={m.provider + ":" + m.id} value={m.id}>
-              {m.name || m.id}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span className="sr-only">Thinking</span>
-        <select
-          aria-label="Thinking level"
-          title="Thinking level"
-          value={thinking}
-          disabled={
-            disabled ||
-            !canEdit ||
-            !conversation ||
-            (!levels.length && !thinking)
-          }
-          onChange={(e) => {
-            const next = e.target.value;
-            setThinking(next);
-            void change({ pi: { thinking: next || null } });
-          }}
-        >
-          <option value="">Model default</option>
-          {thinking && !levels.includes(thinking) ? (
-            <option value={thinking} disabled>
-              {thinking} (unavailable)
-            </option>
-          ) : null}
-          {levels.map((level) => (
-            <option key={level} value={level}>
-              {level === "xhigh"
-                ? "Extra high"
-                : level.charAt(0).toUpperCase() + level.slice(1)}
-            </option>
-          ))}
-        </select>
-      </label>
+      <Picker
+        label="Conversation model"
+        heading="Model"
+        icon={Cpu}
+        width={360}
+        value={value}
+        placeholder="Select a model"
+        options={modelOptions}
+        emptyMessage="No models are available. An administrator can connect a provider in Connections."
+        disabled={disabled || !canEdit || !conversation}
+        onChange={(model) => {
+          setValue(model);
+          setThinking("");
+          void change({ model });
+        }}
+      />
+      <Picker
+        label="Thinking level"
+        heading="Thinking Level"
+        icon={Brain}
+        value={thinking}
+        placeholder="Model default"
+        options={thinkingOptions}
+        disabled={
+          disabled ||
+          !canEdit ||
+          !conversation ||
+          (!levels.length && !thinking)
+        }
+        onChange={(next) => {
+          setThinking(next);
+          void change({ pi: { thinking: next || null } });
+        }}
+      />
     </div>
   );
 }
@@ -545,7 +593,8 @@ function RetainedReply({ id, message }: { id: string; message: Message }) {
   const [complete, setComplete] = useState<string>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState(false);
+  const text = complete ?? message.content;
+  const { copyState, copy } = useCopyFeedback(text);
   const truncated = message.contentTruncated && complete === undefined;
   async function load() {
     setLoading(true);
@@ -563,7 +612,7 @@ function RetainedReply({ id, message }: { id: string; message: Message }) {
   }
   return (
     <>
-      <RichText>{complete ?? message.content}</RichText>
+      <RichText>{text}</RichText>
       {truncated ? (
         <button
           type="button"
@@ -577,17 +626,16 @@ function RetainedReply({ id, message }: { id: string; message: Message }) {
         <div className="response-actions">
           <button
             type="button"
-            className="text-button"
+            className="icon-button small"
             aria-label="Copy response"
+            title="Copy complete response"
             onClick={() => {
-              void navigator.clipboard
-                .writeText(complete ?? message.content)
-                .then(() => setCopied(true))
-                .catch((e) => setError(errorMessage(e)));
+              void copy(() => navigator.clipboard.writeText(text));
             }}
           >
-            {copied ? "Copied" : "Copy response"}
+            <Icon icon={copyState === "Copied" ? Check : Copy} size={12} weight="control" />
           </button>
+          <small role="status">{copyState}</small>
         </div>
       )}
       {error ? (
@@ -613,7 +661,7 @@ export function Thread({
   onDeleted: () => void;
   asset?: { onSaved: () => void };
 }) {
-  const { user, orgBase } = useWorkspace();
+  const { user } = useWorkspace();
   const assetSaved = useRef(asset?.onSaved);
   assetSaved.current = asset?.onSaved;
   const [, setWorkspaceQuery] = useSearchParams();
@@ -657,27 +705,11 @@ export function Thread({
     const input = inputElement.current;
     if (input) {
       input.style.height = "auto";
-      input.style.height = `${Math.min(168, Math.max(60, input.scrollHeight))}px`;
+      // Three to seven 20-pixel lines, as in the native composer.
+      input.style.height = `${Math.min(140, Math.max(60, input.scrollHeight))}px`;
     }
   }, [draft]);
   const [nativeOpen, setNativeOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!menuOpen) return;
-    const close = (event: PointerEvent) => {
-      if (!menu.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [menuOpen]);
   const [sending, setSending] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
   const [uncertain, setUncertain] = useState(Boolean(restored));
@@ -760,7 +792,6 @@ export function Thread({
     try {
       await send(`/enterprise/api/conversations/${id}/cancel`, {});
       runs.reload();
-      setMenuOpen(false);
     } catch (e) {
       setError(errorMessage(e));
     }
@@ -1001,80 +1032,57 @@ export function Thread({
         <div className="thread-header-actions">
           {!asset ? (
             <button
-              className="icon-button"
+              type="button"
+              className="icon-button small"
               aria-label="Conversation members"
+              title="Conversation members"
               onClick={() => setMembers(true)}
             >
-              <Users size={17} />
+              <Icon icon={Users} size={16} />
             </button>
           ) : null}
-          <div className="thread-menu" ref={menu}>
-            <button
-              className="icon-button"
-              aria-label="Conversation actions"
-              aria-expanded={menuOpen}
-              aria-haspopup="true"
-              onClick={() => setMenuOpen(!menuOpen)}
+          <Menu label="Conversation actions" className="small">
+            <MenuLink href={`/enterprise/api/conversations/${id}/export`} download>
+              Export messages
+            </MenuLink>
+            <MenuLink
+              href={`/enterprise/api/conversations/${id}/export?full=1`}
+              download
             >
-              <Ellipsis size={19} />
-            </button>
-            {menuOpen ? (
-              <div className="thread-menu-items">
-                <a href={`/enterprise/api/conversations/${id}/export`} download>
-                  Export messages
-                </a>
-                <a
-                  href={`/enterprise/api/conversations/${id}/export?full=1`}
-                  download
+              Export full run
+            </MenuLink>
+            <MenuItem onSelect={() => setNativeOpen(true)}>Native history</MenuItem>
+            <MenuSeparator />
+            <MenuItem
+              icon={Square}
+              disabled={!canAct}
+              title="Stop this thread’s current work and background processes. Other threads keep running."
+              onSelect={() => void stop()}
+            >
+              {active.length ? "Stop" : "Stop background work"}
+            </MenuItem>
+            {creator ? (
+              <>
+                <MenuItem
+                  icon={Settings}
+                  disabled={!canAct || active.length > 0}
+                  onSelect={() => setEditing(true)}
                 >
-                  Export full run
-                </a>
-                <button
-                  onClick={() => {
-                    setNativeOpen(true);
-                    setMenuOpen(false);
-                  }}
-                >
-                  Native history
-                </button>
-                <button
-                  disabled={!canAct}
-                  title="Stop this thread’s current work and background processes. Other threads keep running."
-                  onClick={() => void stop()}
-                >
-                  <Square size={14} />
-                  {active.length ? "Stop" : "Stop background work"}
-                </button>
-                {creator ? (
-                  <>
-                    <button
-                      disabled={!canAct || active.length > 0}
-                      onClick={() => {
-                        setEditing(true);
-                        setMenuOpen(false);
-                      }}
-                    >
-                      <Settings size={15} />
-                      Conversation settings
-                    </button>
-                    {!asset ? (
-                      <button
-                        className="danger"
-                        disabled={!canAct}
-                        onClick={() => {
-                          setDeleting(true);
-                          setMenuOpen(false);
-                        }}
-                      >
-                        <Trash2 size={15} />
-                        Move to Trash
-                      </button>
-                    ) : null}
-                  </>
+                  Conversation settings
+                </MenuItem>
+                {!asset ? (
+                  <MenuItem
+                    icon={Trash2}
+                    danger
+                    disabled={!canAct}
+                    onSelect={() => setDeleting(true)}
+                  >
+                    Move to Trash
+                  </MenuItem>
                 ) : null}
-              </div>
+              </>
             ) : null}
-          </div>
+          </Menu>
         </div>
       </header>
       <NativeHistory
@@ -1135,9 +1143,7 @@ export function Thread({
             <article key={m.id} className={`message message-${m.role}`}>
               <div className="message-meta">
                 <strong>
-                  {m.role === "assistant"
-                    ? "Assistant"
-                    : m.authorName || "Member"}
+                  {m.role === "assistant" ? "Pi Durable" : m.authorName || "Member"}
                 </strong>
                 <time dateTime={m.createdAt}>{date(m.createdAt)}</time>
               </div>
@@ -1237,19 +1243,10 @@ export function Thread({
                 <div className="citations">
                   {m.citations.map((c, i) =>
                     c.url?.startsWith("/enterprise/api/files/") ? (
-                      <a
-                        key={i}
-                        href={
-                          sourcePathFromContentUrl(c.url, c.page)
-                            ? `${orgBase}${sourcePathFromContentUrl(c.url, c.page)}`
-                            : c.url
-                        }
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
+                      <ContentLink key={i} href={c.url} page={c.page}>
                         {c.label ?? "Source"}
                         {c.page ? ` · page ${c.page}` : ""}
-                      </a>
+                      </ContentLink>
                     ) : (
                       <span key={i}>
                         {c.label ?? "Source"}
@@ -1285,7 +1282,8 @@ export function Thread({
       <div className="composer-area">
         {!following ? (
           <button
-            className="text-button latest-reply"
+            type="button"
+            className="secondary latest-reply"
             onClick={() => {
               follow.current = true;
               setFollowing(true);
@@ -1293,7 +1291,8 @@ export function Thread({
                 scroll.current.scrollTop = scroll.current.scrollHeight;
             }}
           >
-            Latest reply ↓
+            <Icon icon={ArrowDown} size={12} weight="control" />
+            Latest reply
           </button>
         ) : null}
         <NativeChecklist
@@ -1309,6 +1308,69 @@ export function Thread({
           <label className="sr-only" htmlFor="message">
             Message your agent
           </label>
+          {!asset ? (
+            <div className="composer-folder-row">
+              <Picker
+                label="Conversation folder"
+                heading="Folder"
+                icon={FolderOpen}
+                className="composer-folder"
+                width={320}
+                value={detail.data?.folderId ?? ""}
+                placeholder="All Workspaces"
+                title={
+                  detail.data?.workingDirectory ??
+                  "Choose a working folder before sending"
+                }
+                options={[
+                  { value: "", label: "All Workspaces" },
+                  ...(detail.data?.folderId &&
+                  !folders.data?.items.some((f) => f.id === detail.data?.folderId)
+                    ? [{ value: detail.data.folderId, label: "Removed folder" }]
+                    : []),
+                  ...(folders.data?.items.map((f) => ({
+                    value: f.id,
+                    label: f.name,
+                  })) ?? []),
+                ]}
+                disabled={
+                  !detail.data ||
+                  detail.data.workspaceLocked ||
+                  detail.data.createdBy !== user.id ||
+                  sending ||
+                  modelSaving ||
+                  uncertain
+                }
+                onChange={async (value) => {
+                  const navigationTarget = window.location.href;
+                  const folderId = value || null;
+                  setModelSaving(true);
+                  try {
+                    const updated = await send<Conversation>(
+                      `/enterprise/api/conversations/${id}/organization`,
+                      { folderId },
+                      "PATCH",
+                    );
+                    if (window.location.href === navigationTarget)
+                      setWorkspaceQuery(
+                        (current) => {
+                          const next = new URLSearchParams(current);
+                          next.set("folder", updated.folderId ?? "all");
+                          return next;
+                        },
+                        { replace: true },
+                      );
+                    detail.reload();
+                    workspaceChanged();
+                  } catch (e) {
+                    setError(errorMessage(e));
+                  } finally {
+                    setModelSaving(false);
+                  }
+                }}
+              />
+            </div>
+          ) : null}
           <textarea
             ref={inputElement}
             id="message"
@@ -1331,80 +1393,6 @@ export function Thread({
             }}
           />
           <div className="composer-controls">
-            <label className="message-kind">
-              <select
-                aria-label="Message mode"
-                value={kind}
-                disabled={sending || uncertain || !canAct}
-                onChange={(e) =>
-                  setKind(e.target.value as "message" | "comment")
-                }
-              >
-                <option value="message">Message</option>
-                <option value="comment">Comment</option>
-              </select>
-            </label>
-            {!asset ? (
-              <label className="composer-folder-control">
-                <FolderOpen size={13} />
-                <select
-                  aria-label="Conversation folder"
-                  value={detail.data?.folderId ?? ""}
-                  title={
-                    detail.data?.workingDirectory ??
-                    "Choose a working folder before sending"
-                  }
-                  disabled={
-                    !detail.data ||
-                    detail.data.workspaceLocked ||
-                    detail.data.createdBy !== user.id ||
-                    sending ||
-                    modelSaving ||
-                    uncertain
-                  }
-                  onChange={async (e) => {
-                    const navigationTarget = window.location.href;
-                    const folderId = e.target.value || null;
-                    setModelSaving(true);
-                    try {
-                      const updated = await send<Conversation>(
-                        `/enterprise/api/conversations/${id}/organization`,
-                        { folderId },
-                        "PATCH",
-                      );
-                      if (window.location.href === navigationTarget)
-                        setWorkspaceQuery(
-                          (current) => {
-                            const next = new URLSearchParams(current);
-                            next.set("folder", updated.folderId ?? "all");
-                            return next;
-                          },
-                          { replace: true },
-                        );
-                      detail.reload();
-                      workspaceChanged();
-                    } catch (e) {
-                      setError(errorMessage(e));
-                    } finally {
-                      setModelSaving(false);
-                    }
-                  }}
-                >
-                  <option value="">All Workspaces</option>
-                  {detail.data?.folderId &&
-                  !folders.data?.items.some(
-                    (f) => f.id === detail.data?.folderId,
-                  ) ? (
-                    <option value={detail.data.folderId}>Removed folder</option>
-                  ) : null}
-                  {folders.data?.items.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
             <ModelControls
               conversation={detail.data}
               models={models}
@@ -1428,9 +1416,9 @@ export function Thread({
               }
             >
               {detail.data?.mode === "write" && canAct ? (
-                <ShieldCheck size={14} />
+                <Icon icon={ShieldCheck} size={14} weight="control" />
               ) : (
-                <LockKeyhole size={14} />
+                <Icon icon={LockKeyhole} size={14} weight="control" />
               )}
               <span>
                 {detail.data?.mode === "write" && canAct
@@ -1439,21 +1427,45 @@ export function Thread({
               </span>
             </span>
             <div className="composer-send-actions">
+              <div className="message-kind">
+                <Picker
+                  label="Message mode"
+                  heading="Send As"
+                  icon={MessageSquare}
+                  width={320}
+                  value={kind}
+                  placeholder="Message"
+                  disabled={sending || uncertain || !canAct}
+                  options={[
+                    {
+                      value: "message",
+                      label: "Message",
+                      description: "Directs the agent. During active work, messages steer the run.",
+                    },
+                    {
+                      value: "comment",
+                      label: "Comment",
+                      description: "Saved for later agent context without starting work.",
+                    },
+                  ]}
+                  onChange={(value) => setKind(value as "message" | "comment")}
+                />
+              </div>
               {active.length ? (
                 <button
-                  className="icon-button"
+                  className="stop-button"
                   type="button"
                   aria-label="Stop"
                   title="Stop current work and background processes"
                   disabled={!canAct}
                   onClick={() => void stop()}
                 >
-                  <Square size={15} />
+                  <Icon icon={Square} size={12} weight="control" />
                 </button>
               ) : null}
               <button
                 type="submit"
-                className="send-button"
+                className={`send-button${uncertain ? " retry" : ""}`}
                 aria-label={
                   uncertain
                     ? "Retry message"
@@ -1468,7 +1480,11 @@ export function Thread({
                   (!draft.trim() && !uncertain)
                 }
               >
-                {uncertain ? "Retry" : <ArrowUp size={20} />}
+                {uncertain ? (
+                  "Retry"
+                ) : (
+                  <Icon icon={ArrowUp} size={16} weight="send" />
+                )}
               </button>
             </div>
           </div>
@@ -1554,14 +1570,19 @@ function ThreadMembers({
         access never grants full-access agent authority.
       </p>
       <ErrorNotice message={members.error || people.error} />
-      {members.data?.items.map((u) => (
-        <div className="setting-row" key={u.id}>
-          <div>
-            {u.name || u.email}
-            <small>{u.email}</small>
+      <div className="row-list">
+        {members.data?.items.map((u) => (
+          <div className="setting-row" key={u.id}>
+            <div>
+              <strong>{u.name || u.email}</strong>
+              <small>
+                {u.email}
+                {u.isCreator ? " · Creator" : ""}
+              </small>
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
       {people.data ? (
         <AsyncForm
           submitLabel="Add person"
@@ -1599,34 +1620,43 @@ function ConversationTrash({ project }: { project: Project }) {
   );
   useWorkspaceChanges(chats.reload);
   return (
-    <div className="workspace-trash subpage">
-      <h1>Trash</h1>
-      <p>
-        Restoring a conversation preserves its history and working directory.
-        Working files are kept when a chat is moved to Trash.
-      </p>
-      <ErrorNotice message={chats.error} />
-      {chats.data?.items.map((c) => (
-        <div className="trash-conversation" key={c.id}>
-          <span>{c.title}</span>
-          {c.createdBy === user.id ? (
-            <button
-              onClick={async () => {
-                await send(`/enterprise/api/conversations/${c.id}/restore`, {});
-                chats.reload();
-                workspaceChanged();
-              }}
-            >
-              Restore conversation
-            </button>
-          ) : null}
+    <section className="workspace-trash subpage">
+      <PageHeader
+        title="Trash"
+        description="Restoring a conversation preserves its history and working directory. Working files are kept when a chat is moved to Trash."
+      />
+      <ErrorNotice message={chats.error} onRetry={chats.reload} />
+      {chats.loading && !chats.data ? (
+        <Loading />
+      ) : chats.error && !chats.data ? null : chats.data?.items.length ? (
+        <div className="row-list">
+          {chats.data.items.map((c) => (
+            <div className="setting-row" key={c.id}>
+              <Icon icon={MessageSquare} size={16} />
+              <div>
+                <strong>{c.title}</strong>
+              </div>
+              {c.createdBy === user.id ? (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={async () => {
+                    await send(`/enterprise/api/conversations/${c.id}/restore`, {});
+                    chats.reload();
+                    workspaceChanged();
+                  }}
+                >
+                  Restore conversation
+                </button>
+              ) : null}
+            </div>
+          ))}
         </div>
-      ))}
-      {!chats.loading && !chats.data?.items.length ? (
+      ) : (
         <Empty title="Trash is empty">
           Trashed conversations will appear here.
         </Empty>
-      ) : null}
-    </div>
+      )}
+    </section>
   );
 }

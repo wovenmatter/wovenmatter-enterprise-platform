@@ -1,19 +1,18 @@
 import piLogo from "../assets/pi-durable.svg";
-import { useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
+  ArrowLeft,
+  Files,
   Folder,
   FolderOpen,
-  Plus,
-  Search,
-  Settings,
-  Users,
-  Files,
-  ArrowLeft,
-  Pin,
-  Ellipsis,
-  Trash2,
   MessageSquare,
+  Pin,
+  Plus,
+  Settings,
+  SquarePen,
+  Trash2,
+  Users,
 } from "lucide-react";
 import {
   send,
@@ -26,7 +25,120 @@ import {
   type WorkspaceFolder,
 } from "../api";
 import { AsyncForm, Field, Modal, ErrorNotice } from "../components/ui";
+import {
+  DisclosureChevron,
+  Icon,
+  Menu,
+  MenuItem,
+  MenuLink,
+  MenuSeparator,
+  SearchField,
+} from "../components/controls";
 import { workspaceChanged, useWorkspaceChanges } from "../workspace-events";
+
+/** WovenMatter DashboardDisclosureHeading: title, then a trailing chevron. */
+function RailSection({
+  title,
+  children,
+  className = "",
+}: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <details open className={`rail-section ${className}`}>
+      <summary className="disclosure-heading">
+        <span>{title}</span>
+        <DisclosureChevron />
+      </summary>
+      {children}
+    </details>
+  );
+}
+/** Separate 24 × 28 new-chat action at the far right of a rail row. */
+function NewChat({ label, to }: { label: string; to: string }) {
+  return (
+    <Link className="rail-action" aria-label={label} title={label} to={to}>
+      <Icon icon={Plus} size={12} />
+    </Link>
+  );
+}
+
+/** DashboardFolderHoverCard at native 24e503f, DashboardSharedViews.swift:989.
+ * Counts include only conversations already authorized by the project API.
+ */
+function FolderRailLink({ folder, workspace, count, to, selected }: {
+  folder: WorkspaceFolder; workspace: string; count: number; to: string; selected: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchor = useRef<HTMLAnchorElement>(null);
+  const card = useRef<HTMLDivElement>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const id = useId();
+  function close() {
+    clearTimeout(timer.current);
+    setOpen(false);
+  }
+  function deferClose() {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setOpen(false), 300);
+  }
+  function show() {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setOpen(true), 500);
+  }
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useLayoutEffect(() => {
+    const node = card.current, trigger = anchor.current;
+    if (!open || !node || !trigger) return;
+    node.showPopover?.();
+    const bounds = trigger.closest(".rail-row")?.getBoundingClientRect() ?? trigger.getBoundingClientRect();
+    const fitsRight = bounds.right + 8 + node.offsetWidth <= innerWidth - 8;
+    const fitsLeft = bounds.left - 8 - node.offsetWidth >= 8;
+    const left = fitsRight ? bounds.right + 8 : fitsLeft ? bounds.left - 8 - node.offsetWidth : 8;
+    const top = fitsRight || fitsLeft ? bounds.top : bounds.bottom + 4 + node.offsetHeight <= innerHeight - 8 ? bounds.bottom + 4 : bounds.top - 4 - node.offsetHeight;
+    node.style.left = `${left}px`;
+    node.style.top = `${Math.max(8, Math.min(top, innerHeight - node.offsetHeight - 8))}px`;
+    const dismiss = (event: Event) => {
+      if (event.target instanceof Node && node.contains(event.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("scroll", dismiss, true);
+    window.addEventListener("resize", dismiss);
+    return () => {
+      document.removeEventListener("scroll", dismiss, true);
+      window.removeEventListener("resize", dismiss);
+    };
+  }, [open]);
+  const summary = `${count} ${count === 1 ? "conversation" : "conversations"}`;
+  return <>
+    <Link ref={anchor} className={`nav-link ${selected ? "active" : ""}`} to={to}
+      aria-label={folder.name}
+      aria-description={[workspace, summary, `Root folder: ${folder.rootPath}`, ...folder.referencePaths.map((path) => `Additional folder: ${path}`), folder.pinned ? "Pinned" : ""].filter(Boolean).join(", ")}
+      aria-describedby={open ? id : undefined}
+      onPointerEnter={(event) => { if (event.pointerType === "mouse") show(); }}
+      onPointerLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !card.current?.contains(event.relatedTarget)) deferClose(); }}
+      onPointerDown={close} onFocus={show} onBlur={close} onClick={close}
+      onKeyDown={(event) => { if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); close(); } }}>
+      <Icon icon={Folder} size={13} />
+      <span className="rail-title">{folder.name}{folder.removalPending ? " · Removal pending" : ""}</span>
+      {folder.pinned ? <Icon icon={Pin} size={11} className="rail-pin" /> : null}
+      <span className="rail-count" aria-hidden="true">{count}</span>
+    </Link>
+    {open ? <div ref={card} id={id} role="tooltip" popover="manual" className="popup folder-hover-card"
+      onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={deferClose}>
+      <strong>{folder.name}</strong>
+      <span className="folder-hover-workspace">{workspace}</span>
+      <small>{summary}</small>
+      <div className="folder-hover-paths">
+        <strong>Root folder</strong><span>{folder.rootPath}</span>
+        {folder.referencePaths.length ? <><strong>Additional folders</strong>{folder.referencePaths.map((path) => <span key={path}>{path}</span>)}</> : null}
+      </div>
+    </div> : null}
+  </>;
+}
+
 export function ProjectNavigation({
   orgId,
   user,
@@ -57,25 +169,40 @@ export function ProjectNavigation({
     );
   return (
     <div className="project-navigation">
-      <div className="rail-section-heading">
-        <Link to={`${base}/projects`}>Projects</Link>
+      <div className="rail-row">
+        <NavLink
+          className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
+          end
+          to={`${base}/projects`}
+        >
+          <Icon icon={FolderOpen} size={13} />
+          <span>Projects</span>
+        </NavLink>
         {isAdmin ? (
           <Link
-            className="icon-button"
+            className="rail-action"
             aria-label="New project"
+            title="New project"
             to={`${base}/projects?new=1`}
           >
-            <Plus size={16} />
+            <Icon icon={Plus} size={12} />
           </Link>
         ) : null}
       </div>
-      <ErrorNotice message={projects.error} />
-      {projects.data?.items.map((p) => (
-        <Link className="nav-link" key={p.id} to={`${base}/projects/${p.id}`}>
-          <Folder size={17} />
-          <span>{p.name}</span>
-        </Link>
-      ))}
+      <ErrorNotice message={projects.error} onRetry={projects.reload} />
+      <div className="rail-children">
+        {projects.data?.items.map((p) => (
+          <Link
+            className="nav-link"
+            key={p.id}
+            to={`${base}/projects/${p.id}`}
+            title={p.name}
+          >
+            <Icon icon={Folder} size={13} />
+            <span>{p.name}</span>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }
@@ -107,6 +234,7 @@ function WorkspaceRail({
     query = new URLSearchParams(location.search),
     selected = query.get("folder") ?? "all",
     conversation = query.get("conversation"),
+    trash = query.has("trash"),
     base = `/organizations/${orgId}/projects/${projectId}`;
   const [search, setSearch] = useState(""),
     [error, setError] = useState("");
@@ -116,14 +244,20 @@ function WorkspaceRail({
   } | null>(null);
   const [renameChat, setRenameChat] = useState<Conversation | null>(null);
   const writable = project?.access === "write";
+  const onWorkspace = location.pathname.endsWith(projectId);
   const url = (values: Record<string, string>) =>
     `${base}?${new URLSearchParams(values)}`;
-  const scoped =
-    chats.data?.items.filter(
-      (c) =>
-        (selected === "all" || c.folderId === selected) &&
-        c.title.toLowerCase().includes(search.toLowerCase()),
-    ) ?? [];
+  const allChats = chats.data?.items ?? [];
+  // Recents covers every project conversation this user is authorized to
+  // list, as native Recents is global; the folder selection scopes new chats.
+  const recents = allChats
+    .filter((c) => c.title.toLowerCase().includes(search.trim().toLowerCase()))
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
+  const count = (folderId: string) =>
+    allChats.filter((c) => c.folderId === folderId).length;
+  const inSelection = allChats.filter(
+    (c) => selected === "all" || c.folderId === selected,
+  );
   async function mutation(path: string, body: unknown, method = "PATCH") {
     try {
       await send(path, body, method);
@@ -137,290 +271,248 @@ function WorkspaceRail({
   }
   function chatRow(c: Conversation) {
     const mine = c.createdBy === user.id;
+    const current = conversation === c.id;
+    const state = [c.pinned ? "Pinned" : "", c.activeRun ? "Working" : ""]
+      .filter(Boolean)
+      .join(", ");
     return (
-      <div className="workspace-rail-row" key={c.id}>
+      <div className="rail-row" key={c.id}>
         <Link
-          className={`nav-link conversation-link ${conversation === c.id ? "selected" : ""}`}
-          aria-current={conversation === c.id ? "page" : undefined}
+          className={`nav-link conversation-link ${current ? "active" : ""}`}
+          aria-current={current ? "page" : undefined}
           to={url({ folder: selected, conversation: c.id })}
           title={c.title}
+          aria-description={state || undefined}
         >
-          <MessageSquare size={15} />
-          <span>{c.title}</span>
-          {c.activeRun ? (
-            <span className="working-dot" aria-label="Working" />
+          <Icon icon={MessageSquare} size={13} />
+          <span className="rail-title">{c.title}</span>
+          {c.activeRun ? <span className="working-dot" aria-hidden="true" /> : null}
+          {c.pinned ? (
+            <Icon icon={Pin} size={11} className="rail-pin" />
           ) : null}
-          {c.pinned ? <Pin size={12} /> : null}
         </Link>
-        <details
-          className="rail-menu"
-          onClick={(e) => {
-            if ((e.target as HTMLElement).closest("button,a"))
-              e.currentTarget.removeAttribute("open");
-          }}
-        >
-          <summary aria-label={`Actions for ${c.title}`}>
-            <Ellipsis size={15} />
-          </summary>
-          <div>
-            {mine ? (
-              <>
-                <button
-                  onClick={() =>
-                    void mutation(
-                      `/enterprise/api/conversations/${c.id}/organization`,
-                      { pinned: !c.pinned },
-                    )
-                  }
-                >
-                  {c.pinned ? "Unpin" : "Pin"}
-                </button>
-                <button onClick={() => setRenameChat(c)}>Rename</button>
-                <button
-                  className="danger"
-                  disabled={c.effectiveMode === "read" && c.mode === "write"}
-                  onClick={async () => {
-                    const navigationTarget = window.location.href;
-                    if (
-                      await mutation(
-                        `/enterprise/api/conversations/${c.id}`,
-                        undefined,
-                        "DELETE",
-                      )
-                    ) {
-                      if (
-                        conversation === c.id &&
-                        window.location.href === navigationTarget
-                      )
-                        navigate(url({ folder: selected }));
-                    }
-                  }}
-                >
-                  Move to Trash
-                </button>
-              </>
-            ) : null}
-            <a href={`/enterprise/api/conversations/${c.id}/export`} download>
-              Export messages
-            </a>
-            <a
-              href={`/enterprise/api/conversations/${c.id}/export?full=1`}
-              download
-            >
-              Export full run
-            </a>
-          </div>
-        </details>
+        <Menu label={`Actions for ${c.title}`} iconSize={12} className="rail-action">
+          {mine ? (
+            <>
+              <MenuItem
+                onSelect={() =>
+                  void mutation(
+                    `/enterprise/api/conversations/${c.id}/organization`,
+                    { pinned: !c.pinned },
+                  )
+                }
+              >
+                {c.pinned ? "Unpin" : "Pin"}
+              </MenuItem>
+              <MenuItem onSelect={() => setRenameChat(c)}>Rename</MenuItem>
+            </>
+          ) : null}
+          <MenuLink href={`/enterprise/api/conversations/${c.id}/export`} download>
+            Export messages
+          </MenuLink>
+          <MenuLink
+            href={`/enterprise/api/conversations/${c.id}/export?full=1`}
+            download
+          >
+            Export full run
+          </MenuLink>
+          {mine ? (
+            <>
+              <MenuSeparator />
+              <MenuItem
+                danger
+                disabled={c.effectiveMode === "read" && c.mode === "write"}
+                onSelect={async () => {
+                  const navigationTarget = window.location.href;
+                  if (
+                    (await mutation(
+                      `/enterprise/api/conversations/${c.id}`,
+                      undefined,
+                      "DELETE",
+                    )) &&
+                    current &&
+                    window.location.href === navigationTarget
+                  )
+                    navigate(url({ folder: selected }));
+                }}
+              >
+                Move to Trash
+              </MenuItem>
+            </>
+          ) : null}
+        </Menu>
       </div>
     );
   }
   return (
     <div className="project-navigation workspace-navigation">
-      <Link
-        className="nav-link project-back"
-        to={`/organizations/${orgId}/projects`}
-      >
-        <ArrowLeft size={15} />
-        <span>{project?.name ?? "Project workspace"}</span>
-      </Link>
-      <Link
-        className="nav-link new-conversation"
-        to={url({ folder: selected, new: "1" })}
-      >
-        <Plus size={18} />
-        New conversation
-      </Link>
-      <label className="rail-search">
-        <Search size={15} />
-        <input
-          type="search"
-          aria-label="Search conversations"
-          placeholder="Search conversations…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      </label>
-      <details open className="rail-disclosure">
-        <summary>Agent</summary>
-        <div className="workspace-rail-row">
-          <Link
-            className="nav-link"
-            to={
-              scoped[0]
-                ? url({ folder: selected, conversation: scoped[0].id })
-                : url({ folder: selected })
-            }
-          >
-            <img className="agent-logo" src={piLogo} alt="" />
-            <span>Pi Durable</span>
-          </Link>
-          <Link
-            className="icon-button"
-            aria-label="New chat with Pi Durable"
-            to={url({ folder: selected, new: "1" })}
-          >
-            <Plus size={15} />
-          </Link>
-        </div>
-      </details>
-      <details open className="rail-disclosure">
-        <summary>Folders</summary>
-        {writable ? (
-          <button
-            className="nav-link"
-            aria-label="New workspace folder"
-            onClick={() => setModal({ kind: "create" })}
-          >
-            <Plus size={16} />
-            New folder
-          </button>
-        ) : null}
-        <div className="workspace-rail-row">
-          <Link
-            className={`nav-link project-tool ${selected === "all" && !query.has("trash") ? "active" : ""}`}
-            to={url({ folder: "all" })}
-          >
-            <FolderOpen size={16} />
-            <span>All Workspaces</span>
-          </Link>
-          <Link
-            className="icon-button"
-            aria-label="New chat in All Workspaces"
-            to={url({ folder: "all", new: "1" })}
-          >
-            <Plus size={15} />
-          </Link>
-        </div>
-        {folders.data?.items.map((f, index, all) => (
-          <div className="workspace-rail-row" key={f.id}>
-            <Link
-              className={`nav-link project-tool ${selected === f.id ? "active" : ""}`}
-              to={url({ folder: f.id })}
-              title={f.rootPath}
-            >
-              <Folder size={16} />
-              <span>
-                {f.name}
-                {f.removalPending ? " · Removal pending" : ""}
-              </span>
-              {f.pinned ? <Pin size={12} /> : null}
-              <small>
-                {chats.data?.items.filter((c) => c.folderId === f.id).length ??
-                  0}
-              </small>
-            </Link>
-            <Link
-              className="icon-button"
-              aria-label={`New chat in ${f.name}`}
-              to={url({ folder: f.id, new: "1" })}
-            >
-              <Plus size={15} />
-            </Link>
-            {writable ? (
-              <details
-                className="rail-menu"
-                onClick={(e) => {
-                  if ((e.target as HTMLElement).closest("button,a"))
-                    e.currentTarget.removeAttribute("open");
-                }}
-              >
-                <summary aria-label={`Actions for folder ${f.name}`}>
-                  <Ellipsis size={15} />
-                </summary>
-                <div>
-                  <button
-                    onClick={() =>
-                      void mutation(
-                        `/enterprise/api/projects/${projectId}/folders/${f.id}`,
-                        { pinned: !f.pinned },
-                      )
-                    }
-                  >
-                    {f.pinned ? "Unpin" : "Pin"}
-                  </button>
-                  <button
-                    disabled={
-                      index === 0 || all[index - 1]?.pinned !== f.pinned
-                    }
-                    onClick={() =>
-                      void mutation(
-                        `/enterprise/api/projects/${projectId}/folders/${f.id}`,
-                        { direction: "up" },
-                      )
-                    }
-                  >
-                    Move up
-                  </button>
-                  <button
-                    disabled={
-                      index === all.length - 1 ||
-                      all[index + 1]?.pinned !== f.pinned
-                    }
-                    onClick={() =>
-                      void mutation(
-                        `/enterprise/api/projects/${projectId}/folders/${f.id}`,
-                        { direction: "down" },
-                      )
-                    }
-                  >
-                    Move down
-                  </button>
-                  <button
-                    onClick={() => setModal({ kind: "rename", folder: f })}
-                  >
-                    Rename
-                  </button>
-                  <button
-                    onClick={() => setModal({ kind: "references", folder: f })}
-                  >
-                    Reference locations
-                  </button>
-                  <button
-                    className="danger"
-                    onClick={() => setModal({ kind: "remove", folder: f })}
-                  >
-                    Remove folder
-                  </button>
-                </div>
-              </details>
-            ) : null}
-          </div>
-        ))}
-        <Link
-          className={`nav-link project-tool ${query.has("trash") ? "active" : ""}`}
-          to={url({ trash: "1" })}
-        >
-          <Trash2 size={16} />
-          Trash
+      <div className="rail-group">
+        <Link className="nav-link" to={`/organizations/${orgId}/projects`}>
+          <Icon icon={ArrowLeft} size={13} weight="control" />
+          <span>Projects</span>
         </Link>
-      </details>
+        <Link
+          className="nav-link"
+          to={url({ folder: selected, new: "1" })}
+        >
+          <Icon icon={SquarePen} size={13} />
+          <span>New conversation</span>
+        </Link>
+      </div>
+      <SearchField
+        label="Search conversations"
+        placeholder="Search conversations…"
+        value={search}
+        onChange={setSearch}
+      />
+      <div className="rail-row all-workspaces">
+        <Link
+          className={`nav-link ${onWorkspace && selected === "all" && !trash ? "active" : ""}`}
+          to={url({ folder: "all" })}
+        >
+          <Icon icon={FolderOpen} size={13} />
+          <span className="rail-title">All Workspaces</span>
+        </Link>
+        <NewChat
+          label="New chat in All Workspaces"
+          to={url({ folder: "all", new: "1" })}
+        />
+      </div>
+      <RailSection title={project?.name ?? "Project workspace"} className="owning-workspace">
+        <div className="rail-children">
+          <RailSection title="Agents">
+            <div className="rail-row">
+              <Link
+                className="nav-link"
+                to={
+                  inSelection[0]
+                    ? url({ folder: selected, conversation: inSelection[0].id })
+                    : url({ folder: selected })
+                }
+              >
+                <img className="agent-logo" src={piLogo} alt="" />
+                <span className="rail-title">Pi Durable</span>
+              </Link>
+              <NewChat
+                label="New chat with Pi Durable"
+                to={url({ folder: selected, new: "1" })}
+              />
+            </div>
+          </RailSection>
+          <RailSection title="Folders">
+            {writable ? (
+              <button
+                type="button"
+                className="nav-link"
+                aria-label="New workspace folder"
+                onClick={() => setModal({ kind: "create" })}
+              >
+                <Icon icon={Plus} size={13} />
+                <span>New folder</span>
+              </button>
+            ) : null}
+            {folders.data?.items.map((f, index, all) => (
+              <div className="rail-row" key={f.id}>
+                <FolderRailLink folder={f} workspace={project?.name ?? "Project workspace"}
+                  count={count(f.id)} selected={onWorkspace && selected === f.id && !trash}
+                  to={url({ folder: f.id })} />
+                {writable ? (
+                  <Menu
+                    label={`Actions for folder ${f.name}`}
+                    iconSize={12}
+                    className="rail-action"
+                  >
+                    <MenuItem
+                      onSelect={() =>
+                        void mutation(
+                          `/enterprise/api/projects/${projectId}/folders/${f.id}`,
+                          { pinned: !f.pinned },
+                        )
+                      }
+                    >
+                      {f.pinned ? "Unpin" : "Pin"}
+                    </MenuItem>
+                    <MenuItem
+                      disabled={index === 0 || all[index - 1]?.pinned !== f.pinned}
+                      onSelect={() =>
+                        void mutation(
+                          `/enterprise/api/projects/${projectId}/folders/${f.id}`,
+                          { direction: "up" },
+                        )
+                      }
+                    >
+                      Move up
+                    </MenuItem>
+                    <MenuItem
+                      disabled={
+                        index === all.length - 1 ||
+                        all[index + 1]?.pinned !== f.pinned
+                      }
+                      onSelect={() =>
+                        void mutation(
+                          `/enterprise/api/projects/${projectId}/folders/${f.id}`,
+                          { direction: "down" },
+                        )
+                      }
+                    >
+                      Move down
+                    </MenuItem>
+                    <MenuItem onSelect={() => setModal({ kind: "rename", folder: f })}>
+                      Rename
+                    </MenuItem>
+                    <MenuItem
+                      onSelect={() => setModal({ kind: "references", folder: f })}
+                    >
+                      Reference locations…
+                    </MenuItem>
+                    <MenuSeparator />
+                    <MenuItem
+                      danger
+                      onSelect={() => setModal({ kind: "remove", folder: f })}
+                    >
+                      Remove folder…
+                    </MenuItem>
+                  </Menu>
+                ) : null}
+                <NewChat
+                  label={`New chat in ${f.name}`}
+                  to={url({ folder: f.id, new: "1" })}
+                />
+              </div>
+            ))}
+          </RailSection>
+        </div>
+      </RailSection>
+      <Link
+        className={`nav-link trash-link ${trash ? "active" : ""}`}
+        to={url({ trash: "1" })}
+      >
+        <Icon icon={Trash2} size={13} />
+        <span>Trash</span>
+      </Link>
       <ErrorNotice message={error || folders.error || chats.error} />
-      {scoped.some((c) => c.pinned) ? (
-        <details open className="rail-disclosure">
-          <summary>Pinned chats</summary>
-          {scoped.filter((c) => c.pinned).map(chatRow)}
-        </details>
-      ) : null}
-      <details open className="rail-disclosure">
-        <summary>Recents</summary>
-        {scoped.filter((c) => !c.pinned).map(chatRow)}
-        {!scoped.length ? (
-          <p className="rail-empty">No conversations yet.</p>
+      <RailSection title="Recents" className="recents">
+        {recents.map(chatRow)}
+        {/* Polling retains authorized empty results too, so the rail does not jump. */}
+        {!recents.length && chats.data ? (
+          <p className="rail-empty">
+            {search.trim() ? "No matching conversations." : "No conversations yet."}
+          </p>
         ) : null}
-      </details>
+      </RailSection>
       <nav aria-label="Project navigation" className="workspace-tools">
-        <NavLink className="nav-link project-tool" to={`${base}/files`}>
-          <Files size={16} />
-          Files
+        <NavLink className="nav-link" to={`${base}/files`}>
+          <Icon icon={Files} size={13} />
+          <span>Files</span>
         </NavLink>
-        <NavLink className="nav-link project-tool" to={`${base}/members`}>
-          <Users size={16} />
-          Members
+        <NavLink className="nav-link" to={`${base}/members`}>
+          <Icon icon={Users} size={13} />
+          <span>Members</span>
         </NavLink>
         {isAdmin ? (
-          <NavLink className="nav-link project-tool" to={`${base}/settings`}>
-            <Settings size={16} />
-            Project settings
+          <NavLink className="nav-link" to={`${base}/settings`}>
+            <Icon icon={Settings} size={13} />
+            <span>Project settings</span>
           </NavLink>
         ) : null}
       </nav>
@@ -439,6 +531,7 @@ function WorkspaceRail({
           onClose={() => setModal(null)}
         >
           <AsyncForm
+            danger={modal.kind === "remove"}
             submitLabel={
               modal.kind === "create"
                 ? "Create folder"
@@ -490,15 +583,17 @@ function WorkspaceRail({
                   Remove this folder from the sidebar. Its chats and files
                   remain available.
                 </p>
-                <Field label="Also delete the directory and all its contents">
+                {/* An irreversible opt-in stays an explicit checkbox. */}
+                <label className="checkbox">
                   <input
                     type="checkbox"
                     name="deleteDirectory"
                     defaultChecked={modal.folder?.removalPending}
                     disabled={modal.folder?.removalPending}
                   />
-                </Field>
-                <p className="muted">{modal.folder?.rootPath}</p>
+                  <span>Also delete the directory and all its contents</span>
+                </label>
+                <p className="muted path-text">{modal.folder?.rootPath}</p>
               </>
             ) : modal.kind === "references" ? (
               <Field

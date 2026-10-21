@@ -137,6 +137,14 @@ export type Project = {
   status: string;
   createdAt: string;
 };
+/** Display names for central provider accounts and model attribution. */
+export const providerNames: Record<string, string> = {
+  openai: "OpenAI / ChatGPT",
+  anthropic: "Anthropic / Claude",
+  xai: "xAI / Grok",
+  openrouter: "OpenRouter",
+  custom: "Custom provider",
+};
 export type Model = {
   id: string;
   name: string;

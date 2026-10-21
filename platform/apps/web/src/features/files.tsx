@@ -7,6 +7,7 @@ import {
   File as FileIcon,
   Folder,
   FolderPlus,
+  FolderUp,
   Upload,
 } from "lucide-react";
 import {
@@ -20,6 +21,7 @@ import {
   type User,
 } from "../api";
 import { useWorkspace } from "../workspace";
+import { Icon, Menu, MenuItem, MenuSeparator } from "../components/controls";
 import {
   AsyncForm,
   Confirm,
@@ -102,6 +104,10 @@ export function FilesPage({
     setDialog(null);
     setSelected(undefined);
   }
+  function open(entry: FileEntry, next: NonNullable<typeof dialog>) {
+    setSelected(entry);
+    setDialog(next);
+  }
   async function uploadFiles(list: FileList | null) {
     if (!list?.length) return;
     const pending = Array.from(list);
@@ -166,7 +172,7 @@ export function FilesPage({
   const actions = canWrite ? (
     <>
       <button className="secondary" onClick={() => setDialog("folder")}>
-        <FolderPlus size={17} />
+        <Icon icon={FolderPlus} size={14} />
         New folder
       </button>
       <button
@@ -174,6 +180,7 @@ export function FilesPage({
         disabled={uploading}
         onClick={() => folderUpload.current?.click()}
       >
+        <Icon icon={FolderUp} size={14} />
         Upload folder
       </button>
       <button
@@ -181,7 +188,7 @@ export function FilesPage({
         disabled={uploading}
         onClick={() => upload.current?.click()}
       >
-        <Upload size={17} />
+        <Icon icon={Upload} size={14} weight="control" />
         {uploading ? "Uploading…" : "Upload files"}
       </button>
     </>
@@ -230,7 +237,17 @@ export function FilesPage({
         onChange={(e) => void uploadFiles(e.target.files)}
       />
       {!embedded || path ? (
-        <div className="file-path">
+        <nav className="file-path" aria-label="Folder path">
+          {path ? (
+            <button
+              className="icon-button small"
+              aria-label="Parent folder"
+              title="Parent folder"
+              onClick={() => setPath(path.split("/").slice(0, -1).join("/"))}
+            >
+              <Icon icon={ArrowLeft} size={14} weight="control" />
+            </button>
+          ) : null}
           <button className="text-button" onClick={() => setPath("")}>
             {project ? project.name : embedded ? "Files" : org.name}
           </button>
@@ -238,45 +255,39 @@ export function FilesPage({
             .split("/")
             .filter(Boolean)
             .map((part, i, parts) => (
-              <span key={i}>
-                {" "}
-                /{" "}
+              <span className="file-path-part" key={i}>
+                <span aria-hidden="true">/</span>
                 <button
                   className="text-button"
+                  aria-current={i === parts.length - 1 ? "location" : undefined}
                   onClick={() => setPath(parts.slice(0, i + 1).join("/"))}
                 >
                   {part}
                 </button>
               </span>
             ))}
-          {path ? (
-            <button
-              className="icon-button"
-              aria-label="Parent folder"
-              onClick={() => setPath(path.split("/").slice(0, -1).join("/"))}
-            >
-              <ArrowLeft size={17} />
-            </button>
-          ) : null}
-        </div>
+        </nav>
       ) : null}
       {uploadProgress ? (
         <p className="muted" role="status">
           {uploadProgress}
         </p>
       ) : null}
-      <ErrorNotice message={files.error || error} />
+      <ErrorNotice
+        message={files.error || error}
+        onRetry={files.error ? files.reload : undefined}
+      />
       {success ? <Success>{success}</Success> : null}
-      {files.loading ? (
+      {files.loading && !files.data ? (
         <Loading />
-      ) : (
+      ) : files.error && !files.data ? null : (
         <div className="table-wrap">
           {files.data?.items.length ? (
             <table>
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>Size</th>
+                  <th className="numeric">Size</th>
                   <th>Updated</th>
                   <th>Access</th>
                   <th>
@@ -293,7 +304,7 @@ export function FilesPage({
                           className="item-link"
                           to={`${orgBase}${sourcePath(f.id, { projectId: project?.id })}`}
                         >
-                          <FileIcon size={19} />
+                          <Icon icon={FileIcon} size={16} />
                           <span>
                             {f.name}
                             {f.sharedFrom ? (
@@ -314,7 +325,7 @@ export function FilesPage({
                             setSuccess("");
                           }}
                         >
-                          <Folder size={20} />
+                          <Icon icon={Folder} size={16} />
                           <span>
                             {f.name}
                             {f.sharedFrom ? (
@@ -329,7 +340,7 @@ export function FilesPage({
                         </button>
                       )}
                     </td>
-                    <td>{f.kind === "file" ? bytes(f.size) : "—"}</td>
+                    <td className="numeric">{f.kind === "file" ? bytes(f.size) : "—"}</td>
                     <td>{date(f.updatedAt)}</td>
                     <td>
                       {f.access === "write" ? "Full access" : "Read-only"}
@@ -338,43 +349,54 @@ export function FilesPage({
                       <div className="row-actions">
                         {f.kind === "file" ? (
                           <a
-                            className="icon-button"
+                            className="icon-button small"
                             href={`/enterprise/api/files/${f.id}/content${suffix}`}
                             aria-label={`Download ${f.name}`}
+                            title={`Download ${f.name}`}
                             download
                           >
-                            <Download size={17} />
+                            <Icon icon={Download} size={14} weight="control" />
                           </a>
                         ) : null}
-                        <select
-                          className="action-select"
-                          aria-label={`Actions for ${f.name}`}
-                          value=""
-                          onChange={(e) => {
-                            setSelected(f);
-                            const action = e.target.value;
-                            if (action === "delete") setDeleting(f);
-                            else setDialog(action as typeof dialog);
-                          }}
-                        >
-                          <option value="">Actions</option>
+                        <Menu label={`Actions for ${f.name}`} className="small">
                           {f.access === "write" ? (
-                            <option value="rename">Rename</option>
+                            <MenuItem onSelect={() => open(f, "rename")}>
+                              Rename
+                            </MenuItem>
                           ) : null}
-                          <option value="transfer">Move or copy</option>
+                          <MenuItem onSelect={() => open(f, "transfer")}>
+                            Move or copy
+                          </MenuItem>
                           {!project && libraryFull ? (
-                            <option value="sharing">Share with projects</option>
-                          ) : null}
-                          {!project && libraryFull ? (
-                            <option value="grants">People with access</option>
+                            <>
+                              <MenuItem onSelect={() => open(f, "sharing")}>
+                                Share with projects
+                              </MenuItem>
+                              <MenuItem onSelect={() => open(f, "grants")}>
+                                People with access
+                              </MenuItem>
+                            </>
                           ) : null}
                           {f.kind === "file" ? (
-                            <option value="versions">Version history</option>
+                            <MenuItem onSelect={() => open(f, "versions")}>
+                              Version history
+                            </MenuItem>
                           ) : null}
                           {f.access === "write" ? (
-                            <option value="delete">Delete</option>
+                            <>
+                              <MenuSeparator />
+                              <MenuItem
+                                danger
+                                onSelect={() => {
+                                  setSelected(f);
+                                  setDeleting(f);
+                                }}
+                              >
+                                Delete…
+                              </MenuItem>
+                            </>
                           ) : null}
-                        </select>
+                        </Menu>
                       </div>
                     </td>
                   </tr>
@@ -391,7 +413,7 @@ export function FilesPage({
         </div>
       )}
       {dialog === "folder" ? (
-        <Modal title="New folder" onClose={close}>
+        <Modal title="New folder" compact onClose={close}>
           <AsyncForm
             submitLabel="Create folder"
             onCancel={close}
@@ -418,7 +440,7 @@ export function FilesPage({
         </Modal>
       ) : null}
       {dialog === "rename" && selected ? (
-        <Modal title="Rename" onClose={close}>
+        <Modal title="Rename" compact onClose={close}>
           <AsyncForm
             submitLabel="Rename"
             onCancel={close}
@@ -465,7 +487,7 @@ export function FilesPage({
               close();
             }}
           >
-            <p className="muted">{selected.name}</p>
+            <p className="muted path-text">{selected.name}</p>
             <Field label="Operation">
               <select name="operation">
                 <option value="copy">
@@ -551,6 +573,10 @@ function FileSharing({
         Projects access the same underlying files. Changes stay consistent.
       </p>
       <ErrorNotice message={resource.error || error} />
+      <div className="row-list">
+      {resource.data && !resource.data.items.length ? (
+        <p className="muted">Not shared with any project yet.</p>
+      ) : null}
       {resource.data?.items.map((s) => (
         <div className="setting-row" key={s.projectId}>
           <div>
@@ -581,6 +607,7 @@ function FileSharing({
           </button>
         </div>
       ))}
+      </div>
       <AsyncForm
         submitLabel="Share with project"
         onSubmit={async (d) => {
@@ -638,11 +665,15 @@ function FileGrants({
         Organization administrators manage all organization files.
       </p>
       <ErrorNotice message={grants.error || members.error || error} />
+      <div className="row-list">
       {grants.data?.items.map((g) => (
         <div className="setting-row" key={g.userId}>
           <div>
-            {members.data?.items.find((u) => u.id === g.userId)?.name ||
-              g.userId}
+            <strong>
+              {members.data?.items.find((u) => u.id === g.userId)?.name ||
+                g.name ||
+                g.userId}
+            </strong>
             <small>{g.access === "write" ? "Full access" : "Read-only"}</small>
           </div>
           <button
@@ -665,6 +696,10 @@ function FileGrants({
           </button>
         </div>
       ))}
+      {grants.data && !grants.data.items.length ? (
+        <p className="muted">No individual grants. Organization administrators retain access.</p>
+      ) : null}
+      </div>
       <AsyncForm
         submitLabel="Grant access"
         onSubmit={async (d) => {
@@ -720,12 +755,13 @@ function Versions({
   >(`/enterprise/api/files/${file.id}/versions${suffix}`);
   return (
     <Modal title="Version history" onClose={onClose}>
-      <p>{file.name}</p>
+      <p className="muted path-text">{file.name}</p>
       <ErrorNotice message={versions.error} />
-      {versions.loading ? (
+      {versions.loading && !versions.data ? (
         <Loading />
       ) : (
-        versions.data?.items.map((v, i) => (
+        <div className="row-list">
+        {versions.data?.items.map((v, i) => (
           <div className="setting-row" key={v.id}>
             <div>
               <strong>
@@ -749,12 +785,13 @@ function Versions({
                 href={`/enterprise/api/files/${file.id}/content${suffix ? `${suffix}&` : "?"}versionId=${encodeURIComponent(v.id)}`}
                 download
               >
-                <Download size={15} />
+                <Icon icon={Download} size={14} weight="control" />
                 {bytes(v.size)}
               </a>
             </div>
           </div>
-        ))
+        ))}
+        </div>
       )}
     </Modal>
   );

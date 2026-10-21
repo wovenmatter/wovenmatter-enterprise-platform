@@ -2,6 +2,7 @@ import { useState } from "react";
 import { send, useResource, date, type List } from "../api";
 import { useWorkspace } from "../workspace";
 import {
+  BackLink,
   Empty,
   ErrorNotice,
   Loading,
@@ -16,7 +17,7 @@ type Deleted = {
   status: string;
 };
 export function DeletedProjectsPage() {
-  const { org } = useWorkspace();
+  const { org, orgBase } = useWorkspace();
   const resource = useResource<List<Deleted>>(
     `/enterprise/api/organizations/${org.id}/deleted-projects`,
   );
@@ -47,16 +48,23 @@ export function DeletedProjectsPage() {
     }
   }
   return (
-    <section>
+    <section className="settings-nested">
+      <BackLink
+        to={`${orgBase}/settings`}
+        label="Back to organization settings"
+      />
       <PageHeader
         title="Deleted projects"
         description="Restore projects or recover their files within 30 days of deletion."
       />
-      <ErrorNotice message={error || resource.error} />
+      <ErrorNotice
+        message={error || resource.error}
+        onRetry={resource.error ? resource.reload : undefined}
+      />
       {notice ? <Success>{notice}</Success> : null}
-      {resource.loading ? (
+      {resource.loading && !resource.data ? (
         <Loading />
-      ) : resource.data?.items.length ? (
+      ) : resource.error && !resource.data ? null : resource.data?.items.length ? (
         <div className="table-wrap">
           <table>
             <thead>
@@ -76,6 +84,7 @@ export function DeletedProjectsPage() {
                   <td>
                     <div className="row-actions">
                       <button
+                        className="secondary"
                         disabled={
                           !!busy || Date.parse(project.purgeAfter) <= Date.now()
                         }
@@ -84,6 +93,7 @@ export function DeletedProjectsPage() {
                         {busy === project.id ? "Working…" : "Restore"}
                       </button>
                       <button
+                        className="secondary"
                         disabled={
                           !!busy || Date.parse(project.purgeAfter) <= Date.now()
                         }

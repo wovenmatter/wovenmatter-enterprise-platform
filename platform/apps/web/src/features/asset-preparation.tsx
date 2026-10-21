@@ -1,8 +1,15 @@
 import { useCallback, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { ArrowLeft, ExternalLink, FolderOpen } from "lucide-react";
 import { send, useResource, errorMessage, type List } from "../api";
 import { useWorkspace } from "../workspace";
-import { AsyncForm, ErrorNotice, Field, Loading } from "../components/ui";
+import {
+  AsyncForm,
+  ErrorNotice,
+  Field,
+  Loading,
+  Status,
+} from "../components/ui";
+import { DisclosureChevron, Icon, Switch } from "../components/controls";
 import { Thread, type Conversation, type Model } from "./conversations";
 import type { Asset } from "./library";
 
@@ -56,7 +63,20 @@ export function AssetPreparation({
     <div className="asset-preparation">
       <section className="asset-chat" aria-label="Asset conversation">
         <div className="asset-work-state" role="status">
-          {agent.data?.conversation?.activeRun ? "Working" : "Ready"}
+          {agent.error && !agent.data ? (
+            <Status value="error" />
+          ) : !agent.data ? (
+            <Status value="loading" />
+          ) : (
+            <Status
+              value={agent.data.conversation?.activeRun ? "working" : "ready"}
+            />
+          )}
+          <span>
+            {agent.data?.conversation
+              ? "Asset conversation"
+              : "Start a session to prepare this asset"}
+          </span>
         </div>
         <ErrorNotice message={agent.error || error} />
         {!agent.data && agent.loading ? (
@@ -115,12 +135,14 @@ export function AssetPreparation({
         <div className="section-heading-row">
           <h3>Draft preview</h3>
           <a
+            className="icon-button small"
             href={`${asset.url}/preview`}
             target="_blank"
             rel="noreferrer"
             aria-label="Open draft preview"
+            title="Open draft preview"
           >
-            <ExternalLink size={17} />
+            <Icon icon={ExternalLink} size={14} weight="control" />
           </a>
         </div>
         <p className="muted">
@@ -153,7 +175,10 @@ function AssetSources({
       className="asset-sources"
       onToggle={(e) => setOpen(e.currentTarget.open)}
     >
-      <summary>Library sources ({sources.length})</summary>
+      <summary className="disclosure-heading">
+        <span>Library sources ({sources.length})</span>
+        <DisclosureChevron />
+      </summary>
       <p>
         Choose optional library files or folders for the agent to read. Changes
         stop current work so the new access takes effect.
@@ -209,12 +234,14 @@ function SourcePicker({
       <nav aria-label="Source folder">
         <button
           type="button"
+          className="secondary"
           disabled={!path}
           onClick={() => setPath(path.split("/").slice(0, -1).join("/"))}
         >
+          <Icon icon={ArrowLeft} size={14} weight="control" />
           Up one folder
         </button>
-        <span>{path || "Library"}</span>
+        <span className="path-text">{path || "Library"}</span>
       </nav>
       <ErrorNotice message={files.error} />
       {files.loading ? (
@@ -222,20 +249,20 @@ function SourcePicker({
       ) : (
         files.data?.items.map((f) => (
           <div key={f.id} className="source-picker-row">
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={Object.hasOwn(selected, f.id)}
-                onChange={(e) => choose(f.id, f.path, e.target.checked)}
-              />
+            <Switch
+              checked={Object.hasOwn(selected, f.id)}
+              onChange={(e) => choose(f.id, f.path, e.target.checked)}
+            >
               {f.name || f.path}
-            </label>
+            </Switch>
             {f.kind === "folder" ? (
               <button
                 type="button"
+                className="text-button"
                 onClick={() => setPath(f.path)}
                 aria-label={`Open folder ${f.name}`}
               >
+                <Icon icon={FolderOpen} size={13} />
                 Open
               </button>
             ) : null}
@@ -245,14 +272,11 @@ function SourcePicker({
       {Object.entries(selected)
         .filter(([id]) => !files.data?.items.some((f) => f.id === id))
         .map(([id, name]) => (
-          <label key={id} className="checkbox-row">
-            <input
-              type="checkbox"
-              checked
-              onChange={() => choose(id, name, false)}
-            />
-            {name}
-          </label>
+          <div key={id} className="source-picker-row">
+            <Switch checked onChange={() => choose(id, name, false)}>
+              {name}
+            </Switch>
+          </div>
         ))}
     </AsyncForm>
   );

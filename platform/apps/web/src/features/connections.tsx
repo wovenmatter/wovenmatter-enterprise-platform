@@ -1,9 +1,26 @@
 import { useEffect, useState } from "react";
-import { Cable, ExternalLink, Plus, RefreshCw } from "lucide-react";
-import { api, date, errorMessage, send, useResource, type List } from "../api";
+import {
+  Cable,
+  ChevronDown,
+  ExternalLink,
+  KeyRound,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
+import {
+  api,
+  date,
+  errorMessage,
+  providerNames,
+  send,
+  useResource,
+  type List,
+} from "../api";
 import { useWorkspace } from "../workspace";
+import { Icon, Switch } from "../components/controls";
 import {
   AsyncForm,
+  Card,
   Confirm,
   Empty,
   ErrorNotice,
@@ -38,13 +55,7 @@ type OAuth = {
   expiresAt: string;
   interval?: number;
 };
-const names: Record<string, string> = {
-  openai: "OpenAI / ChatGPT",
-  anthropic: "Anthropic / Claude",
-  xai: "xAI / Grok",
-  openrouter: "OpenRouter",
-  custom: "Custom provider",
-};
+const names = providerNames;
 const warning =
   "Using a Claude subscription through this third-party proxy may result in Anthropic restricting, suspending, or terminating your account. Continued access is not guaranteed.";
 export function ConnectionsPage() {
@@ -75,8 +86,26 @@ export function ConnectionsPage() {
     models.reload();
     signins.reload();
   }
+  const providers = [
+    ...new Set([
+      ...Object.keys(names),
+      ...(accounts.data?.items.map((a) => a.provider) ?? []),
+    ]),
+  ]
+    .map((provider) => ({
+      provider,
+      groups: (["subscription", "api_key"] as const)
+        .map((type) => ({
+          type,
+          items: (accounts.data?.items ?? [])
+            .filter((a) => a.provider === provider && a.type === type)
+            .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)),
+        }))
+        .filter((group) => group.items.length),
+    }))
+    .filter((entry) => entry.groups.length);
   return (
-    <section>
+    <section className="settings-page connections-page">
       <PageHeader
         title="Connections"
         description="Manage the inference accounts available to your organization."
@@ -85,9 +114,10 @@ export function ConnectionsPage() {
             <button
               className="icon-button"
               aria-label="Refresh connections"
+              title="Refresh connections"
               onClick={reload}
             >
-              <RefreshCw size={18} />
+              <Icon icon={RefreshCw} size={16} weight="control" />
             </button>
             <button
               className="primary"
@@ -96,7 +126,7 @@ export function ConnectionsPage() {
                 setAdding(true);
               }}
             >
-              <Plus size={17} />
+              <Icon icon={Plus} size={14} weight="control" />
               Add connection
             </button>
           </>
@@ -116,9 +146,10 @@ export function ConnectionsPage() {
           ].includes(s.status),
         )
         .map((s) => (
-          <div className="setting-row" key={s.id}>
+          <div className="setting-row notice" key={s.id}>
+            <Status value={s.status} />
             <div>
-              <strong>{names[s.provider]} sign-in</strong>
+              <strong>{names[s.provider] ?? s.provider} sign-in</strong>
               <small>{s.message}</small>
             </div>
             <button
@@ -132,119 +163,132 @@ export function ConnectionsPage() {
             </button>
           </div>
         ))}
-      <ErrorNotice
-        message={accounts.error || usage.error || models.error || error}
-      />
-      {accounts.data?.notice &&
-      accounts.data.items.some(
-        (account) =>
-          account.provider === "anthropic" && account.type === "subscription",
-      ) ? (
-        <p className="muted">{accounts.data.notice}</p>
-      ) : null}
-      {accounts.loading && !accounts.data ? (
-        <Loading />
-      ) : (
-        <div className="table-wrap">
-          {accounts.data?.items.length ? (
-            <table>
-              <thead>
-                <tr>
-                  <th>Connection</th>
-                  <th>Provider</th>
-                  <th>Status</th>
-                  <th>Priority</th>
-                  <th>
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.data.items.map((a) => (
-                  <tr key={a.id}>
-                    <td>
-                      <div className="item-link">
-                        <Cable size={18} />
-                        <div>
-                          <strong>{a.label}</strong>
-                          <small>
-                            {a.type === "subscription"
-                              ? "Subscription"
-                              : "API key"}
-                          </small>
+      <ErrorNotice message={error} />
+      <Card
+        title="Model providers"
+        detail="Subscription sign-ins and API keys remain separate. Higher priorities are tried first; equal priorities share requests."
+      >
+        <ErrorNotice
+          message={accounts.error ? `Connections unavailable: ${accounts.error}` : ""}
+          onRetry={accounts.reload}
+        />
+        {accounts.loading ? (
+          <Loading label={accounts.data ? "Refreshing connections…" : "Loading connections…"} />
+        ) : null}
+        {accounts.data?.notice &&
+        accounts.data.items.some(
+          (account) =>
+            account.provider === "anthropic" && account.type === "subscription",
+        ) ? (
+          <p className="muted">{accounts.data.notice}</p>
+        ) : null}
+        {providers.length ? (
+          providers.map(({ provider, groups }) => (
+            <details open className="settings-disclosure" key={provider}>
+              <summary>
+                <Icon icon={ChevronDown} size={12} weight="control" className="disclosure-chevron" />
+                <span>{names[provider] ?? provider}</span>
+              </summary>
+              <div className="settings-disclosure-content">
+                {groups.map(({ type, items }) => {
+                  const content = (
+                    <div className="settings-disclosure-content connection-list">
+                      {items.map((a) => (
+                        <div className="connection-row" key={a.id}>
+                          <Icon icon={type === "subscription" ? Cable : KeyRound} size={16} />
+                          <div className="connection-name">
+                            <strong>{a.label}</strong>
+                            <small>
+                              Priority {a.priority ?? 0}
+                              {a.nextRetryAt
+                                ? ` · Available after ${date(a.nextRetryAt)}`
+                                : ""}
+                            </small>
+                          </div>
+                          <Status value={a.enabled ? a.status : "disabled"} />
+                          <div className="row-actions">
+                            <button
+                              className="text-button"
+                              aria-label={`Manage ${a.label}`}
+                              onClick={() => setEditing(a)}
+                            >
+                              Manage
+                            </button>
+                            {a.type === "subscription" ? (
+                              <button
+                                className="icon-button small"
+                                aria-label={`Refresh ${a.label}`}
+                                title={`Refresh ${a.label}`}
+                                onClick={async () => {
+                                  try {
+                                    await send(
+                                      `${base}/accounts/${encodeURIComponent(a.id)}/refresh`,
+                                      {},
+                                    );
+                                    reload();
+                                  } catch (e) {
+                                    setError(errorMessage(e));
+                                  }
+                                }}
+                              >
+                                <Icon icon={RefreshCw} size={14} weight="control" />
+                              </button>
+                            ) : null}
+                            <button
+                              className="text-button danger"
+                              aria-label={`Remove ${a.label}`}
+                              onClick={() => setRemoving(a)}
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td>{names[a.provider] ?? a.provider}</td>
-                    <td>
-                      <Status value={a.enabled ? a.status : "disabled"} />
-                      {a.nextRetryAt ? (
-                        <small>Available after {date(a.nextRetryAt)}</small>
-                      ) : null}
-                    </td>
-                    <td>{a.priority ?? 0}</td>
-                    <td>
-                      <div className="row-actions">
-                        <button
-                          className="text-button"
-                          onClick={() => setEditing(a)}
-                        >
-                          Manage
-                        </button>
-                        {a.type === "subscription" ? (
-                          <button
-                            className="icon-button"
-                            aria-label={`Refresh ${a.label}`}
-                            onClick={async () => {
-                              try {
-                                await send(
-                                  `${base}/accounts/${encodeURIComponent(a.id)}/refresh`,
-                                  {},
-                                );
-                                reload();
-                              } catch (e) {
-                                setError(errorMessage(e));
-                              }
-                            }}
-                          >
-                            <RefreshCw size={16} />
-                          </button>
-                        ) : null}
-                        <button
-                          className="text-button danger"
-                          onClick={() => setRemoving(a)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <Empty
-              title="No connections yet"
-              action={
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setResuming(undefined);
-                    setAdding(true);
-                  }}
-                >
-                  Add connection
-                </button>
-              }
-            >
-              Connect a subscription or API key so your team can work with
-              agents.
-            </Empty>
-          )}
-        </div>
-      )}
-      <section className="section-block">
-        <h2>Available models</h2>
+                      ))}
+                    </div>
+                  );
+                  // Native API-only providers have no redundant credential
+                  // disclosure. Preserve grouping if the API supplies both types.
+                  return ["openai", "anthropic", "xai"].includes(provider) || groups.length > 1 ? (
+                    <details open className="settings-disclosure" key={type}>
+                      <summary>
+                        <Icon icon={ChevronDown} size={12} weight="control" className="disclosure-chevron" />
+                        <span>{type === "subscription" ? "Subscriptions" : "API keys"}</span>
+                      </summary>
+                      {content}
+                    </details>
+                  ) : <div key={type}>{content}</div>;
+                })}
+              </div>
+            </details>
+          ))
+        ) : !accounts.loading && !accounts.error && accounts.data ? (
+          <Empty
+            title="No connections yet"
+            action={
+              <button
+                className="primary"
+                onClick={() => {
+                  setResuming(undefined);
+                  setAdding(true);
+                }}
+              >
+                Add connection
+              </button>
+            }
+          >
+            Connect a subscription or API key so your team can work with
+            agents.
+          </Empty>
+        ) : null}
+      </Card>
+      <Card title="Available models">
+        <ErrorNotice
+          message={models.error ? `Models unavailable: ${models.error}` : ""}
+          onRetry={models.reload}
+        />
+        {models.loading ? (
+          <Loading label={models.data ? "Refreshing models…" : "Loading models…"} />
+        ) : null}
         {models.data?.items.length ? (
           <div className="model-list">
             {models.data.items.map((m) => (
@@ -254,43 +298,48 @@ export function ConnectionsPage() {
               </div>
             ))}
           </div>
-        ) : (
+        ) : !models.loading && !models.error && models.data ? (
           <p className="muted">
             Models will appear when a connected provider makes them available.
           </p>
-        )}
-      </section>
-      <section className="section-block">
-        <h2>Observed usage</h2>
-        <p className="muted">
-          Requests recorded by the inference gateway. These counts are not a
-          billing balance or remaining subscription allowance.
-        </p>
+        ) : null}
+      </Card>
+      <Card
+        title="Observed usage"
+        detail="Requests recorded by the inference gateway. These counts are not a billing balance or remaining subscription allowance."
+      >
+        <ErrorNotice
+          message={usage.error ? `Usage unavailable: ${usage.error}` : ""}
+          onRetry={usage.reload}
+        />
+        {usage.loading ? (
+          <Loading label={usage.data ? "Refreshing usage…" : "Loading usage…"} />
+        ) : null}
         {usage.data?.items.length ? (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
                   <th>Provider</th>
-                  <th>Successful requests</th>
-                  <th>Failed requests</th>
+                  <th className="numeric">Successful requests</th>
+                  <th className="numeric">Failed requests</th>
                 </tr>
               </thead>
               <tbody>
                 {usage.data.items.map((u) => (
                   <tr key={u.provider}>
                     <td>{names[u.provider] ?? u.provider}</td>
-                    <td>{u.successes}</td>
-                    <td>{u.failures}</td>
+                    <td className="numeric">{u.successes}</td>
+                    <td className="numeric">{u.failures}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        ) : (
+        ) : !usage.loading && !usage.error && usage.data ? (
           <p className="muted">No request usage recorded.</p>
-        )}
-      </section>
+        ) : null}
+      </Card>
       {adding ? (
         <AddConnection
           initial={resuming}
@@ -345,14 +394,9 @@ export function ConnectionsPage() {
                 defaultValue={editing.priority ?? 0}
               />
             </Field>
-            <label className="checkbox">
-              <input
-                name="enabled"
-                type="checkbox"
-                defaultChecked={editing.enabled}
-              />
+            <Switch name="enabled" defaultChecked={editing.enabled}>
               Enabled
-            </label>
+            </Switch>
           </AsyncForm>
         </Modal>
       ) : null}
@@ -491,9 +535,10 @@ function AddConnection({
           {provider === "anthropic" && type === "subscription" ? (
             <>
               <div className="notice warning">{warning}</div>
+              {/* An explicit risk acknowledgement stays a checkbox. */}
               <label className="checkbox">
-                <input name="acceptedRisk" type="checkbox" required />I
-                understand and accept this account risk.
+                <input name="acceptedRisk" type="checkbox" required />
+                <span>I understand and accept this account risk.</span>
               </label>
             </>
           ) : null}
@@ -577,7 +622,8 @@ function OAuthFlow({
           target="_blank"
           rel="noopener noreferrer"
         >
-          Continue to provider <ExternalLink size={16} />
+          Continue to provider{" "}
+          <Icon icon={ExternalLink} size={14} weight="control" />
         </a>
       ) : null}
       {active ? (
@@ -586,7 +632,7 @@ function OAuthFlow({
           resume from Connections.
         </p>
       ) : null}
-      <div role="status">
+      <div role="status" className="oauth-status">
         <Status value={current.status} />
         {current.message ? <p>{current.message}</p> : null}
       </div>
