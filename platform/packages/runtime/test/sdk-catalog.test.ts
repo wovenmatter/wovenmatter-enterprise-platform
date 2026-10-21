@@ -193,7 +193,7 @@ test("SDK catalog checks cwd-independent bundled identity and every load", async
   });
   process.chdir(unrelated);
   const status = await sdkCatalogStatus({ catalogDirectory: directory });
-  assert.match(status.bundledGeneration, /^bundled-pi-1\.3\.0-/);
+  assert.match(status.bundledGeneration, /^bundled-pi-1\.1\.0-/);
   const good = await fixtureGeneration(directory, "pi-cache", "good");
   await writeFile(
     join(directory, "catalog.json"),

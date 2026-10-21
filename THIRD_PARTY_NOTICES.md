@@ -4,23 +4,23 @@ The root MIT license covers Woven Matter's original application code. It does no
 
 ## Locked npm dependencies
 
-[The npm inventory](third-party/npm-inventory.tsv) records all 480 registry package occurrences (473 distinct package/version pairs) in the root lockfile, including development packages and optional platform variants. Versions, archive URLs and declared licenses come from those lockfiles; archive integrity hashes remain in the lockfiles. A declared license is metadata, not proof that a particular distribution contains every required notice.
+[The npm inventory](third-party/npm-inventory.tsv) records all 472 registry package occurrences (469 distinct package/version pairs) in the root lockfile, including development packages and optional platform variants. Versions, archive URLs and declared licenses come from those lockfiles; archive integrity hashes remain in the lockfiles. A declared license is metadata, not proof that a particular distribution contains every required notice.
 
 [Collected npm notices](third-party/npm-NOTICES.txt) preserve the license/notice files supplied by the installed Linux x64 packages. This is a supplemental collection: some packages omit a top-level license, and optional packages for other architectures were not installed. [The coverage list](third-party/notice-coverage.tsv) identifies these omissions. Keep the original package contents and their embedded notices as well. Reassess the exact contents of each release image and platform variant before redistribution. This source repository does not vendor node_modules or native binaries.
 
 | Direct dependency or tool                                      | Pinned version         | License or terms                                              |
 | -------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------- |
-| Fastify, @fastify/multipart, @fastify/static                   | 5.12.7, 10.1.4, 10.1.6 | MIT                                                           |
-| Nodemailer                                                     | 10.1.7                | MIT-0                                                         |
-| React, React DOM                                               | 19.3.1                 | MIT                                                           |
+| Fastify, @fastify/multipart, @fastify/static                   | 5.12.5, 10.1.2, 10.1.5 | MIT                                                           |
+| Nodemailer                                                     | 10.0.12                | MIT-0                                                         |
+| React, React DOM                                               | 19.3.0                 | MIT                                                           |
 | React Router DOM                                               | 7.18.4                 | MIT                                                           |
 | react-markdown, remark-gfm                                     | 10.1.0, 4.0.1          | MIT                                                           |
-| Lucide React                                                   | 1.61.0                | ISC; its license also preserves Feather/MIT attribution       |
-| @earendil-works/pi-durable, pi-ai, pi-coding-agent, chord       | 1.3.0                 | MIT; [upstream license](third-party/Pi-LICENSE.txt)           |
-| @anthropic-ai/claude-agent-sdk and its native packages         | 0.3.306                | Anthropic terms; not MIT and not an Apache license grant      |
-| Playwright                                                     | 1.64.1                 | Apache-2.0; browser distributions have additional notices     |
+| Lucide React                                                   | 0.468.0                | ISC; its license also preserves Feather/MIT attribution       |
+| @earendil-works/pi-durable, pi-ai, pi-coding-agent, chord       | 1.1.0                 | MIT; [upstream license](third-party/Pi-LICENSE.txt)           |
+| @anthropic-ai/claude-agent-sdk and its native packages         | 0.3.284                | Anthropic terms; not MIT and not an Apache license grant      |
+| Playwright                                                     | 1.63.0                 | Apache-2.0; browser distributions have additional notices     |
 | TypeScript                                                     | 7.0.2                  | Apache-2.0                                                    |
-| Vite, @vitejs/plugin-react                                     | 8.3.5, 6.1.2           | MIT; Vite's license file includes bundled third-party notices |
+| Vite, @vitejs/plugin-react                                     | 8.3.5, 6.1.1           | MIT; Vite's license file includes bundled third-party notices |
 | tsx                                                            | 4.23.15                | MIT                                                           |
 | @types/node, @types/nodemailer, @types/react, @types/react-dom | See lockfiles          | MIT                                                           |
 

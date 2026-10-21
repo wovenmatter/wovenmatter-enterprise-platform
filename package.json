@@ -23,14 +23,14 @@
     "test:coverage": "npm run build:server && node platform/tools/test.mjs --coverage"
   },
   "dependencies": {
-    "@fastify/multipart": "10.1.4",
-    "@fastify/static": "10.1.6",
-    "fastify": "5.12.7",
-    "nodemailer": "10.1.7"
+    "@fastify/multipart": "10.1.2",
+    "@fastify/static": "10.1.5",
+    "fastify": "5.12.5",
+    "nodemailer": "10.0.12"
   },
   "devDependencies": {
-    "@playwright/test": "1.64.1",
-    "@types/node": "24.19.2",
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.19.0",
     "@types/nodemailer": "8.0.2",
     "tsx": "4.23.15",
     "typescript": "7.0.2"

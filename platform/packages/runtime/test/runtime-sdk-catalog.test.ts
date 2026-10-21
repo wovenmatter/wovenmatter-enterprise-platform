@@ -44,7 +44,7 @@ test("runtime sdkCatalog reads trusted catalog without starting a project contai
     appArmorProfile: "wme-platform-agent",
   } satisfies DockerRuntimeOptions);
   const catalog = await runtime.sdkCatalog!("project1");
-  assert.ok(catalog.bundledGeneration.startsWith("bundled-pi-1.3.0-"));
+  assert.ok(catalog.bundledGeneration.startsWith("bundled-pi-1.1.0-"));
   assert.equal(catalog.defaultGeneration, catalog.bundledGeneration);
   assert.ok(catalog.items.some((item) => item.bundled === true));
 });

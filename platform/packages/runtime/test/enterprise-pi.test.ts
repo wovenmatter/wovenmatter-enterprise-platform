@@ -1174,53 +1174,49 @@ test("runPi clears explicit thinking override back to model default", async (t) 
   assert.doesNotMatch(payload, /"reasoning":/);
 });
 
-for (const codeMode of [false, true]) {
-  test(`runPi returns ${codeMode ? "codemode nested read" : "read"} output to the model`, async (t) => {
-    const directory = await mkdtemp(join(tmpdir(), "wme-enterprise-pi-tool-"));
-    t.after(() => rm(directory, { recursive: true, force: true }));
-    await writeFile(join(directory, "fixture.txt"), "tool-visible\n");
-    const g = gateway(t, [
-      codeMode
-        ? functionCallStream("codemode", { code: 'text(await tools.read({ path: "fixture.txt" }));' }, "code_read_1")
-        : readToolStream("fixture.txt"),
-      textStream("I read tool-visible", "resp_final"),
-    ]);
-    const events: RuntimeEvent[] = [];
-    await runEnterprisePi(
-      { ...request(g.baseUrl), pi: { codeMode: codeMode ? "on" : "off" } },
-      async (event) => {
-        events.push(event);
-      },
-      new AbortController().signal,
-      undefined,
-      undefined,
-      { sessionDirectory: directory, cwd: directory },
-    );
-    assert.equal(events.at(-1)?.type, "completed");
-    assert.ok(
-      g.requests.some((entry) =>
-        JSON.stringify(entry.body).includes("tool-visible"),
-      ),
-      JSON.stringify(g.requests),
-    );
-    assert.ok(
-      events.some(
-        (event) =>
-          event.type === "native_update" &&
-          JSON.stringify(event.update).includes('"tool_call"'),
-      ),
-      JSON.stringify(events),
-    );
-    assert.ok(
-      events.some(
-        (event) =>
-          event.type === "assistant_delta" &&
-          event.delta.includes("I read tool-visible"),
-      ),
-      JSON.stringify(events),
-    );
-  });
-}
+test("runPi executes embedded read tool and returns tool result to the model", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "wme-enterprise-pi-tool-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, "fixture.txt"), "tool-visible\n");
+  const g = gateway(t, [
+    readToolStream("fixture.txt"),
+    textStream("I read tool-visible", "resp_final"),
+  ]);
+  const events: RuntimeEvent[] = [];
+  await runEnterprisePi(
+    request(g.baseUrl),
+    async (event) => {
+      events.push(event);
+    },
+    new AbortController().signal,
+    undefined,
+    undefined,
+    { sessionDirectory: directory, cwd: directory },
+  );
+  assert.equal(events.at(-1)?.type, "completed");
+  assert.ok(
+    g.requests.some((entry) =>
+      JSON.stringify(entry.body).includes("tool-visible"),
+    ),
+    JSON.stringify(g.requests),
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "native_update" &&
+        JSON.stringify(event.update).includes('"tool_call"'),
+    ),
+    JSON.stringify(events),
+  );
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "assistant_delta" &&
+        event.delta.includes("I read tool-visible"),
+    ),
+    JSON.stringify(events),
+  );
+});
 
 test("runPi executes attached native subagent and retains reports", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "wme-enterprise-pi-child-"));
@@ -1254,10 +1250,6 @@ test("runPi executes attached native subagent and retains reports", async (t) =>
     entry.url.includes("/v1/responses"),
   );
   assert.ok(responseCalls.length >= 3, JSON.stringify(g.requests));
-  assert.ok(
-    responseCalls.some((entry) => JSON.stringify(entry.body).includes('Started \\"helper\\"')),
-    JSON.stringify(g.requests),
-  );
   assert.ok(
     events.some(
       (event) =>
