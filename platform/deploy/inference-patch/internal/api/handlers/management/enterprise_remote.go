@@ -334,7 +334,12 @@ func (h *Handler) CommitEnterpriseRemote(c *gin.Context) {
 			var file *os.File
 			file, err = os.OpenFile(filepath.Join(h.cfg.AuthDir, record.ID), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 			if err == nil {
-				err = file.Close()
+				// Codex storage now merges an existing JSON object. Reserve the
+				// attempt-owned file with valid JSON without relaxing exclusivity.
+				_, err = file.WriteString("{}\n")
+				if closeErr := file.Close(); err == nil {
+					err = closeErr
+				}
 			}
 		}
 		if err == nil {

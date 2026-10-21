@@ -1,14 +1,16 @@
-FROM golang:1.26-bookworm AS build
-ARG CLI_PROXY_REVISION=acdace936fa7df2905500c7f5e0a97d683138dea
+FROM golang:1.27.3-bookworm@sha256:972b4110ba0f47539a975c31e52c64765e1ff19f2d74469ae4a595c6676e80a5 AS build
+ARG CLI_PROXY_REVISION=0db19025571684b198a2ef508f99b41c717337e8
 WORKDIR /source
 RUN git init && git remote add origin https://github.com/router-for-me/CLIProxyAPI.git && git fetch --depth=1 origin ${CLI_PROXY_REVISION} && git checkout --detach FETCH_HEAD && test "$(git rev-parse HEAD)" = "${CLI_PROXY_REVISION}"
 COPY platform/deploy/inference-patch /patch
 RUN git apply --check /patch/upstream.patch && git apply /patch/upstream.patch && cp -R /patch/sdk /patch/internal /source/
+RUN git apply --check /patch/go-security.patch && git apply /patch/go-security.patch && go mod verify
+RUN go test ./internal/store ./internal/runtime/executor/helps -count=1 -timeout=120s
 RUN go test ./sdk/auth ./internal/auth/claude ./internal/auth/xai ./internal/api/handlers/management -run EnterpriseRemote -count=1
 RUN CGO_ENABLED=1 GOOS=linux go build -buildvcs=false -trimpath -ldflags="-s -w -X main.Commit=${CLI_PROXY_REVISION}" -o /out/CLIProxyAPI ./cmd/server
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install --no-install-recommends -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/* && groupadd --gid 10002 inference && useradd --uid 10002 --gid 10002 --no-create-home inference
+FROM debian:bookworm-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
+RUN apt-get update && apt-get upgrade -y && apt-get install --no-install-recommends -y ca-certificates tzdata && rm -rf /var/lib/apt/lists/* && groupadd --gid 10002 inference && useradd --uid 10002 --gid 10002 --no-create-home inference
 COPY --from=build /out/CLIProxyAPI /usr/local/bin/CLIProxyAPI
 COPY --from=build /source/LICENSE /usr/share/doc/cliproxyapi/LICENSE
 WORKDIR /tmp

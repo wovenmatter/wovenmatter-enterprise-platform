@@ -1,6 +1,6 @@
 import { AppError } from "../context.js";
-/** CLIProxyAPI v8 adapter, pinned to acdace936fa7df2905500c7f5e0a97d683138dea. */
-export const CLI_PROXY_REVISION = "acdace936fa7df2905500c7f5e0a97d683138dea";
+/** CLIProxyAPI v8 adapter, pinned to 0db19025571684b198a2ef508f99b41c717337e8. */
+export const CLI_PROXY_REVISION = "0db19025571684b198a2ef508f99b41c717337e8";
 export const CLAUDE_SUBSCRIPTION_NOTICE =
   "Using a Claude subscription through this third-party proxy may result in Anthropic restricting, suspending, or terminating your account. Continued access is not guaranteed.";
 

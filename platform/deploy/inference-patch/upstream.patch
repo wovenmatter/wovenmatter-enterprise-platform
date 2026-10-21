@@ -10,7 +10,7 @@
  	mu                      sync.Mutex
 --- a/internal/api/server_management_v8.go
 +++ b/internal/api/server_management_v8.go
-@@ -53,6 +53,11 @@
+@@ -49,6 +49,11 @@
  	v8.PATCH("/credentials/fields", s.mgmt.PatchAuthFileFields)
  	v8.POST("/credentials/refresh", s.mgmt.RefreshAuthFiles)
  	v8.POST("/oauth/import", s.mgmt.ImportOAuthV8)
@@ -20,11 +20,11 @@
 +	v8.POST("/oauth/remote/:id/commit", s.mgmt.CommitEnterpriseRemote)
 +	v8.DELETE("/oauth/remote/:id", s.mgmt.CancelEnterpriseRemote)
  	v8.GET("/oauth/auth-url", s.mgmt.StartOAuthV8)
- 	v8.GET("/oauth/status", s.mgmt.GetAuthStatus)
- 	v8.DELETE("/oauth/session", s.mgmt.CancelAuthSession)
+ 	v8.POST("/oauth/siwc/bind", s.mgmt.StartSIWCBind)
+ 	v8.GET("/oauth/siwc/status", s.mgmt.GetSIWCStatus)
 --- a/internal/auth/claude/anthropic_auth.go
 +++ b/internal/auth/claude/anthropic_auth.go
-@@ -295,11 +295,11 @@
+@@ -299,11 +299,11 @@
  func (o *ClaudeAuth) inspectOAuthAccount(ctx context.Context, accessToken string) *OAuthProfile {
  	profile, errProfile := o.FetchOAuthProfile(ctx, accessToken)
  	if errProfile != nil {
@@ -38,7 +38,7 @@
  	}
  	return profile
  }
-@@ -317,6 +317,12 @@
+@@ -321,6 +321,12 @@
  //   - string: The state parameter for verification
  //   - error: An error if PKCE codes are missing or URL generation fails
  func (o *ClaudeAuth) GenerateAuthURL(state string, pkceCodes *PKCECodes) (string, string, error) {
@@ -51,7 +51,7 @@
  	if pkceCodes == nil {
  		return "", "", fmt.Errorf("PKCE codes are required")
  	}
-@@ -325,7 +331,7 @@
+@@ -329,7 +335,7 @@
  		"code":                  {"true"},
  		"client_id":             {ClientID},
  		"response_type":         {"code"},
@@ -60,7 +60,7 @@
  		"scope":                 {ClaudeOAuthScope},
  		"code_challenge":        {pkceCodes.CodeChallenge},
  		"code_challenge_method": {"S256"},
-@@ -368,6 +374,14 @@
+@@ -372,6 +378,14 @@
  //   - *ClaudeAuthBundle: The complete authentication bundle with tokens
  //   - error: An error if token exchange fails
  func (o *ClaudeAuth) ExchangeCodeForTokens(ctx context.Context, code, state string, pkceCodes *PKCECodes) (*ClaudeAuthBundle, error) {
@@ -75,7 +75,7 @@
  	if pkceCodes == nil {
  		return nil, fmt.Errorf("PKCE codes are required for token exchange")
  	}
-@@ -379,7 +393,7 @@
+@@ -383,7 +397,7 @@
  	reqBody := authorizationCodeExchangeRequest{
  		GrantType:    "authorization_code",
  		Code:         newCode,
@@ -149,27 +149,27 @@
 +				if seconds, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && seconds > 0 && seconds <= 86400 && time.Duration(seconds)*time.Second > interval {
 +					interval = time.Duration(seconds) * time.Second
 +				}
- 				continue
- 			}
-+			if failure.Error == "authorization_pending" || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
 +				continue
 +			}
++			if failure.Error == "authorization_pending" || resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+ 				continue
+ 			}
 +			return nil, fmt.Errorf("device authorization failed")
  		default:
  			trimmed := strings.TrimSpace(string(respBody))
  			if trimmed == "" {
 --- a/internal/auth/codex/openai_auth.go
 +++ b/internal/auth/codex/openai_auth.go
-@@ -57,7 +57,7 @@
+@@ -60,7 +60,7 @@
  	}
  	sdkCfg.ProxyURL = effectiveProxyURL
  	return &CodexAuth{
--		httpClient: util.SetProxy(&sdkCfg, &http.Client{}),
-+		httpClient: util.SetProxy(&sdkCfg, &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}),
+-		httpClient:        util.SetProxy(&sdkCfg, &http.Client{}),
++		httpClient:        util.SetProxy(&sdkCfg, &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}),
+ 		siwcAgentNameHint: agentNameHint,
  	}
  }
- 
-@@ -129,7 +129,7 @@
+@@ -133,7 +133,7 @@
  		_ = resp.Body.Close()
  	}()
  
@@ -178,7 +178,7 @@
  	if err != nil {
  		return nil, fmt.Errorf("failed to read token response: %w", err)
  	}
-@@ -236,7 +236,7 @@
+@@ -243,7 +243,7 @@
  		}
  	}()
  

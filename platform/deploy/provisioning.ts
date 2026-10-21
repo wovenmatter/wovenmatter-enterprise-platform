@@ -14,7 +14,7 @@ import { join, resolve } from "node:path";
 import { isIPv4 } from "node:net";
 import { validateNetworkPool } from "../packages/runtime/src/networks.js";
 
-export const CLI_PROXY_REVISION = "acdace936fa7df2905500c7f5e0a97d683138dea";
+export const CLI_PROXY_REVISION = "0db19025571684b198a2ef508f99b41c717337e8";
 export const ORGANIZATION_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export interface ProxyEndpoint {
