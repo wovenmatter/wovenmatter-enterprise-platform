@@ -132,3 +132,21 @@ retryable failures, and access loss.
 The frontend build tool is pinned to Vite 8.3.4 to clear the newly reported
 launch-editor security audit gate. Native SDK pins and runtime behavior remain
 unchanged; the update is limited to the frontend toolchain and its lock entries.
+
+## Merge-readiness audit
+
+A second full-diff review found and corrected five control regressions: initial
+selected/last picker focus could be clipped; asynchronously growing popups could
+extend below the viewport; empty pickers referenced a missing listbox; consequential
+confirmation checkboxes lost their keyboard outline; and folder metadata closed
+while the pointer crossed the row actions and gap toward its scrollable card.
+
+Popup focus now reveals choices through both popup scrollers without moving the
+conversation, size changes recalculate placement,
+empty pickers retain a named/described listbox, confirmation inputs keep the
+shared neutral focus outline, and a cancellable 300 ms hover grace period allows
+crossing into metadata. Escape, click, blur and outside scrolling still dismiss
+metadata. Browser regressions exercise both initial focus paths at desktop and
+390-pixel widths and 240-pixel window heights, catalog polling, empty semantics,
+all three checkbox themes,
+and pointer travel into scrollable folder metadata.

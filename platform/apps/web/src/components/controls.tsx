@@ -120,8 +120,11 @@ function usePopup(align: "start" | "end") {
       initialFocus.current === "selected"
         ? items.find((item) => item.getAttribute("aria-selected") === "true")
         : undefined;
-    (selected ?? (initialFocus.current === "last" ? items.at(-1) : items[0]) ?? node)
-      .focus({ preventScroll: true });
+    const emptyTarget = () => node.querySelector<HTMLElement>('[role="listbox"]') ?? node;
+    focusPopupItem(
+      node,
+      selected ?? (initialFocus.current === "last" ? items.at(-1) : items[0]) ?? emptyTarget(),
+    );
     let focused = document.activeElement as HTMLElement;
     let focusedIndex = items.indexOf(focused);
     const rememberFocus = () => {
@@ -140,8 +143,10 @@ function usePopup(align: "start" | "end") {
         !enabled.includes(focused) &&
         (current === document.body || current === focused || node.contains(current))
       ) {
-        (enabled[Math.max(0, Math.min(focusedIndex, enabled.length - 1))] ?? node)
-          .focus({ preventScroll: true });
+        focusPopupItem(
+          node,
+          enabled[Math.max(0, Math.min(focusedIndex, enabled.length - 1))] ?? emptyTarget(),
+        );
       }
     });
     node.addEventListener("focusin", rememberFocus);
@@ -161,11 +166,19 @@ function usePopup(align: "start" | "end") {
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(update);
     };
+    // Catalog polling and asynchronous menu content can change the popup's
+    // dimensions without a window resize. Keep the top-layer surface in view.
+    const size = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(update);
+    });
+    size.observe(node);
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
     return () => {
       changes.disconnect();
+      size.disconnect();
       node.removeEventListener("focusin", rememberFocus);
       cancelAnimationFrame(frame);
       document.removeEventListener("pointerdown", outside, true);
@@ -181,7 +194,8 @@ function usePopup(align: "start" | "end") {
     const index = items.indexOf(document.activeElement as HTMLElement);
     const move = (next: number) => {
       event.preventDefault();
-      items[(next + items.length) % items.length]?.focus();
+      const target = items[(next + items.length) % items.length];
+      if (target) focusPopupItem(node, target);
     };
     if (event.key === "ArrowDown") move(index + 1);
     else if (event.key === "ArrowUp") move(index < 0 ? -1 : index - 1);
@@ -204,6 +218,18 @@ function usePopup(align: "start" | "end") {
     }
   }
   return { open, show, close, style, trigger, popup, keys, triggerKeys };
+}
+function focusPopupItem(node: HTMLElement, item: HTMLElement) {
+  item.focus({ preventScroll: true });
+  // Reveal the choice through both popup scrollers on short windows, stopping
+  // at the popup so the conversation and page stay in place.
+  const list = item.closest<HTMLElement>(".picker-list");
+  for (const viewport of list && list !== node ? [list, node] : [node]) {
+    const bounds = viewport.getBoundingClientRect(), choice = item.getBoundingClientRect();
+    const top = bounds.top + viewport.clientTop, bottom = top + viewport.clientHeight;
+    if (choice.top < top) viewport.scrollTop += Math.floor(choice.top - top);
+    else if (choice.bottom > bottom) viewport.scrollTop += Math.ceil(choice.bottom - bottom);
+  }
 }
 function focusable(node: HTMLElement) {
   return Array.from(
@@ -435,49 +461,50 @@ export function Picker({
           <div className="picker-heading" id={`${id}-heading`}>
             {heading}
           </div>
-          {options.length ? (
-            <div
-              role="listbox"
-              id={`${id}-list`}
-              aria-labelledby={`${id}-heading`}
-              className="picker-list"
-            >
-              {options.map((option, index) => {
-                const selected = option.value === value;
-                return (
-                  <div
-                    key={`${index}:${option.value}`}
-                    id={`${id}-option-${index}`}
-                    role="option"
-                    tabIndex={-1}
-                    aria-selected={selected}
-                    aria-disabled={disabled || option.disabled || undefined}
-                    data-value={option.value}
-                    className="picker-option"
-                    title={[option.label, option.detail, option.description]
-                      .filter(Boolean)
-                      .join("\n")}
-                    onClick={() => choose(option)}
-                  >
-                    <span className="picker-option-text">
-                      <span>{option.label}</span>
-                      {option.detail ? <small>{option.detail}</small> : null}
-                      {option.description ? (
-                        <small className="picker-option-description">
-                          {option.description}
-                        </small>
-                      ) : null}
-                    </span>
-                    {selected ? (
-                      <Icon icon={Check} size={14} weight="control" />
+          <div
+            role="listbox"
+            id={`${id}-list`}
+            tabIndex={-1}
+            aria-labelledby={`${id}-heading`}
+            aria-describedby={!options.length ? `${id}-empty` : undefined}
+            className="picker-list"
+          >
+            {options.map((option, index) => {
+              const selected = option.value === value;
+              return (
+                <div
+                  key={`${index}:${option.value}`}
+                  id={`${id}-option-${index}`}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={selected}
+                  aria-disabled={disabled || option.disabled || undefined}
+                  data-value={option.value}
+                  className="picker-option"
+                  title={[option.label, option.detail, option.description]
+                    .filter(Boolean)
+                    .join("\n")}
+                  onClick={() => choose(option)}
+                >
+                  <span className="picker-option-text">
+                    <span>{option.label}</span>
+                    {option.detail ? <small>{option.detail}</small> : null}
+                    {option.description ? (
+                      <small className="picker-option-description">
+                        {option.description}
+                      </small>
                     ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            <p className="picker-empty">{emptyMessage}</p>
-          )}
+                  </span>
+                  {selected ? (
+                    <Icon icon={Check} size={14} weight="control" />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          {!options.length ? (
+            <p id={`${id}-empty`} className="picker-empty">{emptyMessage}</p>
+          ) : null}
         </div>
       ) : null}
     </>

@@ -51,6 +51,10 @@ test('open pickers become inert when canonical work disables controls; empty pop
   await parityFixture(page, { baseURL, emptyModels: true }); await page.goto(workspace);
   await picker(page, 'Conversation model').focus(); await page.keyboard.press('Enter');
   await expect(page.getByText('No models are available.', { exact: false })).toBeVisible();
+  const emptyList = page.getByRole('listbox', { name: 'Model', exact: true });
+  await expect(emptyList).toBeFocused();
+  await expect(picker(page, 'Conversation model')).toHaveAttribute('aria-controls', await emptyList.getAttribute('id'));
+  await expect(emptyList).toHaveAccessibleDescription('No models are available. An administrator can connect a provider in Connections.');
   await page.keyboard.press('Escape');
   await expect(page.getByText('No models are available.', { exact: false })).toHaveCount(0);
   await expect(picker(page, 'Conversation model')).toBeFocused();
@@ -441,3 +445,86 @@ for (const initial of ['empty', 'no-match', 'populated']) {
     } finally { hold = false; pending.splice(0).forEach(resolve => resolve()); }
   });
 }
+
+const manyModels = () => Array.from({ length: 60 }, (_, index) => ({ id: `audit-${index}`, name: `Synthetic catalog entry ${index}`, provider: 'openai', thinkingLevels: [] }));
+
+for (const method of ['selected', 'ArrowUp']) {
+  test(`long picker initially exposes the ${method} choice without moving the conversation`, async ({ page, baseURL }) => {
+    const state = await parityFixture(page, { baseURL });
+    state.models = [...manyModels(), ...state.models];
+    for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 1280, height: 240 }]) {
+      await page.setViewportSize(viewport); await page.goto(workspace);
+      const trigger = picker(page, 'Conversation model'); await trigger.focus();
+      const editor = await page.getByLabel('Message your agent').boundingBox();
+      await page.keyboard.press(method === 'selected' ? 'Enter' : method);
+      const choice = method === 'selected' ? page.getByRole('option', { selected: true }) : page.getByRole('option').last();
+      await expect(choice).toBeFocused();
+      await expect(choice).toBeInViewport({ ratio: 1 });
+      expect((await page.getByLabel('Message your agent').boundingBox()).y).toBe(editor.y);
+      await page.keyboard.press('Home'); await expect(page.getByRole('option').first()).toBeInViewport({ ratio: 1 });
+      await page.keyboard.press('End'); await expect(page.getByRole('option').last()).toBeInViewport({ ratio: 1 });
+      await page.keyboard.press('Escape'); await expect(trigger).toBeFocused();
+    }
+    expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
+  });
+}
+
+test('open picker remains within the viewport when its polled catalog grows', async ({ page, baseURL }) => {
+  await page.clock.install();
+  const state = await parityFixture(page, { baseURL });
+  state.models = state.models.slice(0, 1);
+  await page.goto(workspace); await picker(page, 'Conversation model').click();
+  const current = page.getByRole('option', { selected: true }); await expect(current).toBeFocused();
+  state.models.push(...manyModels());
+  const refreshed = page.waitForResponse(response => response.url().endsWith('/inference/models'));
+  await page.clock.fastForward(60000); await refreshed;
+  await expect(page.getByRole('option')).toHaveCount(61);
+  await expect.poll(async () => {
+    const box = await page.locator('.popup.picker').boundingBox();
+    return box.y + box.height <= page.viewportSize().height - 8;
+  }).toBe(true);
+  await expect(current).toBeFocused(); await expect(current).toBeInViewport({ ratio: 1 });
+  await page.keyboard.press('End'); await expect(page.getByRole('option').last()).toBeInViewport({ ratio: 1 });
+  await page.keyboard.press('Escape'); await expect(picker(page, 'Conversation model')).toBeFocused();
+  expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
+});
+
+test('confirmation checkboxes keep a visible keyboard focus outline in every theme', async ({ page, baseURL }) => {
+  for (const theme of ['green', 'cognac', 'dark']) {
+    await page.context().unrouteAll();
+    const state = await parityFixture(page, { baseURL, theme });
+    await page.goto(workspace);
+    await page.getByRole('button', { name: `Actions for folder ${folder.name}`, exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Remove folder…', exact: true }).click();
+    const checkbox = page.getByRole('checkbox');
+    await checkbox.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+    await expect(checkbox).toBeFocused(); await expect(checkbox).not.toBeChecked();
+    expect(await checkbox.evaluate(node => {
+      const style = getComputedStyle(node);
+      return node.matches(':focus-visible') && style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2 && style.outlineColor !== 'rgba(0, 0, 0, 0)';
+    })).toBe(true);
+    await page.keyboard.press('Escape');
+    expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
+  }
+});
+
+test('folder hover metadata survives crossing row actions and remains scrollable', async ({ page, baseURL }) => {
+  const state = await parityFixture(page, { baseURL });
+  await page.route('**/projects/parity-project/folders', route => route.fulfill({ json: { items: [{ ...folder, referencePaths: Array.from({ length: 30 }, (_, index) => `Reference directory ${index}`) }] } }));
+  await page.goto(workspace);
+  const link = page.getByRole('link', { name: folder.name, exact: true });
+  await link.hover(); const card = page.getByRole('tooltip'); await expect(card).toBeVisible();
+  const row = await link.locator('..').boundingBox(), bounds = await card.boundingBox();
+  await page.mouse.move(row.x + row.width - 1, row.y + row.height / 2);
+  await page.mouse.move(bounds.x - 4, row.y + row.height / 2);
+  await page.mouse.move(bounds.x + 20, bounds.y + 40);
+  await expect(card).toBeVisible();
+  await expect.poll(() => card.evaluate(node => node.matches(':hover'))).toBe(true);
+  const paths = card.locator('.folder-hover-paths'); await paths.hover(); await page.mouse.wheel(0, 1000);
+  await expect.poll(() => paths.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
+  await expect(card.getByText('Reference directory 29', { exact: true })).toBeInViewport({ ratio: 1 });
+  await page.mouse.move(900, 100); await expect(card).toHaveCount(0);
+  await link.focus(); await expect(card).toBeVisible();
+  await page.keyboard.press('Escape'); await expect(card).toHaveCount(0); await expect(link).toBeFocused();
+  expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
+});

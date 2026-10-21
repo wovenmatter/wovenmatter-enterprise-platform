@@ -432,7 +432,7 @@ input::placeholder,
 textarea::placeholder {
   color: var(--muted);
 }
-input:focus,
+input:not([type="checkbox"], [type="radio"], [type="file"]):focus,
 textarea:focus,
 select:focus {
   outline: none;

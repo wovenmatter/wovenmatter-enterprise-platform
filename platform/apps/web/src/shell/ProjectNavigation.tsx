@@ -80,6 +80,10 @@ function FolderRailLink({ folder, workspace, count, to, selected }: {
     clearTimeout(timer.current);
     setOpen(false);
   }
+  function deferClose() {
+    clearTimeout(timer.current);
+    timer.current = setTimeout(() => setOpen(false), 300);
+  }
   function show() {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setOpen(true), 500);
@@ -114,7 +118,7 @@ function FolderRailLink({ folder, workspace, count, to, selected }: {
       aria-description={[workspace, summary, `Root folder: ${folder.rootPath}`, ...folder.referencePaths.map((path) => `Additional folder: ${path}`), folder.pinned ? "Pinned" : ""].filter(Boolean).join(", ")}
       aria-describedby={open ? id : undefined}
       onPointerEnter={(event) => { if (event.pointerType === "mouse") show(); }}
-      onPointerLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !card.current?.contains(event.relatedTarget)) close(); }}
+      onPointerLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !card.current?.contains(event.relatedTarget)) deferClose(); }}
       onPointerDown={close} onFocus={show} onBlur={close} onClick={close}
       onKeyDown={(event) => { if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); close(); } }}>
       <Icon icon={Folder} size={13} />
@@ -123,7 +127,7 @@ function FolderRailLink({ folder, workspace, count, to, selected }: {
       <span className="rail-count" aria-hidden="true">{count}</span>
     </Link>
     {open ? <div ref={card} id={id} role="tooltip" popover="manual" className="popup folder-hover-card"
-      onPointerLeave={close}>
+      onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={deferClose}>
       <strong>{folder.name}</strong>
       <span className="folder-hover-workspace">{workspace}</span>
       <small>{summary}</small>
