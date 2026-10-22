@@ -48,7 +48,7 @@ function Visibility({ project, value }: { project: boolean; value: string }) {
   return (
     <Field label="Visibility">
       <select name="visibility" defaultValue={value}>
-        {project ? <option value="project">Project</option> : null}
+        {project ? <option value="project">Workspace</option> : null}
         <option value="organization">Organization</option>
         <option value="public">Public</option>
       </select>
@@ -82,7 +82,7 @@ export function LibraryPage() {
   return (
     <section className="library-page">
       <PageHeader
-        title="Library"
+        title="Organization Files"
         description="Organization files and shared assets."
         actions={
           <div className="tabs" role="group" aria-label="Library view">
@@ -111,7 +111,7 @@ export function LibraryPage() {
       />
       {!canCreate && !projects.loading ? (
         <p className="muted">
-          Full project access is needed to create a project asset. Organization
+          Workspace membership is needed to create a workspace asset. Organization
           administrators can also create organization assets.
         </p>
       ) : null}
@@ -174,7 +174,7 @@ export function LibraryPage() {
                         {a.projectId
                           ? (projects.data?.items.find(
                               (p) => p.id === a.projectId,
-                            )?.name ?? "Project")
+                            )?.name ?? "Workspace")
                           : "Organization"}
                       </td>
                       <td>
@@ -277,7 +277,7 @@ function AssetDetail({
         <>
           <div className="asset-summary">
             <Status value={a.status} />
-            <span>{a.projectId ? "Project asset" : "Organization asset"}</span>
+            <span>{a.projectId ? "Workspace asset" : "Organization asset"}</span>
             <span>Revision {a.revision}</span>
           </div>
           <nav className="tabs" aria-label="Asset views">
@@ -301,7 +301,7 @@ function AssetDetail({
             a.canEdit ? (
               <AssetPreparation key={a.id} asset={a} onSaved={changed} />
             ) : (
-              <p>Full access is needed to edit this asset.</p>
+              <p>An organization administrator can grant access to this asset.</p>
             )
           ) : null}
           {tab === "publish" ? (

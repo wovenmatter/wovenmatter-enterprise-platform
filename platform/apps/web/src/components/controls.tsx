@@ -252,8 +252,10 @@ export function Menu({
   iconSize = 16,
   className = "",
   align = "end",
+  triggerText,
 }: {
   label: string;
+  triggerText?: string;
   children: ReactNode;
   icon?: LucideIcon;
   iconSize?: number;
@@ -277,6 +279,7 @@ export function Menu({
         onKeyDown={popup.triggerKeys}
       >
         <Icon icon={icon} size={iconSize} weight="control" />
+        {triggerText ? <span>{triggerText}</span> : null}
       </button>
       {popup.open ? (
         <div

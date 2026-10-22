@@ -12,7 +12,7 @@ RUN npm run build && npm prune --omit=dev --ignore-scripts
 FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS application-base
 ENV NODE_ENV=production WME_HOST=0.0.0.0 WME_PORT=4100
 WORKDIR /app
-RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
 RUN npm install --global npm@12.2.0 && npm cache clean --force
 RUN groupadd --gid 10001 wovenmatter-enterprise && useradd --uid 10001 --gid 10001 --no-create-home wovenmatter-enterprise
 COPY --from=build --chown=10001:10001 /app/package.json /app/package-lock.json ./
@@ -20,6 +20,9 @@ COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules
 COPY --from=build --chown=10001:10001 /app/platform ./platform
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/wovenmatter-enterprise/
 COPY third-party /usr/share/doc/wovenmatter-enterprise/third-party
+ARG WME_REVISION=development
+LABEL org.opencontainers.image.revision=$WME_REVISION
+ENV WME_REVISION=$WME_REVISION
 USER 10001:10001
 EXPOSE 4100
 HEALTHCHECK --interval=15s --timeout=3s --start-period=15s CMD node -e "const q=require('http').get({hostname:'127.0.0.1',port:4100,path:'/enterprise/healthz',headers:{host:new URL(process.env.WME_PUBLIC_ORIGIN||'http://localhost:4100').host}},r=>{r.resume();process.exit(r.statusCode===200?0:1)});q.on('error',()=>process.exit(1))"

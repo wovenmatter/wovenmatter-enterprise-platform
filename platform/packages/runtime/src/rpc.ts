@@ -3,6 +3,7 @@ import { RuntimeError } from "./types.ts";
 import { MAX_LINE, MAX_OUTPUT } from "./validation.ts";
 
 export type RpcMessage = {
+  jsonrpc?: "2.0";
   id?: number | string;
   method?: string;
   params?: any;
@@ -24,6 +25,7 @@ export class JsonRpcProcess {
   private ended = false;
   private eventQueue = Promise.resolve();
   readonly closed: Promise<void>;
+  readonly stopped: Promise<void>;
   private rejectClosed!: (error: Error) => void;
   onMessage: (message: RpcMessage) => Promise<void> = async () => {};
   constructor(
@@ -37,6 +39,7 @@ export class JsonRpcProcess {
       env: environment,
       stdio: ["pipe", "pipe", "pipe"],
     });
+    this.stopped = new Promise(resolve => this.child.once("close", () => resolve()));
     this.closed = new Promise<void>((_resolve, reject) => {
       this.rejectClosed = reject;
     });
@@ -176,7 +179,7 @@ export class JsonRpcProcess {
         "harness_disconnected",
         "The agent is disconnected",
       );
-    this.child.stdin.write(JSON.stringify(message) + "\n");
+    this.child.stdin.write(JSON.stringify({ ...message, jsonrpc: "2.0" }) + "\n");
   }
   request(method: string, params: unknown, timeoutMs = 30000): Promise<any> {
     const id = ++this.sequence;

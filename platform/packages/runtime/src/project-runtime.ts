@@ -774,7 +774,7 @@ export class ProjectDockerRuntime implements Runtime {
       "sessions",
       request.conversationId,
       request.harness,
-      request.access,
+      request.sessionStorageAccess ?? request.access,
     );
     if (request.sessionDirectory !== expectedSession)
       throw new RuntimeError(

@@ -496,7 +496,7 @@ test("gateway exposes no management endpoint and rejects anonymous requests", as
     await f.close();
   }
 });
-test("model selection verifies the actual catalog and rejects non-Pi harnesses", async () => {
+test("model selection verifies the catalog and permits native protocols through organization translation", async () => {
   const f = await fixture();
   try {
     assert.deepEqual(await f.service.resolvePiModel(f.orgId, "gpt-example"), {
@@ -528,10 +528,13 @@ test("model selection verifies the actual catalog and rejects non-Pi harnesses",
     );
     await f.service.validateSelection(f.orgId, "gpt-example", "pi");
     await f.service.validateSelection(f.orgId, "claude-example", "pi");
-    await assert.rejects(
-      () => f.service.validateSelection(f.orgId, "claude-example", "codex"),
-      { code: "invalid_harness" },
-    );
+    await f.service.validateSelection(f.orgId, "gpt-example", "codex");
+    await f.service.validateSelection(f.orgId, "claude-example", "claude_code");
+    await f.service.validateSelection(f.orgId, "claude-example", "opencode");
+    await f.service.validateSelection(f.orgId, "gpt-example", "claude_code");
+    await f.service.validateSelection(f.orgId, "gpt-example", "grok_build");
+    await f.service.validateSelection(f.orgId, "claude-example", "grok_build");
+    await f.service.validateSelection(f.orgId, "claude-example", "codex");
     await assert.rejects(
       () => f.service.validateSelection(f.orgId, "imaginary-model", "pi"),
       { code: "model_unavailable" },

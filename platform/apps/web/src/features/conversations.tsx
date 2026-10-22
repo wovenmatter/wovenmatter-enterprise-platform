@@ -1,3 +1,6 @@
+import { NativeControls } from "./native-controls";
+import { WorkspaceDetails, WorkspaceNotePanel } from "../shell/WorkspaceDetails";
+import { agents, agentName, acceptsModel } from "../agents";
 import {
   ConversationRunWork,
   NativeChecklist,
@@ -22,13 +25,10 @@ import {
   Copy,
   Cpu,
   FolderOpen,
-  LockKeyhole,
   MessageSquare,
-  ShieldCheck,
   Settings,
   Square,
   Trash2,
-  Users,
 } from "lucide-react";
 import {
   api,
@@ -40,7 +40,6 @@ import {
   useResource,
   type List,
   type Project,
-  type User,
   type Model,
   type Run,
   type Conversation,
@@ -65,7 +64,6 @@ import {
   Picker,
   type PickerOption,
 } from "../components/controls";
-import { Link } from "react-router-dom";
 import {
   mergeMessages,
   emptyAssistantLabel,
@@ -122,6 +120,7 @@ const activeStatuses = new Set([
 ]);
 export function ConversationsPage({ project }: { project: Project }) {
   const { org, user } = useWorkspace();
+  const agentDefaults = useResource<{ defaultHarness: string }>(`/enterprise/api/projects/${project.id}/agent-settings`);
   const list = useResource<List<Conversation>>(
     `/enterprise/api/projects/${project.id}/conversations`,
   );
@@ -181,10 +180,8 @@ export function ConversationsPage({ project }: { project: Project }) {
   const selectedFolder = folders.data?.items.find(
     (f) => f.id === query.get("folder"),
   );
-  const folderChats =
-    list.data?.items.filter((c) => c.folderId === selectedFolder?.id) ?? [];
   return (
-    <div className="conversation-layout">
+    <div className={`conversation-layout ${query.has("note") ? "has-note" : ""}`}>
       <div className="conversation-main">
         {conversationId ? (
           <Thread
@@ -206,53 +203,30 @@ export function ConversationsPage({ project }: { project: Project }) {
             <ErrorNotice
               message={
                 list.error ||
-                "This conversation is unavailable in this project."
+                "This conversation is unavailable in this workspace."
               }
             />
           )
-        ) : (
-          <div className="workspace-home">
-            <Empty
-              title={selectedFolder?.name ?? "All Workspaces"}
-              action={
-                <button
-                  className="primary"
-                  onClick={() => {
-                    const next = new URLSearchParams(query);
-                    next.set("new", "1");
-                    setQuery(next);
-                  }}
-                >
-                  New conversation
-                </button>
-              }
-            >
-              Ask a question, analyze your files, or work through ideas.
-            </Empty>
-            {selectedFolder && folderChats.length ? (
-              <nav className="folder-conversations" aria-label={`Conversations in ${selectedFolder.name}`}>
-                {folderChats.map((c) => (
-                  <Link
-                    key={c.id}
-                    className="nav-link"
-                    to={`?${new URLSearchParams({ folder: selectedFolder.id, conversation: c.id })}`}
-                  >
-                    <Icon icon={MessageSquare} size={13} />
-                    <span className="rail-title">{c.title}</span>
-                  </Link>
-                ))}
-              </nav>
-            ) : null}
-          </div>
+        ) : !agentDefaults.data && agentDefaults.loading ? <Loading /> : (
+          <WorkspaceWelcome key={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "loading"} title={selectedFolder?.name ?? project.name} initialAgent={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "pi"} models={models.data?.items ?? []} onStart={async (harness, model, content) => {
+            const chat = await send<Conversation>(`/enterprise/api/projects/${project.id}/conversations`, { harness, model: model || undefined, folderId: selectedFolder?.id ?? null, mode: "write" });
+            const draftKey = `wme:draft:${user.id}:${chat.id}`, pendingKey = `wme:pending:${user.id}:${chat.id}`;
+            const pending = { id: crypto.randomUUID(), content, kind: "message" as const };
+            saveConversationDraft(draftKey, content, "message"); savePendingMessage(pendingKey, pending);
+            try { await send(`/enterprise/api/conversations/${chat.id}/messages`, { content, kind: "message", requestId: pending.id }); settleConversationInput(pendingKey, draftKey, pending); } catch { /* Retained pending request is safely retried in the thread. */ }
+            select(chat.id, chat.folderId); workspaceChanged();
+          }} />
         )}
         {!conversationId ? <ErrorNotice message={list.error} /> : null}
       </div>
+      {query.get("note") ? <WorkspaceNotePanel projectId={project.id} noteId={query.get("note")!} onClose={() => { const next = new URLSearchParams(query); next.delete("note"); setQuery(next); }} /> : null}
+      <WorkspaceDetails project={project} chats={list.data?.items ?? []} folderName={selectedFolder?.name} />
       {creating ? (
         <Modal title="New conversation" compact onClose={closeCreate}>
-          {!folders.data ? (
+          {!folders.data || (!agentDefaults.data && agentDefaults.loading) ? (
             <>
               <Loading />
-              <ErrorNotice message={folders.error} />
+              <ErrorNotice message={folders.error || agentDefaults.error} />
             </>
           ) : query.get("folder") &&
             query.get("folder") !== "all" &&
@@ -263,6 +237,7 @@ export function ConversationsPage({ project }: { project: Project }) {
               project={project}
               folders={folders.data?.items}
               initialFolder={query.get("folder")}
+              initialAgent={query.get("agent") ?? agentDefaults.data?.defaultHarness}
               onCancel={closeCreate}
               onSave={async (body) => {
                 const navigationTarget = window.location.href;
@@ -281,6 +256,13 @@ export function ConversationsPage({ project }: { project: Project }) {
     </div>
   );
 }
+function WorkspaceWelcome({ title, initialAgent, models, onStart }: { title: string; initialAgent: string; models: Model[]; onStart: (harness: string, model: string, content: string) => Promise<void> }) {
+  const [harness, setHarness] = useState(initialAgent), [model, setModel] = useState("");
+  const [draft, setDraft] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  async function submit() { if (!draft.trim() || busy) return; setBusy(true); setError(""); try { await onStart(harness, model, draft); } catch (e) { setError(errorMessage(e)); setBusy(false); } }
+  return <div className="workspace-welcome"><header className="thread-header"><h2>{title}</h2></header><Empty title="What would you like to work on?">Start a conversation with your agent.</Empty><div className="composer-area"><ErrorNotice message={error} /><form onSubmit={event => { event.preventDefault(); void submit(); }}><textarea aria-label="Message your agent" placeholder="Message your agent…" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} /><div className="composer-controls"><Picker label="Agent" heading="Agent" icon={Cpu} value={harness} placeholder="Agent" options={agents.map(agent => ({ value: agent.id, label: agent.name, description: agent.detail }))} onChange={value => { setHarness(value); setModel(""); }} disabled={busy} />{<Picker label="Model" heading="Model" icon={Cpu} value={model} placeholder="Workspace default" options={[{ value: "", label: "Workspace default" }, ...models.filter(model => acceptsModel(harness, model.provider)).map(model => ({ value: model.id, label: model.name }))]} onChange={setModel} disabled={busy} />}<div className="composer-send-actions"><button className="send-button" aria-label="Send message" type="submit" disabled={busy || !draft.trim()}><Icon icon={ArrowUp} size={16} weight="send" /></button></div></div></form><div className="composer-status" role="status">{busy ? "Starting conversation…" : "Shared with your workspace"}</div></div></div>;
+}
+
 function PiSDKSettings({ conversationId }: { conversationId: string }) {
   const catalog = useResource<{
     defaultGeneration: string;
@@ -358,10 +340,10 @@ function PiSDKSettings({ conversationId }: { conversationId: string }) {
   );
 }
 export function ConversationForm({
-  project,
   conversation,
   folders,
   initialFolder,
+  initialAgent,
   onSave,
   onCancel,
 }: {
@@ -370,6 +352,7 @@ export function ConversationForm({
   conversation?: Conversation;
   folders?: WorkspaceFolder[];
   initialFolder?: string | null;
+  initialAgent?: string | null;
   onSave: (body: unknown) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -382,12 +365,9 @@ export function ConversationForm({
           conversation
             ? {
                 title: d.get("title"),
-                pi: {
-                  codeMode: d.get("codeMode"),
-                  subagentConcurrency: Number(d.get("subagentConcurrency")),
-                },
+                ...(conversation.harness === "pi" ? { pi: { codeMode: d.get("codeMode"), subagentConcurrency: Number(d.get("subagentConcurrency")) } } : {}),
               }
-            : { mode: d.get("mode"), folderId: d.get("folderId") || null },
+            : { mode: "write", harness: d.get("harness"), folderId: d.get("folderId") || null },
         )
       }
     >
@@ -402,7 +382,7 @@ export function ConversationForm({
               autoFocus
             />
           </Field>
-          <details className="settings-disclosure pi-options">
+          {conversation.harness === "pi" ? <><details className="settings-disclosure pi-options">
             <summary>
               <Icon
                 icon={ChevronDown}
@@ -433,24 +413,12 @@ export function ConversationForm({
               />
             </Field>
           </details>
-          <PiSDKSettings conversationId={conversation.id} />
+          <PiSDKSettings conversationId={conversation.id} /></> : <p className="muted">{agentName(conversation.harness)} keeps its native runtime settings and approval controls.</p>}
         </>
       ) : (
         <>
-          <Field
-            label="Session permissions"
-            hint="Access is fixed for this session."
-          >
-            <select
-              name="mode"
-              defaultValue={project?.access ?? "read"}
-              autoFocus
-            >
-              <option value="read">Read-only</option>
-              {project?.access === "write" ? (
-                <option value="write">Full access</option>
-              ) : null}
-            </select>
+          <Field label="Agent">
+            <select name="harness" defaultValue={initialAgent ?? "pi"} autoFocus>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select>
           </Field>
           <Field label="Folder">
             <select
@@ -749,7 +717,6 @@ export function Thread({
   const [initialCursor, setInitialCursor] = useState<number>();
   const [tool, setTool] = useState("");
   const [editing, setEditing] = useState(false);
-  const [members, setMembers] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
@@ -782,12 +749,8 @@ export function Thread({
   indexedRuns.current = new Set(activityByRun.keys());
   const active =
     runs.data?.items.filter((r) => activeStatuses.has(r.status)) ?? [];
-  const creator = !!asset || detail.data?.createdBy === user.id;
-  const canAct =
-    !!detail.data &&
-    (!project ||
-      detail.data.mode === "read" ||
-      (project.access === "write" && detail.data.effectiveMode !== "read"));
+  const creator = Boolean(detail.data);
+  const canAct = Boolean(detail.data);
   async function stop() {
     try {
       await send(`/enterprise/api/conversations/${id}/cancel`, {});
@@ -961,7 +924,7 @@ export function Thread({
       (!draft.trim() && !request.current)
     )
       return;
-    if (kind === "message" && !active.length && !detail.data?.model) {
+    if (kind === "message" && !active.length && detail.data?.harness === "pi" && !detail.data?.model) {
       setError("Select a model before sending a message.");
       return;
     }
@@ -1030,17 +993,6 @@ export function Thread({
           {detail.data?.title ?? "Conversation"}
         </h2>
         <div className="thread-header-actions">
-          {!asset ? (
-            <button
-              type="button"
-              className="icon-button small"
-              aria-label="Conversation members"
-              title="Conversation members"
-              onClick={() => setMembers(true)}
-            >
-              <Icon icon={Users} size={16} />
-            </button>
-          ) : null}
           <Menu label="Conversation actions" className="small">
             <MenuLink href={`/enterprise/api/conversations/${id}/export`} download>
               Export messages
@@ -1136,7 +1088,7 @@ export function Thread({
           <Empty title="What would you like to work on?">
             {asset
               ? "Describe what you want to create or change. The agent saves a private draft for your review."
-              : "Your agent can use the files available in this project."}
+              : "Your agent can use the files available in this workspace."}
           </Empty>
         ) : (
           combined.map((m) => (
@@ -1280,6 +1232,7 @@ export function Thread({
           ))}
       </div>
       <div className="composer-area">
+        {detail.data && detail.data.harness !== "pi" ? <NativeControls conversation={detail.data} models={models} onSaved={() => { detail.reload(); refresh(); }} /> : null}
         {!following ? (
           <button
             type="button"
@@ -1375,7 +1328,7 @@ export function Thread({
             ref={inputElement}
             id="message"
             rows={3}
-            placeholder={canAct ? "Message your agent…" : "Read-only for you"}
+            placeholder={canAct ? `Message ${agentName(detail.data?.harness)}…` : "Loading conversation…"}
             value={draft}
             maxLength={100000}
             readOnly={uncertain}
@@ -1393,7 +1346,7 @@ export function Thread({
             }}
           />
           <div className="composer-controls">
-            <ModelControls
+            {(!detail.data?.harness || detail.data.harness === "pi") ? <ModelControls
               conversation={detail.data}
               models={models}
               disabled={
@@ -1406,26 +1359,7 @@ export function Thread({
                 refresh();
               }}
               onError={setError}
-            />
-            <span
-              className="session-mode"
-              title={
-                detail.data?.mode === "write" && !canAct
-                  ? "Your project access is read-only. Create a read-only conversation to use the agent."
-                  : "Access is fixed for this conversation."
-              }
-            >
-              {detail.data?.mode === "write" && canAct ? (
-                <Icon icon={ShieldCheck} size={14} weight="control" />
-              ) : (
-                <Icon icon={LockKeyhole} size={14} weight="control" />
-              )}
-              <span>
-                {detail.data?.mode === "write" && canAct
-                  ? "Full access"
-                  : "Read-only"}
-              </span>
-            </span>
+            /> : null}
             <div className="composer-send-actions">
               <div className="message-kind">
                 <Picker
@@ -1491,7 +1425,7 @@ export function Thread({
         </form>
         <div className="composer-status" role="status">
           {!canAct && detail.data
-            ? "Read-only for you. Start a read-only conversation to use the agent."
+            ? "Conversation unavailable."
             : uncertain
               ? "Delivery unconfirmed"
               : active.length
@@ -1518,13 +1452,6 @@ export function Thread({
           />
         </Modal>
       ) : null}
-      {members ? (
-        <ThreadMembers
-          id={id}
-          canAdd={canAct}
-          onClose={() => setMembers(false)}
-        />
-      ) : null}
       {deleting ? (
         <Confirm
           title="Move to Trash?"
@@ -1543,76 +1470,6 @@ export function Thread({
     </>
   );
 }
-function ThreadMembers({
-  id,
-  canAdd,
-  onClose,
-}: {
-  id: string;
-  canAdd: boolean;
-  onClose: () => void;
-}) {
-  const members = useResource<
-    List<
-      User & {
-        isCreator?: boolean;
-      }
-    >
-  >(`/enterprise/api/conversations/${id}/members`);
-  const people = useResource<List<User>>(
-    canAdd ? `/enterprise/api/conversations/${id}/eligible-members` : null,
-  );
-  return (
-    <Modal title="Conversation members" onClose={onClose}>
-      <p className="muted">
-        Conversations are private until you add people. Participants must retain
-        the project access required by this conversation. Read-only project
-        access never grants full-access agent authority.
-      </p>
-      <ErrorNotice message={members.error || people.error} />
-      <div className="row-list">
-        {members.data?.items.map((u) => (
-          <div className="setting-row" key={u.id}>
-            <div>
-              <strong>{u.name || u.email}</strong>
-              <small>
-                {u.email}
-                {u.isCreator ? " · Creator" : ""}
-              </small>
-            </div>
-          </div>
-        ))}
-      </div>
-      {people.data ? (
-        <AsyncForm
-          submitLabel="Add person"
-          onSubmit={async (d) => {
-            await send(`/enterprise/api/conversations/${id}/members`, {
-              userId: d.get("userId"),
-            });
-            members.reload();
-          }}
-        >
-          <Field label="Project member">
-            <select name="userId" required defaultValue="">
-              <option value="" disabled>
-                Select a person
-              </option>
-              {people.data?.items
-                .filter((u) => !members.data?.items.some((m) => m.id === u.id))
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name || u.email}
-                  </option>
-                ))}
-            </select>
-          </Field>
-        </AsyncForm>
-      ) : null}
-    </Modal>
-  );
-}
-
 function ConversationTrash({ project }: { project: Project }) {
   const { user } = useWorkspace();
   const chats = useResource<List<Conversation>>(

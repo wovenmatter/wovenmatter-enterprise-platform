@@ -1,8 +1,19 @@
+import codexLogo from "../assets/codex.png";
+import claudeLogo from "../assets/claude.svg";
+import grokLogo from "../assets/grok.svg";
+import opencodeLogo from "../assets/opencode.svg";
+import { agents } from "../agents";
 import piLogo from "../assets/pi-durable.svg";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
+  CalendarDays,
+  Clock3,
+  LibraryBig,
+  Database,
+  ChartNoAxesCombined,
+  NotebookPen,
   Files,
   Folder,
   FolderOpen,
@@ -12,7 +23,6 @@ import {
   Settings,
   SquarePen,
   Trash2,
-  Users,
 } from "lucide-react";
 import {
   send,
@@ -154,7 +164,7 @@ export function ProjectNavigation({
   );
   useWorkspaceChanges(projects.reload);
   const location = useLocation(),
-    active = location.pathname.match(/\/projects\/([^/]+)/)?.[1],
+    active = location.pathname.match(/\/workspaces\/([^/]+)/)?.[1],
     base = `/organizations/${orgId}`;
   if (active)
     return (
@@ -173,17 +183,17 @@ export function ProjectNavigation({
         <NavLink
           className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
           end
-          to={`${base}/projects`}
+          to={`${base}/workspaces`}
         >
           <Icon icon={FolderOpen} size={13} />
-          <span>Projects</span>
+          <span>Back to organization</span>
         </NavLink>
         {isAdmin ? (
           <Link
             className="rail-action"
-            aria-label="New project"
-            title="New project"
-            to={`${base}/projects?new=1`}
+            aria-label="New workspace"
+            title="New workspace"
+            to={`${base}/workspaces?new=1`}
           >
             <Icon icon={Plus} size={12} />
           </Link>
@@ -195,7 +205,7 @@ export function ProjectNavigation({
           <Link
             className="nav-link"
             key={p.id}
-            to={`${base}/projects/${p.id}`}
+            to={`${base}/workspaces/${p.id}`}
             title={p.name}
           >
             <Icon icon={Folder} size={13} />
@@ -210,8 +220,6 @@ function WorkspaceRail({
   project,
   projectId,
   orgId,
-  user,
-  isAdmin,
 }: {
   project?: Project;
   projectId: string;
@@ -235,7 +243,7 @@ function WorkspaceRail({
     selected = query.get("folder") ?? "all",
     conversation = query.get("conversation"),
     trash = query.has("trash"),
-    base = `/organizations/${orgId}/projects/${projectId}`;
+    base = `/organizations/${orgId}/workspaces/${projectId}`;
   const [search, setSearch] = useState(""),
     [error, setError] = useState("");
   const [modal, setModal] = useState<{
@@ -243,7 +251,7 @@ function WorkspaceRail({
     folder?: WorkspaceFolder;
   } | null>(null);
   const [renameChat, setRenameChat] = useState<Conversation | null>(null);
-  const writable = project?.access === "write";
+  const writable = Boolean(project);
   const onWorkspace = location.pathname.endsWith(projectId);
   const url = (values: Record<string, string>) =>
     `${base}?${new URLSearchParams(values)}`;
@@ -255,9 +263,6 @@ function WorkspaceRail({
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
   const count = (folderId: string) =>
     allChats.filter((c) => c.folderId === folderId).length;
-  const inSelection = allChats.filter(
-    (c) => selected === "all" || c.folderId === selected,
-  );
   async function mutation(path: string, body: unknown, method = "PATCH") {
     try {
       await send(path, body, method);
@@ -270,7 +275,7 @@ function WorkspaceRail({
     }
   }
   function chatRow(c: Conversation) {
-    const mine = c.createdBy === user.id;
+    const mine = true;
     const current = conversation === c.id;
     const state = [c.pinned ? "Pinned" : "", c.activeRun ? "Working" : ""]
       .filter(Boolean)
@@ -321,7 +326,7 @@ function WorkspaceRail({
               <MenuSeparator />
               <MenuItem
                 danger
-                disabled={c.effectiveMode === "read" && c.mode === "write"}
+
                 onSelect={async () => {
                   const navigationTarget = window.location.href;
                   if (
@@ -346,19 +351,38 @@ function WorkspaceRail({
   }
   return (
     <div className="project-navigation workspace-navigation">
+      <div className="workspace-rail-title"><strong>{project?.name ?? "Workspace"}</strong></div>
       <div className="rail-group">
-        <Link className="nav-link" to={`/organizations/${orgId}/projects`}>
+        <Link className="nav-link" to={`/organizations/${orgId}/workspaces`}>
           <Icon icon={ArrowLeft} size={13} weight="control" />
-          <span>Projects</span>
+          <span>Back to organization</span>
         </Link>
         <Link
           className="nav-link"
           to={url({ folder: selected, new: "1" })}
         >
           <Icon icon={SquarePen} size={13} />
-          <span>New conversation</span>
+          <span>New chat</span>
         </Link>
       </div>
+      <nav aria-label="Workspace navigation" className="workspace-tools">
+        <Menu label="Create note or artifact" triggerText="New note" icon={NotebookPen} iconSize={13} className="rail-menu" align="start">
+          <MenuItem onSelect={async () => { try { const record = await send<{id:string}>(`/enterprise/api/projects/${projectId}/workspace-content`, {kind:"note",title:"Untitled note",body:"",folderId:selected === "all" ? null : selected,data:{format:"markdown"}}); navigate(`${base}/notes?item=${record.id}`); workspaceChanged(); } catch(e) { setError(errorMessage(e)); } }}>New note</MenuItem>
+          <MenuItem onSelect={() => navigate(`${base}/artifacts`)}>New artifact…</MenuItem>
+          <MenuSeparator />
+          <MenuItem onSelect={() => navigate(`${base}/notes`)}>Browse notes</MenuItem>
+          <MenuItem onSelect={() => navigate(`${base}/artifacts`)}>Browse artifacts</MenuItem>
+        </Menu>
+        {[
+          { path: "calendar", label: "Calendar", icon: CalendarDays },
+          { path: "tasks", label: "Scheduled Tasks", icon: Clock3 },
+          { path: "library", label: "Library", icon: LibraryBig },
+          { path: "databases", label: "Databases", icon: Database },
+          { path: "files", label: "Workspace Files", icon: Files },
+          { path: "usage", label: "Usage", icon: ChartNoAxesCombined },
+          { path: "settings", label: "Settings", icon: Settings },
+        ].map(item => <NavLink key={item.path} className="nav-link" to={`${base}/${item.path}`}><Icon icon={item.icon} size={13} /><span>{item.label}</span></NavLink>)}
+      </nav>
       <SearchField
         label="Search conversations"
         placeholder="Search conversations…"
@@ -378,26 +402,16 @@ function WorkspaceRail({
           to={url({ folder: "all", new: "1" })}
         />
       </div>
-      <RailSection title={project?.name ?? "Project workspace"} className="owning-workspace">
+      <RailSection title={project?.name ?? "Workspace"} className="owning-workspace">
         <div className="rail-children">
           <RailSection title="Agents">
-            <div className="rail-row">
-              <Link
-                className="nav-link"
-                to={
-                  inSelection[0]
-                    ? url({ folder: selected, conversation: inSelection[0].id })
-                    : url({ folder: selected })
-                }
-              >
-                <img className="agent-logo" src={piLogo} alt="" />
-                <span className="rail-title">Pi Durable</span>
+            {agents.map(agent => <div className="rail-row" key={agent.id}>
+              <Link className={`nav-link ${query.get("agent") === agent.id ? "active" : ""}`} to={url({ folder: selected, agent: agent.id })} title={agent.detail}>
+                {agent.id === "pi" ? <img className="agent-logo" src={piLogo} alt="" /> : <img className={`agent-logo agent-${agent.id}`} src={{ codex: codexLogo, claude_code: claudeLogo, grok_build: grokLogo, opencode: opencodeLogo }[agent.id]} alt="" />}
+                <span className="rail-title">{agent.name}</span>
               </Link>
-              <NewChat
-                label="New chat with Pi Durable"
-                to={url({ folder: selected, new: "1" })}
-              />
-            </div>
+              <NewChat label={`New chat with ${agent.name}`} to={url({ folder: selected, new: "1", agent: agent.id })} />
+            </div>)}
           </RailSection>
           <RailSection title="Folders">
             {writable ? (
@@ -413,7 +427,7 @@ function WorkspaceRail({
             ) : null}
             {folders.data?.items.map((f, index, all) => (
               <div className="rail-row" key={f.id}>
-                <FolderRailLink folder={f} workspace={project?.name ?? "Project workspace"}
+                <FolderRailLink folder={f} workspace={project?.name ?? "Workspace"}
                   count={count(f.id)} selected={onWorkspace && selected === f.id && !trash}
                   to={url({ folder: f.id })} />
                 {writable ? (
@@ -500,22 +514,6 @@ function WorkspaceRail({
           </p>
         ) : null}
       </RailSection>
-      <nav aria-label="Project navigation" className="workspace-tools">
-        <NavLink className="nav-link" to={`${base}/files`}>
-          <Icon icon={Files} size={13} />
-          <span>Files</span>
-        </NavLink>
-        <NavLink className="nav-link" to={`${base}/members`}>
-          <Icon icon={Users} size={13} />
-          <span>Members</span>
-        </NavLink>
-        {isAdmin ? (
-          <NavLink className="nav-link" to={`${base}/settings`}>
-            <Icon icon={Settings} size={13} />
-            <span>Project settings</span>
-          </NavLink>
-        ) : null}
-      </nav>
       {modal ? (
         <Modal
           title={
@@ -597,7 +595,7 @@ function WorkspaceRail({
               </>
             ) : modal.kind === "references" ? (
               <Field
-                label="Project paths, one per line"
+                label="Workspace paths, one per line"
                 hint="Locations on this container only. Adding a reference does not change access."
               >
                 <textarea

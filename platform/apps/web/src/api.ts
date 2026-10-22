@@ -188,7 +188,7 @@ export type Conversation = {
 export type List<T> = { items: T[] };
 export const date = (value?: string) =>
   value
-    ? new Intl.DateTimeFormat(undefined, {
+    && Number.isFinite(new Date(value).getTime()) ? new Intl.DateTimeFormat(undefined, {
         dateStyle: "medium",
         timeStyle: "short",
       }).format(new Date(value))

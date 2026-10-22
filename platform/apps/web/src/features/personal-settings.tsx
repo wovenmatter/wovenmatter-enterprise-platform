@@ -237,7 +237,7 @@ export function PersonalSettings({
                     <td>
                       <Link
                         className="item-link"
-                        to={`/organizations/${org.id}/projects`}
+                        to={`/organizations/${org.id}/workspaces`}
                       >
                         <Icon icon={Folder} size={16} />
                         <strong>{org.name}</strong>
@@ -254,7 +254,7 @@ export function PersonalSettings({
           </Empty>
         ) : null}
       </Card>
-      <Card title="Accessible projects">
+      <Card title="Accessible workspaces">
         {projects.length ? (
           <div className="table-wrap">
             <table>
@@ -264,7 +264,7 @@ export function PersonalSettings({
                     <td>
                       <Link
                         className="item-link"
-                        to={`/organizations/${project.orgId}/projects/${project.id}`}
+                        to={`/organizations/${project.orgId}/workspaces/${project.id}`}
                       >
                         <Icon icon={Folder} size={16} />
                         <div>
@@ -274,7 +274,7 @@ export function PersonalSettings({
                       </Link>
                     </td>
                     <td>
-                      {project.access === "write" ? "Full access" : "Read-only"}
+                      Member
                     </td>
                   </tr>
                 ))}
@@ -282,8 +282,8 @@ export function PersonalSettings({
             </table>
           </div>
         ) : !profile.loading && !profile.error ? (
-          <Empty title="No project access">
-            Projects you can open will appear here.
+          <Empty title="No workspace access">
+            Workspaces you can open will appear here.
           </Empty>
         ) : null}
       </Card>

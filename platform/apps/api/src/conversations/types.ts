@@ -1,6 +1,6 @@
 import type { Runtime } from "@wovenmatter-enterprise/runtime";
 import type { AppContext, User } from "../context.js";
-export type Harness = "pi";
+export type Harness = import("@wovenmatter-enterprise/runtime").Harness;
 export type Mode = "read" | "write";
 export interface ConversationRow {
   folder_id?: string | null;
@@ -11,6 +11,8 @@ export interface ConversationRow {
   workspace_locked?: number;
   pinned?: number;
   pi_options?: string;
+  native_options?: string;
+  native_storage_mode?: Mode;
   runtime_generation?: number;
   id: string;
   org_id: string;
@@ -123,7 +125,7 @@ export interface ConversationDependencies {
     ): Promise<void>;
     models?(
       orgId: string,
-    ): Promise<Array<{ id: string; thinkingLevels?: string[] }>>;
+    ): Promise<Array<{ id: string; provider?: string; thinkingLevels?: string[] }>>;
   };
   recheckIntervalMs?: number;
   maxConcurrentRuns?: number;
@@ -147,6 +149,7 @@ export function conversationView(c: ConversationRow) {
     mode: c.mode,
     harness: c.harness,
     pi: JSON.parse(c.pi_options ?? "{}"),
+    native: JSON.parse(c.native_options ?? "{}"),
     model: c.model,
     connectionId: c.connection_id,
     createdAt: c.created_at,

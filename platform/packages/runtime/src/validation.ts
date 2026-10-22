@@ -42,8 +42,11 @@ export function validateContainerRequest(input: ContainerRequest): void {
   identity(input.runId);
   identity(input.projectId);
   if (input.assetId !== undefined) identity(input.assetId);
-  if (input.harness !== "pi" || !["read", "write"].includes(input.access))
+  if (!["pi", "codex", "claude_code", "grok_build", "opencode"].includes(input.harness) || !["read", "write"].includes(input.access))
     throw new RuntimeError("invalid_request", "Invalid harness or access mode");
+  if (input.native !== undefined && (!input.native || typeof input.native !== "object" ||
+      Object.entries(input.native).some(([key, value]) => !["thinking", "permission"].includes(key) || typeof value !== "string" || !/^[a-zA-Z0-9_.-]{1,100}$/.test(value))))
+    throw new RuntimeError("invalid_request", "Invalid native configuration");
   if (
     typeof input.prompt !== "string" ||
     input.prompt.length < 1 ||

@@ -175,7 +175,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       ctx.db.all<any>(
         user.role === "owner"
           ? "SELECT p.*,o.name AS organization_name,'write' AS effective_access FROM projects p JOIN organizations o ON o.id=p.org_id WHERE p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC"
-          : "SELECT p.*,o.name AS organization_name,CASE WHEN m.role='admin' OR pm.access='write' THEN 'write' ELSE 'read' END AS effective_access FROM projects p JOIN organizations o ON o.id=p.org_id JOIN organization_memberships m ON m.org_id=p.org_id AND m.user_id=? LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=m.user_id WHERE (m.role='admin' OR pm.user_id IS NOT NULL) AND p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC",
+          : "SELECT p.*,o.name AS organization_name,'write' AS effective_access FROM projects p JOIN organizations o ON o.id=p.org_id JOIN organization_memberships m ON m.org_id=p.org_id AND m.user_id=? LEFT JOIN project_members pm ON pm.project_id=p.id AND pm.user_id=m.user_id WHERE (m.role='admin' OR pm.user_id IS NOT NULL) AND p.status NOT IN ('deleted','deleting','purged') ORDER BY o.name,p.created_at DESC",
         user.role === "owner" ? [] : [user.id],
       ),
     ]);
@@ -359,7 +359,7 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
     const token = stringValue(body.token, "invitation token", 128);
     const password = validatePassword(body.password);
     const invitation = await ctx.db.get<any>(
-      "SELECT i.*,u.name FROM invitations i JOIN users u ON u.id=i.user_id JOIN organization_memberships m ON m.user_id=i.user_id AND m.org_id=i.org_id WHERE i.token_hash=? AND i.accepted_at IS NULL AND i.expires_at>?",
+      "SELECT i.*,u.name FROM invitations i JOIN users u ON u.id=i.user_id WHERE (i.org_id IS NULL OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=i.user_id AND m.org_id=i.org_id)) AND i.token_hash=? AND i.accepted_at IS NULL AND i.expires_at>?",
       [hashToken(token), new Date().toISOString()],
     );
     if (!invitation)
@@ -386,6 +386,10 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
           sql: "UPDATE users SET password_hash=?,name=?,enabled=1 WHERE id=? AND password_hash IS NULL",
           params: [passwordHash, name, invitation.user_id],
           expectChanges: 1,
+        },
+        {
+          sql: "UPDATE invitations SET accepted_at=? WHERE user_id=? AND accepted_at IS NULL",
+          params: [now, invitation.user_id],
         },
         {
           sql: "DELETE FROM sessions WHERE user_id=?",

@@ -1,10 +1,10 @@
 // Rendering/interaction fixture only. Every API and external request is blocked
 // or answered locally; no account authentication or provider is exercised.
-export const org = { id: 'parity-org', name: 'Synthetic parity organization', role: 'admin', libraryAccess: 'write' };
+export const org = { id: 'parity-org', name: 'Synthetic parity organization', createdAt:'2026-10-22T09:00:00Z', role: 'admin', libraryAccess: 'write' };
 export const project = { id: 'parity-project', orgId: org.id, name: 'Parity workspace', status: 'ready', access: 'write' };
 export const folder = { id: 'parity-folder', name: 'Long folder with retained references and supporting records', rootPath: '.WovenMatter/Records', referencePaths: ['Reference inputs'], pinned: true, position: 0 };
 export const base = `/enterprise/organizations/${org.id}`;
-export const workspace = `${base}/projects/${project.id}?folder=all&conversation=parity-chat`;
+export const workspace = `${base}/workspaces/${project.id}?folder=all&conversation=parity-chat`;
 export const markdown = (revision = 1) => `## Complete retained response\n\nRevision ${revision}\n\n\`\`\`js\nconst revision = ${revision};\n\`\`\`\n\n| Item | Revision |\n| --- | ---: |\n| Record | ${revision} |\n\n[Protected source](/enterprise/api/files/parity-file/content)\n\n[Unsafe](javascript:alert(1))\n\n![Remote image](https://example.invalid/tracker.png)\n\n<script>window.unsafeMarkdown = true</script>`;
 export async function parityFixture(page, { theme = 'green', emptyModels = false, baseURL } = {}) {
   const origin = new URL(baseURL).origin;
@@ -51,6 +51,8 @@ export async function parityFixture(page, { theme = 'green', emptyModels = false
     else if (path === '/hosts') result = list([{ id: 'local', name: 'Synthetic host' }]);
     else if (path.endsWith('/projects')) result = list([project]);
     else if (path === `/projects/${project.id}`) result = project;
+    else if (path.endsWith('/agent-settings')) result = { defaultHarness: 'pi', agents: {} };
+    else if (path.includes('/workspace-content')) result = list([]);
     else if (path.endsWith('/folders')) result = list([folder]);
     else if (path.endsWith('/conversations')) result = list([chat()]);
     else if (path === '/conversations/parity-chat') result = chat();

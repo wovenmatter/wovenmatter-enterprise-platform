@@ -54,7 +54,16 @@ export async function registerInferenceRoutes(
     for (const controller of activeRequests) controller.abort();
     await service.closeOAuth();
   });
-  const base = "/enterprise/api/organizations/:orgId/inference";
+  // Resolve workspace aliases to the same isolated organization pool before schema validation.
+  app.addHook("preValidation", async request => {
+    const parameters = request.params as Record<string, string>;
+    if (request.url.startsWith("/enterprise/api/projects/") && parameters?.projectId && request.url.includes("/inference")) {
+      const user = await ctx.requireUser(request);
+      const project = await ctx.requireProject(user, parameters.projectId);
+      parameters.orgId = project.orgId;
+    }
+  });
+  for (const base of ["/enterprise/api/organizations/:orgId/inference", "/enterprise/api/projects/:projectId/inference"]) {
   async function admin(request: FastifyRequest) {
     const user = await ctx.requireUser(request);
     const { orgId } = request.params as OrgParams;
@@ -229,6 +238,8 @@ export async function registerInferenceRoutes(
     await admin(request);
     return service.usage((request.params as OrgParams).orgId);
   });
+
+  }
 
   const gateway = "/enterprise/api/runtime/inference/:projectId";
   // The foundation excludes ONLY this bearer-authenticated prefix from browser CSRF.

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Link,
   Navigate,
@@ -28,8 +28,11 @@ import {
 } from "../components/ui";
 import { AdministrationPage } from "../features/administration";
 import { PersonalSettings } from "../features/personal-settings";
-import { AdministrationNav, OrganizationNav } from "./Navigation";
+import { OrganizationNav } from "./Navigation";
 import { OrganizationShell } from "./OrganizationShell";
+
+const AccountsPage = lazy(() => import("../features/platform-admin").then(m => ({ default: m.AccountsPage })));
+const PlatformSettings = lazy(() => import("../features/platform-admin").then(m => ({ default: m.PlatformSettings })));
 
 export function Shell({
   user,
@@ -77,11 +80,12 @@ export function Shell({
     return () => menuButton.current?.focus();
   }, [mobileOpen]);
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${!orgRoute ? "platform-shell" : ""}`}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      <header className="mobile-header" inert={mobileOpen}>
+      {!orgRoute ? <header className="platform-header"><Link to="/" aria-label="WovenMatter home"><Brand /></Link><nav aria-label="Platform navigation"><Link to="/">{user.role === "owner" ? "Organizations" : "Your organizations"}</Link>{user.role === "owner" ? <><Link to="/accounts">Accounts</Link><Link to="/platform-settings">Platform settings</Link></> : null}<Link to="/personal-settings">Personal settings</Link><button className="text-button" onClick={() => logout().catch(e => setError(e.message))}>Sign out</button></nav></header> : null}
+      {orgRoute ? <header className="mobile-header" inert={mobileOpen}>
         <button
           ref={menuButton}
           className="icon-button"
@@ -91,7 +95,7 @@ export function Shell({
           <Icon icon={Menu} size={18} weight="control" />
         </button>
         <strong className="mobile-title">{mobileTitle}</strong>
-      </header>
+      </header> : null}
       {mobileOpen ? (
         <button
           className="sidebar-backdrop"
@@ -100,12 +104,13 @@ export function Shell({
           onClick={() => setMobileOpen(false)}
         />
       ) : null}
-      <aside
+      {orgRoute ? <aside
         ref={sidebar}
         role={mobileOpen ? "dialog" : undefined}
         aria-modal={mobileOpen || undefined}
         aria-label={mobileOpen ? "Navigation" : undefined}
         className={`sidebar ${mobileOpen ? "open" : ""}`}
+        onClick={event => { if (mobileOpen && event.target instanceof Element && event.target.closest("a[href]")) setMobileOpen(false); }}
         onKeyDown={(event) => {
           if (!mobileOpen) return;
           if (event.key === "Escape") {
@@ -164,19 +169,6 @@ export function Shell({
               />
             }
           />
-          <Route
-            path="*"
-            element={
-              <AdministrationNav
-                user={user}
-                organizations={organizations.data?.items ?? []}
-                onCreate={() => {
-                  setMobileOpen(false);
-                  setCreating(true);
-                }}
-              />
-            }
-          />
         </Routes>
         <div className="sidebar-footer">
           <Link
@@ -203,10 +195,10 @@ export function Shell({
           </button>
           <ErrorNotice message={error} />
         </div>
-      </aside>
+      </aside> : null}
       <main
         id="main"
-        className={`main-content ${/\/organizations\/[^/]+\/projects\/[^/]+/.test(location.pathname) ? "project-workspace" : ""}`}
+        className={`main-content ${/\/organizations\/[^/]+\/workspaces\/[^/]+/.test(location.pathname) ? "project-workspace" : ""}`}
         inert={mobileOpen}
       >
         {organizations.loading ? (
@@ -216,6 +208,8 @@ export function Shell({
         ) : (
           <Suspense fallback={<Loading />}>
             <Routes>
+              <Route path="/accounts" element={user.role === "owner" ? <AccountsPage /> : <Navigate to="/" replace />} />
+              <Route path="/platform-settings" element={user.role === "owner" ? <PlatformSettings /> : <Navigate to="/" replace />} />
               <Route
                 path="/"
                 element={
@@ -236,11 +230,13 @@ export function Shell({
                 path="/projects/:projectId/*"
                 element={<LegacyProjectRedirect />}
               />
+              <Route path="/workspaces/:projectId/*" element={<LegacyProjectRedirect />} />
               <Route
                 path="/organizations/:orgId/*"
                 element={
                   <OrganizationShell
                     user={user}
+                    onUserChange={onUserChange}
                     organizations={organizations.data?.items ?? []}
                     refreshOrganizations={organizations.reload}
                   />
@@ -265,7 +261,7 @@ export function Shell({
               );
               organizations.reload();
               setCreating(false);
-              navigate(`/organizations/${result.id}/projects`);
+              navigate(`/organizations/${result.id}/workspaces`);
             }}
           >
             <Field label="Organization name">
@@ -286,10 +282,10 @@ function LegacyProjectRedirect() {
   );
   if (project.loading) return <Loading />;
   if (!project.data)
-    return <ErrorNotice message={project.error || "Project not found."} />;
+    return <ErrorNotice message={project.error || "Workspace not found."} />;
   const suffix = location.pathname
-    .replace(new RegExp(`^/projects/${projectId}`), "")
+    .replace(new RegExp(`^/(?:projects|workspaces)/${projectId}`), "")
     .replace(/^\/+/, "");
-  const target = `/organizations/${project.data.orgId}/projects/${project.data.id}${suffix ? `/${suffix}` : ""}${location.search}`;
+  const target = `/organizations/${project.data.orgId}/workspaces/${project.data.id}${suffix ? `/${suffix}` : ""}${location.search}`;
   return <Navigate to={target} replace />;
 }

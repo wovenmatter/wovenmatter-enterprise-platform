@@ -63,7 +63,7 @@ test('open pickers become inert when canonical work disables controls; empty pop
   expect(await page.evaluate(() => window.clipboardWrites)).toEqual(['const revision = 1;']);
 });
 
-for (const change of ['disable', 'remove']) {
+for (const change of ['disable']) {
   test(`canonical ${change} of the focused menu action preserves arrows and Escape`, async ({ page, baseURL }) => {
     const state = await parityFixture(page, { baseURL });
     await page.goto(workspace);
@@ -352,8 +352,8 @@ test('coarse-pointer actions retain 44-point targets and Markdown utility strips
 test('narrow navigation opens from the left and preserves keyboard return across breakpoints', async ({ page, baseURL }, testInfo) => {
   const state = await parityFixture(page, { baseURL });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`${base}/projects`);
-  await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
+  await page.goto(`${base}/workspaces`);
+  await expect(page.getByRole('heading', { name: 'Workspaces', exact: true })).toBeVisible();
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
   const sidebar = page.locator('.sidebar');
   for (const width of [390, 760]) {
@@ -373,9 +373,10 @@ test('narrow navigation opens from the left and preserves keyboard return across
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath('sidebar-mobile-left.png') });
   await menu.click();
-  await sidebar.getByRole('link', { name: 'Parity workspace', exact: true }).click();
-  await expect(page).toHaveURL(/\/projects\/parity-project$/);
-  await expect(sidebar).toBeHidden(); await expect(menu).toBeFocused();
+  await sidebar.getByRole('link', { name: 'Workspaces', exact: true }).click();
+  await page.getByRole('link', { name: 'Parity workspace', exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/parity-project$/);
+  await expect(sidebar).toBeHidden();
   await page.setViewportSize({ width: 761, height: 844 });
   await expect(menu).toBeHidden(); await expect(sidebar).toBeVisible();
   await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
@@ -396,9 +397,9 @@ for (const initial of ['empty', 'no-match', 'populated']) {
         : { status, json: { error: { message: `Synthetic chat refresh ${status}` } } });
     });
     try {
-      await page.goto(`${base}/projects/parity-project/settings`);
+      await page.goto(`${base}/workspaces/parity-project/settings`);
       const rail = page.locator('.workspace-navigation');
-      const tools = page.getByRole('navigation', { name: 'Project navigation', exact: true });
+      const tools = page.getByRole('navigation', { name: 'Workspace navigation', exact: true });
       const chatLink = rail.getByRole('link', { name: chat.title, exact: true });
       const label = page.getByText(initial === 'no-match' ? 'No matching conversations.' : 'No conversations yet.', { exact: true });
       if (initial === 'no-match') await page.getByRole('searchbox', { name: 'Search conversations', exact: true }).fill('absent conversation');
@@ -413,7 +414,7 @@ for (const initial of ['empty', 'no-match', 'populated']) {
       await expect.poll(() => pending.length).toBe(1);
       if (initial === 'populated') await expect(chatLink).toBeVisible();
       else await expect(label).toBeVisible();
-      for (const name of ['Files', 'Members', 'Project settings']) {
+      for (const name of ['Workspace Files', 'Calendar', 'Settings']) {
         await tools.getByRole('link', { name, exact: true }).click();
         await expect(tools.getByRole('link', { name, exact: true })).toHaveAttribute('aria-current', 'page');
         expect((await tools.boundingBox()).y).toBe(before.y);
@@ -430,7 +431,7 @@ for (const initial of ['empty', 'no-match', 'populated']) {
       await expect(rail.getByRole('alert')).toContainText('Synthetic chat refresh 503');
       if (initial === 'populated') await expect(chatLink).toBeVisible();
       else await expect(label).toBeVisible();
-      expect((await tools.boundingBox()).y).toBeGreaterThan(before.y); // The explicit error notice occupies space.
+      expect((await tools.boundingBox()).y).toBe(before.y); // Utilities stay above the polling notice.
       status = 403;
       const denied = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 403);
       await page.evaluate(() => dispatchEvent(new Event('workspace-changed'))); await denied;

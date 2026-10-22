@@ -181,17 +181,15 @@ export function createContext(db: Database, config: AppConfig): AppContext {
       if ((await ctx.membership(user, orgId)).libraryAccess !== "write")
         throw new AppError(403, "read_only", "Full library access required");
     },
-    async requireProject(user, projectId, requested = "read") {
+    async requireProject(user, projectId, _requested = "read") {
       const p = await db.get<any>(
         "SELECT * FROM projects WHERE id=? AND status NOT IN ('deleted','deleting','purged')",
         [projectId],
       );
       if (!p) throw new AppError(404, "not_found", "Project not found");
-      // Access is per user: owner and organization admins always have full
-      // access; everyone else has exactly their project membership grant.
-      // The legacy projects.access column is not an authorization input.
+      // Workspace membership is binary. Legacy access columns are retained
+      // only for compatibility; every current member shares full capabilities.
       const membership = await ctx.membership(user, p.org_id);
-      let effective: "read" | "write" = "write";
       if (membership.role !== "admin") {
         const projectMember = await db.get<{ access: "read" | "write" }>(
           "SELECT access FROM project_members WHERE project_id=? AND user_id=?",
@@ -199,15 +197,8 @@ export function createContext(db: Database, config: AppConfig): AppContext {
         );
         if (!projectMember)
           throw new AppError(404, "not_found", "Project not found");
-        effective = projectMember.access === "write" ? "write" : "read";
       }
-      if (requested === "write" && effective !== "write")
-        throw new AppError(
-          403,
-          "read_only",
-          "Your project access is read-only. Full access is required for this action.",
-        );
-      return mapProject(p, effective);
+      return mapProject(p, "write");
     },
     async audit(user, orgId, action, entityId, details = {}) {
       const clean = auditDetails(details);

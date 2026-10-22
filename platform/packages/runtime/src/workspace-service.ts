@@ -292,6 +292,8 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
       request.prompt,
       request.resumeId,
       request.pi,
+      request.native,
+      request.sessionStorageAccess,
       request.gateway,
       request.egressProxyUrl,
       generation,
@@ -555,7 +557,7 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
             run.inputs[input.id] = {
               hash,
               state:
-                code === "steering_rejected" || code === "steering_unavailable"
+                ["steering_rejected", "steering_unavailable", "native_response_invalid", "native_interaction_expired"].includes(code)
                   ? "rejected"
                   : "uncertain",
               code,

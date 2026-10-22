@@ -28,7 +28,7 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
       throw new AppError(
         400,
         "invalid_request",
-        "Projects have no project-wide access setting. Set read or write access for each project member instead.",
+        "Workspace membership grants full access. Add or remove workspace members instead.",
       );
   }
   app.get<{
@@ -43,7 +43,7 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
     // Report the caller's own access, matching requireProject and /me.
     const rows = await ctx.db.all<any>(
       !isAdmin
-        ? "SELECT p.*,CASE WHEN m.access='write' THEN 'write' ELSE 'read' END AS effective_access FROM projects p JOIN project_members m ON p.id=m.project_id WHERE p.org_id=? AND m.user_id=? AND p.status NOT IN ('deleted','deleting','purged') ORDER BY p.created_at DESC"
+        ? "SELECT p.*,'write' AS effective_access FROM projects p JOIN project_members m ON p.id=m.project_id WHERE p.org_id=? AND m.user_id=? AND p.status NOT IN ('deleted','deleting','purged') ORDER BY p.created_at DESC"
         : "SELECT *,'write' AS effective_access FROM projects WHERE org_id=? AND status NOT IN ('deleted','deleting','purged') ORDER BY created_at DESC",
       !isAdmin ? [orgId, user.id] : [orgId],
     );
@@ -264,7 +264,8 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
     const project = await admin(user, request.params.projectId);
     const body = objectBody(request.body);
     const userId = stringValue(body.userId, "user ID", 64);
-    const access = accessValue(body.access);
+    accessValue(body.access); // Validate legacy clients, then normalize their grant.
+    const access = "write" as const;
     if (
       !(await ctx.db.get(
         "SELECT u.id FROM users u JOIN organization_memberships m ON m.user_id=u.id WHERE u.id=? AND m.org_id=? AND u.enabled=1",
@@ -296,7 +297,8 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
     const user = await ctx.requireUser(request);
     const project = await admin(user, request.params.projectId);
     // An update names the new grant explicitly; only additions default to write.
-    const access = accessValue(objectBody(request.body).access ?? null);
+    accessValue(objectBody(request.body).access ?? null);
+    const access = "write" as const;
     const result = await ctx.db.run(
       "UPDATE project_members SET access=? WHERE project_id=? AND user_id=?",
       [access, project.id, request.params.userId],

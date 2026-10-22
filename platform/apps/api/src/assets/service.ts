@@ -390,7 +390,7 @@ export class AssetAgentService {
         }
       const time = new Date().toISOString(),
         revision = a.draft_revision + 1;
-      const authority = `EXISTS(SELECT 1 FROM users u LEFT JOIN organization_memberships m ON m.user_id=u.id AND m.org_id=reports.org_id WHERE u.id=? AND u.enabled=1 AND (u.role='owner' OR m.role='admin' OR (u.id=reports.creator_id AND m.user_id IS NOT NULL)) AND ((reports.project_id IS NULL AND (u.role='owner' OR m.role='admin' OR m.library_access='write')) OR EXISTS(SELECT 1 FROM projects p WHERE p.id=reports.project_id AND p.status NOT IN ('deleted','deleting','purged') AND (u.role='owner' OR m.role='admin' OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=u.id AND pm.access='write')))))`;
+      const authority = `EXISTS(SELECT 1 FROM users u LEFT JOIN organization_memberships m ON m.user_id=u.id AND m.org_id=reports.org_id WHERE u.id=? AND u.enabled=1 AND (reports.project_id IS NOT NULL OR u.role='owner' OR m.role='admin' OR (u.id=reports.creator_id AND m.user_id IS NOT NULL)) AND ((reports.project_id IS NULL AND (u.role='owner' OR m.role='admin' OR m.library_access='write')) OR EXISTS(SELECT 1 FROM projects p WHERE p.id=reports.project_id AND p.status NOT IN ('deleted','deleting','purged') AND (u.role='owner' OR m.role='admin' OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=u.id AND m.user_id IS NOT NULL)))))`;
       try {
         await this.ctx.db.batch([
           ...guards,

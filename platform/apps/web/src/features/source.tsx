@@ -134,7 +134,7 @@ export function SourcePage() {
         className="breadcrumb"
         to={
           projectId
-            ? `${orgBase}/projects/${encodeURIComponent(projectId)}/files`
+            ? `${orgBase}/workspaces/${encodeURIComponent(projectId)}/files`
             : `${orgBase}/library`
         }
       >

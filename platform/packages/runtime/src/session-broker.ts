@@ -28,7 +28,7 @@ export async function sessionBroker(
         path = req.url ?? "";
       if (
         !grant ||
-        req.headers.authorization !== `Bearer ${token}` ||
+        (req.headers.authorization !== `Bearer ${token}` && req.headers["x-api-key"] !== token) ||
         !path.startsWith("/inference/") ||
         path.includes("..") ||
         path.includes("%")

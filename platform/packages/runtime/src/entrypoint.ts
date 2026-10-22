@@ -8,6 +8,7 @@ import {
   type NativeSessionState,
 } from "./native.js";
 import { runPi } from "./sdk.js";
+import { runNative } from "./native-harnesses.js";
 import { SteeringChannel } from "./steering.js";
 import {
   RuntimeError,
@@ -57,6 +58,7 @@ async function turn(request: ContainerRequest) {
   };
   try {
     await verifyMountEvidence(request.mountEvidence!);
+    await writeFile("/session/.wme-workspace.json", JSON.stringify(request.gateway), { mode: 0o600 });
     if (request.assetId)
       await writeFile(
         "/session/.wme-asset.json",
@@ -81,7 +83,7 @@ async function turn(request: ContainerRequest) {
       prepared = true;
     }
     await emit({ type: "started" });
-    await runPi(
+    await (request.harness === "pi" ? runPi : runNative)(
       request,
       emit,
       current.controller.signal,

@@ -276,7 +276,7 @@ async function native(input, answer = "SYNTHETIC_RUNTIME_ACCEPTANCE") {
     events.some((e) => e.type === "input_accepted"),
     "Missing actual input receipt",
   );
-  if (input.pi) {
+  if (input.harness === "pi" && input.pi) {
     const options = events
       .filter((e) => e.type === "native_update")
       .flatMap((e) => e.update.configOptions ?? []);
@@ -293,13 +293,8 @@ async function native(input, answer = "SYNTHETIC_RUNTIME_ACCEPTANCE") {
       "Pi thinking preference was dropped at the container boundary",
     );
   }
-  assert.equal(
-    events
-      .filter((e) => e.type === "assistant_delta")
-      .map((e) => e.delta)
-      .join(""),
-    answer,
-  );
+  const snapshots = events.filter(e => e.type === "native_update" && e.update.sessionUpdate === "agent_message_chunk" && e.update._meta?.wovenAssistantSnapshot);
+  assert.equal(snapshots.length ? snapshots.at(-1).update.content.text : events.filter(e => e.type === "assistant_delta").map(e => e.delta).join(""), answer);
   return events.find((e) => e.type === "native_session")?.sessionId;
 }
 async function workspaceStatus() {
@@ -578,8 +573,9 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     "shared edit",
   );
   const nativeIds = new Map();
-  for (const harness of ["pi"]) {
-    const input = await request(harness),
+  for (const harness of ["pi", "codex", "claude_code", "grok_build", "opencode"]) {
+    const model = ({codex: "gpt-5.4", claude_code: "claude-sonnet-4-6"})[harness] ?? "synthetic-acceptance-model";
+    const input = await request(harness, "write", harness, model),
       nativeId = await native(input);
     assert.ok(nativeId);
     nativeIds.set(harness, nativeId);
@@ -599,7 +595,7 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
       environment.processId,
       "Ordinary turn completion recreated the thread environment",
     );
-    const toolInput = await request(
+    if (harness === "pi") { const toolInput = await request(
       harness,
       "write",
       harness + "-tools",
@@ -607,6 +603,7 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     );
     toolInput.egressProxyUrl = "http://api:4101";
     await native(toolInput, "PROXY_TOOL_VERIFIED");
+    }
     console.log(
       harness +
         " actual installed native turn and durable resume passed against synthetic gateway",
