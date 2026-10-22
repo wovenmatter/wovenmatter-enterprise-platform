@@ -42,7 +42,6 @@ import {
   MenuItem,
   MenuLink,
   MenuSeparator,
-  SearchField,
 } from "../components/controls";
 import { workspaceChanged, useWorkspaceChanges } from "../workspace-events";
 
@@ -244,8 +243,7 @@ function WorkspaceRail({
     conversation = query.get("conversation"),
     trash = query.has("trash"),
     base = `/organizations/${orgId}/workspaces/${projectId}`;
-  const [search, setSearch] = useState(""),
-    [error, setError] = useState("");
+  const [error, setError] = useState("");
   const [modal, setModal] = useState<{
     kind: "create" | "rename" | "references" | "remove";
     folder?: WorkspaceFolder;
@@ -258,8 +256,7 @@ function WorkspaceRail({
   const allChats = chats.data?.items ?? [];
   // Recents covers every project conversation this user is authorized to
   // list, as native Recents is global; the folder selection scopes new chats.
-  const recents = allChats
-    .filter((c) => c.title.toLowerCase().includes(search.trim().toLowerCase()))
+  const recents = [...allChats]
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
   const count = (folderId: string) =>
     allChats.filter((c) => c.folderId === folderId).length;
@@ -383,12 +380,6 @@ function WorkspaceRail({
           { path: "settings", label: "Settings", icon: Settings },
         ].map(item => <NavLink key={item.path} className="nav-link" to={`${base}/${item.path}`}><Icon icon={item.icon} size={13} /><span>{item.label}</span></NavLink>)}
       </nav>
-      <SearchField
-        label="Search conversations"
-        placeholder="Search conversations…"
-        value={search}
-        onChange={setSearch}
-      />
       <div className="rail-row all-workspaces">
         <Link
           className={`nav-link ${onWorkspace && selected === "all" && !trash ? "active" : ""}`}
@@ -402,100 +393,96 @@ function WorkspaceRail({
           to={url({ folder: "all", new: "1" })}
         />
       </div>
-      <RailSection title={project?.name ?? "Workspace"} className="owning-workspace">
-        <div className="rail-children">
-          <RailSection title="Agents">
-            {agents.map(agent => <div className="rail-row" key={agent.id}>
-              <Link className={`nav-link ${query.get("agent") === agent.id ? "active" : ""}`} to={url({ folder: selected, agent: agent.id })} title={agent.detail}>
-                {agent.id === "pi" ? <img className="agent-logo" src={piLogo} alt="" /> : <img className={`agent-logo agent-${agent.id}`} src={{ codex: codexLogo, claude_code: claudeLogo, grok_build: grokLogo, opencode: opencodeLogo }[agent.id]} alt="" />}
-                <span className="rail-title">{agent.name}</span>
-              </Link>
-              <NewChat label={`New chat with ${agent.name}`} to={url({ folder: selected, new: "1", agent: agent.id })} />
-            </div>)}
-          </RailSection>
-          <RailSection title="Folders">
+      <RailSection title="Agents">
+        {agents.map(agent => <div className="rail-row" key={agent.id}>
+          <Link className={`nav-link ${query.get("agent") === agent.id ? "active" : ""}`} to={url({ folder: selected, agent: agent.id })} title={agent.detail}>
+            {agent.id === "pi" ? <img className="agent-logo" src={piLogo} alt="" /> : <img className={`agent-logo agent-${agent.id}`} src={{ codex: codexLogo, claude_code: claudeLogo, grok_build: grokLogo, opencode: opencodeLogo }[agent.id]} alt="" />}
+            <span className="rail-title">{agent.name}</span>
+          </Link>
+          <NewChat label={`New chat with ${agent.name}`} to={url({ folder: selected, new: "1", agent: agent.id })} />
+        </div>)}
+      </RailSection>
+      <RailSection title="Folders">
+        {writable ? (
+          <button
+            type="button"
+            className="nav-link"
+            aria-label="New workspace folder"
+            onClick={() => setModal({ kind: "create" })}
+          >
+            <Icon icon={Plus} size={13} />
+            <span>New folder</span>
+          </button>
+        ) : null}
+        {folders.data?.items.map((f, index, all) => (
+          <div className="rail-row" key={f.id}>
+            <FolderRailLink folder={f} workspace={project?.name ?? "Workspace"}
+              count={count(f.id)} selected={onWorkspace && selected === f.id && !trash}
+              to={url({ folder: f.id })} />
             {writable ? (
-              <button
-                type="button"
-                className="nav-link"
-                aria-label="New workspace folder"
-                onClick={() => setModal({ kind: "create" })}
+              <Menu
+                label={`Actions for folder ${f.name}`}
+                iconSize={12}
+                className="rail-action"
               >
-                <Icon icon={Plus} size={13} />
-                <span>New folder</span>
-              </button>
+                <MenuItem
+                  onSelect={() =>
+                    void mutation(
+                      `/enterprise/api/projects/${projectId}/folders/${f.id}`,
+                      { pinned: !f.pinned },
+                    )
+                  }
+                >
+                  {f.pinned ? "Unpin" : "Pin"}
+                </MenuItem>
+                <MenuItem
+                  disabled={index === 0 || all[index - 1]?.pinned !== f.pinned}
+                  onSelect={() =>
+                    void mutation(
+                      `/enterprise/api/projects/${projectId}/folders/${f.id}`,
+                      { direction: "up" },
+                    )
+                  }
+                >
+                  Move up
+                </MenuItem>
+                <MenuItem
+                  disabled={
+                    index === all.length - 1 ||
+                    all[index + 1]?.pinned !== f.pinned
+                  }
+                  onSelect={() =>
+                    void mutation(
+                      `/enterprise/api/projects/${projectId}/folders/${f.id}`,
+                      { direction: "down" },
+                    )
+                  }
+                >
+                  Move down
+                </MenuItem>
+                <MenuItem onSelect={() => setModal({ kind: "rename", folder: f })}>
+                  Rename
+                </MenuItem>
+                <MenuItem
+                  onSelect={() => setModal({ kind: "references", folder: f })}
+                >
+                  Reference locations…
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem
+                  danger
+                  onSelect={() => setModal({ kind: "remove", folder: f })}
+                >
+                  Remove folder…
+                </MenuItem>
+              </Menu>
             ) : null}
-            {folders.data?.items.map((f, index, all) => (
-              <div className="rail-row" key={f.id}>
-                <FolderRailLink folder={f} workspace={project?.name ?? "Workspace"}
-                  count={count(f.id)} selected={onWorkspace && selected === f.id && !trash}
-                  to={url({ folder: f.id })} />
-                {writable ? (
-                  <Menu
-                    label={`Actions for folder ${f.name}`}
-                    iconSize={12}
-                    className="rail-action"
-                  >
-                    <MenuItem
-                      onSelect={() =>
-                        void mutation(
-                          `/enterprise/api/projects/${projectId}/folders/${f.id}`,
-                          { pinned: !f.pinned },
-                        )
-                      }
-                    >
-                      {f.pinned ? "Unpin" : "Pin"}
-                    </MenuItem>
-                    <MenuItem
-                      disabled={index === 0 || all[index - 1]?.pinned !== f.pinned}
-                      onSelect={() =>
-                        void mutation(
-                          `/enterprise/api/projects/${projectId}/folders/${f.id}`,
-                          { direction: "up" },
-                        )
-                      }
-                    >
-                      Move up
-                    </MenuItem>
-                    <MenuItem
-                      disabled={
-                        index === all.length - 1 ||
-                        all[index + 1]?.pinned !== f.pinned
-                      }
-                      onSelect={() =>
-                        void mutation(
-                          `/enterprise/api/projects/${projectId}/folders/${f.id}`,
-                          { direction: "down" },
-                        )
-                      }
-                    >
-                      Move down
-                    </MenuItem>
-                    <MenuItem onSelect={() => setModal({ kind: "rename", folder: f })}>
-                      Rename
-                    </MenuItem>
-                    <MenuItem
-                      onSelect={() => setModal({ kind: "references", folder: f })}
-                    >
-                      Reference locations…
-                    </MenuItem>
-                    <MenuSeparator />
-                    <MenuItem
-                      danger
-                      onSelect={() => setModal({ kind: "remove", folder: f })}
-                    >
-                      Remove folder…
-                    </MenuItem>
-                  </Menu>
-                ) : null}
-                <NewChat
-                  label={`New chat in ${f.name}`}
-                  to={url({ folder: f.id, new: "1" })}
-                />
-              </div>
-            ))}
-          </RailSection>
-        </div>
+            <NewChat
+              label={`New chat in ${f.name}`}
+              to={url({ folder: f.id, new: "1" })}
+            />
+          </div>
+        ))}
       </RailSection>
       <Link
         className={`nav-link trash-link ${trash ? "active" : ""}`}
@@ -510,7 +497,7 @@ function WorkspaceRail({
         {/* Polling retains authorized empty results too, so the rail does not jump. */}
         {!recents.length && chats.data ? (
           <p className="rail-empty">
-            {search.trim() ? "No matching conversations." : "No conversations yet."}
+            No conversations yet.
           </p>
         ) : null}
       </RailSection>

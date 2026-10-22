@@ -979,8 +979,9 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
   await expect(closeNav).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(
-    page.getByRole("button", {
-      name: "Sign out",
+    page.locator(".sidebar").getByRole("link", {
+      name: "Settings",
+      exact: true,
     }),
   ).toBeFocused();
   await page.keyboard.press("Tab");
@@ -1188,7 +1189,7 @@ test("organization settings hub, nested pages, admin reset action and personal r
     ).toBeVisible();
     await adminPage
       .getByRole("link", {
-        name: "Organization Admin",
+        name: "Personal settings",
       })
       .click();
     await expect(
@@ -2548,7 +2549,10 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
   const geometry = await page.locator(".conversation-main").boundingBox();
   await expect(page.getByRole("complementary", { name: "Workspace content" })).not.toBeVisible();
   expect(geometry.width).toBeGreaterThan(500);
-  expect(geometry.height).toBeGreaterThan(730);
+  const header = await page.locator(".platform-header").boundingBox();
+  expect(geometry.y).toBeGreaterThanOrEqual(header.y + header.height);
+  expect(geometry.height).toBeGreaterThan(500);
+  expect(geometry.y + geometry.height).toBeLessThanOrEqual(769);
   expect(
     await page.evaluate(
       () =>
@@ -2803,4 +2807,39 @@ test("expanded Markdown survives a real local SSE background comment and canonic
   await expect(table).toBeVisible();
   await expect(table.getByRole("cell", { name: "Retained table", exact: true })).toBeVisible();
   await page.keyboard.press("Escape"); await expect(table).toHaveCount(0);
+});
+
+test("appearance belongs to the user's Personal settings across workspaces without changing teammates", async ({ page, browser }) => {
+  const f = await ensureFixture(page);
+  const teammate = await browser.newContext({ storageState: `${evidence}/org-admin-auth.json` });
+  try {
+    const original = (await (await page.request.get('/enterprise/api/me')).json()).user;
+    const teammateBefore = (await (await teammate.request.get(`${f.origin}/enterprise/api/me`)).json()).user;
+    const settingsPath = `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}/settings`;
+    await page.goto(settingsPath);
+    await expect(page.getByLabel('Default agent', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Theme', { exact: true })).toHaveCount(0);
+    await page.locator('.platform-header').getByRole('link', { name: 'Personal settings', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toHaveCount(1);
+    const mutations = [];
+    page.on('request', request => { if (['POST', 'PATCH', 'DELETE'].includes(request.method())) mutations.push(new URL(request.url()).pathname); });
+    await page.getByRole('radio', { name: 'Dark theme', exact: true }).check();
+    await page.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await expect(page.getByText('Profile updated.', { exact: true })).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.getByRole('link', { name: 'Back to organization', exact: true }).click();
+    await expect(page).toHaveURL(new URL(settingsPath, f.origin).href);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.goto(`/enterprise/organizations/${f.orgId}/workspaces`);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    expect(mutations).toEqual(['/enterprise/api/me']);
+    const teammateAfter = (await (await teammate.request.get(`${f.origin}/enterprise/api/me`)).json()).user;
+    expect(teammateAfter.theme).toBe(teammateBefore.theme);
+    await page.locator('.platform-header').getByRole('link', { name: 'Personal settings', exact: true }).click();
+    await page.getByRole('radio', { name: `${original.theme[0].toUpperCase()}${original.theme.slice(1)} theme`, exact: true }).check();
+    await page.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await expect(page.getByText('Profile updated.', { exact: true })).toBeVisible();
+  } finally { await teammate.close(); }
 });

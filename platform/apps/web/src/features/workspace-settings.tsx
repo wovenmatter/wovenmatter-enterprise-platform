@@ -1,18 +1,17 @@
 import { Link } from "react-router-dom";
 import { useState, type ReactNode } from "react";
 import { agents } from "../agents";
-import { send, useResource, type Project, type User } from "../api";
+import { send, useResource, type Project } from "../api";
 import { useWorkspace } from "../workspace";
 import { DisclosureChevron } from "../components/controls";
 import { AsyncForm, Card, ErrorNotice, Field, Loading, PageHeader, Success } from "../components/ui";
 type AgentDefaults = { model?: string; thinking?: string; permission?: string; codeMode?: string; subagentConcurrency?: number };
 type Settings = { defaultHarness: string; agents: Record<string, AgentDefaults> };
 export function WorkspaceSettings({ project, children }: { project: Project; children: ReactNode }) {
-  const { user, onUserChange, isAdmin, orgBase } = useWorkspace();
+  const { isAdmin, orgBase } = useWorkspace();
   const settings = useResource<Settings>(`/enterprise/api/projects/${project.id}/agent-settings`);
   const [saved, setSaved] = useState("");
   return <section className="desktop-content-page settings-page"><PageHeader title="Settings" description={project.name} /><ErrorNotice message={settings.error} onRetry={settings.reload} />{saved ? <Success>{saved}</Success> : null}
-    <Card title="Appearance"><AsyncForm submitLabel="Save appearance" onSubmit={async form => { const theme = String(form.get("theme")); const updated = await send<User>("/enterprise/api/me", { theme }, "PATCH"); onUserChange(updated); setSaved("Appearance saved."); }}><Field label="Theme"><select name="theme" defaultValue={user.theme}><option value="green">Green</option><option value="cognac">Cognac</option><option value="dark">Dark</option></select></Field></AsyncForm></Card>
     {settings.loading && !settings.data ? <Loading /> : settings.data ? <Card title="Agents" detail="Defaults for new conversations in this workspace.">
       <AsyncForm className={isAdmin ? undefined : "read-only-form"} submitLabel="Save agent defaults" onSubmit={async form => { const defaults = Object.fromEntries(agents.map(agent => [agent.id, { model: form.get(`${agent.id}.model`) || undefined, thinking: form.get(`${agent.id}.thinking`) || undefined, permission: form.get(`${agent.id}.permission`) || undefined, ...(agent.id === "pi" ? { codeMode: form.get("pi.codeMode"), subagentConcurrency: Number(form.get("pi.subagentConcurrency")) } : {}) }])); await send(`/enterprise/api/projects/${project.id}/agent-settings`, { defaultHarness: form.get("defaultHarness"), agents: defaults }, "PATCH"); settings.reload(); setSaved("Agent defaults saved."); }}>
         <fieldset className="agent-settings-fields" disabled={!isAdmin}><Field label="Default agent"><select name="defaultHarness" defaultValue={settings.data.defaultHarness}>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select></Field>

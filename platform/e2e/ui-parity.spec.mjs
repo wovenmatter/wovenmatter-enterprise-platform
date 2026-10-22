@@ -359,7 +359,7 @@ test('narrow navigation opens from the left and preserves keyboard return across
   for (const width of [390, 760]) {
     await page.setViewportSize({ width, height: 844 });
     const box = await menu.boundingBox();
-    const title = await page.locator('.mobile-title').boundingBox();
+    const title = await page.locator('.platform-header .brand').boundingBox();
     expect(box.x).toBeLessThan(16);
     expect(box.x + box.width).toBeLessThan(title.x);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -383,7 +383,7 @@ test('narrow navigation opens from the left and preserves keyboard return across
   expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
 });
 
-for (const initial of ['empty', 'no-match', 'populated']) {
+for (const initial of ['empty', 'populated']) {
   test(`sidebar ${initial} state stays still during polling and selection, then respects authorization loss`, async ({ page, baseURL }, testInfo) => {
     await page.clock.install();
     const state = await parityFixture(page, { baseURL });
@@ -401,8 +401,7 @@ for (const initial of ['empty', 'no-match', 'populated']) {
       const rail = page.locator('.workspace-navigation');
       const tools = page.getByRole('navigation', { name: 'Workspace navigation', exact: true });
       const chatLink = rail.getByRole('link', { name: chat.title, exact: true });
-      const label = page.getByText(initial === 'no-match' ? 'No matching conversations.' : 'No conversations yet.', { exact: true });
-      if (initial === 'no-match') await page.getByRole('searchbox', { name: 'Search conversations', exact: true }).fill('absent conversation');
+      const label = page.getByText('No conversations yet.', { exact: true });
       if (initial === 'populated') await expect(chatLink).toBeVisible();
       else await expect(label).toBeVisible();
       const agents = rail.locator('details').filter({ has: page.locator(':scope > summary', { hasText: /^Agents$/ }) });
@@ -441,7 +440,7 @@ for (const initial of ['empty', 'no-match', 'populated']) {
       const restored = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 200);
       await page.evaluate(() => dispatchEvent(new Event('workspace-changed'))); await restored;
       await expect(rail.getByRole('alert')).toHaveCount(0);
-      await expect(page.getByText(initial === 'no-match' ? 'No matching conversations.' : 'No conversations yet.', { exact: true })).toBeVisible();
+      await expect(page.getByText('No conversations yet.', { exact: true })).toBeVisible();
       expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
     } finally { hold = false; pending.splice(0).forEach(resolve => resolve()); }
   });

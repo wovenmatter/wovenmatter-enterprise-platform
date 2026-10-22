@@ -953,19 +953,24 @@ input[type="file"] {
 
 /* ---------- Shell and rails ---------- */
 .app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  background: var(--workspace);
+}
+.shell-body {
   display: grid;
   grid-template-columns: var(--rail-width) minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
   gap: var(--shell-inset);
-  height: 100dvh;
   padding: var(--shell-inset);
-  background: var(--workspace);
 }
 /* DashboardRailBackground: workspace + theme fill, rim, inset light, edge. */
 .sidebar {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  height: calc(100dvh - 2 * var(--shell-inset));
   overflow: hidden;
   border-radius: var(--surface-radius);
   background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace);
@@ -1270,7 +1275,7 @@ details:not([open]) > summary .disclosure-chevron {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.mobile-header,
+.mobile-menu,
 .mobile-close,
 .sidebar-backdrop {
   display: none;
@@ -2985,7 +2990,7 @@ details[open] > summary .work-chevron {
 .source-page {
   display: flex;
   flex-direction: column;
-  height: calc(100dvh - 72px);
+  height: 100%;
   min-height: 0;
 }
 .source-page > .breadcrumb,
@@ -3087,7 +3092,7 @@ details[open] > summary .work-chevron {
   color: var(--muted);
   font-size: 12px;
 }
-.auth-panel > a {
+.auth-panel > a:not(.brand) {
   display: inline-block;
   margin-top: 16px;
   font-size: 12.5px;
@@ -3115,27 +3120,14 @@ details[open] > summary .work-chevron {
 }
 /* Enterprise drawer breakpoint (A02): 760, keeping the 855 rail. */
 @media (max-width: 760px) {
-  .app-shell {
-    display: block;
-    height: auto;
-    min-height: 100dvh;
-    padding: 52px 0 0;
+  .shell-body {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0;
   }
-  .mobile-header {
-    position: fixed;
-    inset: 0 0 auto;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 12px;
-    height: 52px;
-    padding: 0 16px 0 6px;
-    border-bottom: 1px solid var(--line);
-    background: var(--workspace);
-  }
-  .mobile-title {
-    flex: 1;
+  .mobile-menu {
+    display: inline-grid;
+    flex: none;
+    margin-left: -10px;
   }
   .sidebar {
     position: fixed;
@@ -3177,14 +3169,7 @@ details[open] > summary .work-chevron {
     margin-top: -8px;
   }
   .main-content {
-    overflow: visible;
     padding: 20px 16px;
-  }
-  .main-content.project-workspace {
-    height: calc(100dvh - 52px);
-  }
-  .source-page {
-    height: calc(100dvh - 92px);
   }
   .page-header {
     flex-direction: column;
@@ -3358,9 +3343,12 @@ details[open] > summary .work-chevron {
 }
 
 /* Desktop workspace structure, ported from WovenMatter 04fe0509. */
-.platform-shell { display: flex; flex-direction: column; padding: 0; gap: 0; }
-.platform-header { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 20px 32px; gap: 24px; border-bottom: 1px solid var(--line); }
+.platform-shell .shell-body { display: flex; padding: 0; gap: 0; }
+.platform-header { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 20px 32px; gap: 24px; border-bottom: 1px solid var(--line); }
+.platform-brand-row { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.platform-header > .notice { flex-basis: 100%; margin: 0; }
 .platform-header nav { display: flex; align-items: center; flex-wrap: wrap; gap: 24px; }
+.platform-header nav a { overflow-wrap: anywhere; }
 .platform-header nav a { font-size: 12px; }
 .platform-header nav a:hover { color: var(--accent); }
 .platform-shell .main-content { flex: 1; padding: 40px 32px; }
@@ -3472,7 +3460,6 @@ html[data-theme="dark"] .workspace-detail-rail .segmented > .active {
 @media (max-width: 1100px) { .workspace-detail-rail { display: none; } }
 @media (max-width: 1000px) { .calendar-layout { grid-template-columns: 1fr; } .calendar-agenda { max-width: 600px; } .document-layout { grid-template-columns: 160px minmax(0, 1fr); gap: 12px; } .agent-settings-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .platform-shell { display: flex; padding: 0; height: 100dvh; }
   .platform-header { align-items: flex-start; flex-direction: column; padding: 16px; gap: 14px; }
   .platform-header nav { gap: 12px 20px; }
   .platform-shell .main-content { overflow: auto; padding: 24px 16px; }
