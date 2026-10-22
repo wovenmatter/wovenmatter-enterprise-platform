@@ -9,7 +9,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {
-    "node": ">=24.22.1 <25"
+    "node": ">=26.12.1 <27"
   },
   "dependencies": {
     "@agentclientprotocol/claude-agent-acp": "0.81.2",

@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with: { node-version: "24.22.1", cache: npm }
+        with: { node-version: "26.12.1", cache: npm }
       - run: npm install --global npm@12.2.0
       - run: npm ci
       - run: npm run check
@@ -34,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with: { node-version: "24.22.1", cache: npm }
+        with: { node-version: "26.12.1", cache: npm }
       - run: npm install --global npm@12.2.0
       - run: npm ci
       - name: Native protocols and kernel isolation
