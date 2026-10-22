@@ -9,7 +9,7 @@ invent scheduling, provider, credential or UI scope that was not proven
 upstream. When Enterprise platform constraints require a different mechanism,
 document that adaptation in the matrix and cover it with deterministic tests.
 
-Use Node 24.22.1, npm 12.2.0 and the root npm lockfile.
+Use Node 26.12.1, npm 12.2.0 and the root npm lockfile.
 Run commands from the repository root:
 
 ```sh

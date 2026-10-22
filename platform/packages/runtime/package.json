@@ -9,7 +9,7 @@
     "check": "tsc --noEmit -p tsconfig.json"
   },
   "engines": {
-    "node": ">=24.22.1 <25"
+    "node": ">=26.12.1 <27"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.284",

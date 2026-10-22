@@ -123,7 +123,7 @@ package-lock.json	@types/estree-jsx	1.0.5	MIT	false	false	https://registry.npmjs
 package-lock.json	@types/hast	3.0.5	MIT	false	false	https://registry.npmjs.org/@types/hast/-/hast-3.0.5.tgz
 package-lock.json	@types/mdast	4.0.4	MIT	false	false	https://registry.npmjs.org/@types/mdast/-/mdast-4.0.4.tgz
 package-lock.json	@types/ms	2.1.0	MIT	false	false	https://registry.npmjs.org/@types/ms/-/ms-2.1.0.tgz
-package-lock.json	@types/node	24.19.0	MIT	false	false	https://registry.npmjs.org/@types/node/-/node-24.19.0.tgz
+package-lock.json	@types/node	26.6.5	MIT	false	false	https://registry.npmjs.org/@types/node/-/node-26.6.5.tgz
 package-lock.json	@types/nodemailer	8.0.2	MIT	true	false	https://registry.npmjs.org/@types/nodemailer/-/nodemailer-8.0.2.tgz
 package-lock.json	@types/react	19.1.0	MIT	false	false	https://registry.npmjs.org/@types/react/-/react-19.1.0.tgz
 package-lock.json	@types/react-dom	19.1.0	MIT	true	false	https://registry.npmjs.org/@types/react-dom/-/react-dom-19.1.0.tgz
@@ -451,7 +451,7 @@ package-lock.json	type-is	2.1.0	MIT	false	false	https://registry.npmjs.org/type-
 package-lock.json	typebox	1.3.27	MIT	false	false	https://registry.npmjs.org/typebox/-/typebox-1.3.27.tgz
 package-lock.json	typescript	7.0.2	Apache-2.0	true	false	https://registry.npmjs.org/typescript/-/typescript-7.0.2.tgz
 package-lock.json	undici	8.10.2	MIT	false	false	https://registry.npmjs.org/undici/-/undici-8.10.2.tgz
-package-lock.json	undici-types	7.24.6	MIT	false	false	https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz
+package-lock.json	undici-types	8.9.0	MIT	false	false	https://registry.npmjs.org/undici-types/-/undici-types-8.9.0.tgz
 package-lock.json	unified	11.0.5	MIT	false	false	https://registry.npmjs.org/unified/-/unified-11.0.5.tgz
 package-lock.json	unist-util-is	6.0.1	MIT	false	false	https://registry.npmjs.org/unist-util-is/-/unist-util-is-6.0.1.tgz
 package-lock.json	unist-util-position	5.0.0	MIT	false	false	https://registry.npmjs.org/unist-util-position/-/unist-util-position-5.0.0.tgz

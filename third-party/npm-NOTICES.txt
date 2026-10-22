@@ -6190,7 +6190,7 @@ SOFTWARE.
     SOFTWARE
 
 
-===== @types/node@24.19.0 / LICENSE =====
+===== @types/node@26.6.5 / LICENSE =====
     MIT License
 
     Copyright (c) Microsoft Corporation.
@@ -17043,7 +17043,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-===== undici-types@7.24.6 / LICENSE =====
+===== undici-types@8.9.0 / LICENSE =====
 MIT License
 
 Copyright (c) Matteo Collina and Undici contributors
