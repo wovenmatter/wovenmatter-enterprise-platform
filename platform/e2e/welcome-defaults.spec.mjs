@@ -16,7 +16,7 @@ const sender = page => page.getByRole('button', { name: 'Send message', exact: t
 const draft = page => page.getByLabel('Message your agent');
 const configured = { model: 'workspace-model', thinking: 'high', codeMode: 'only', subagentConcurrency: 4 };
 
-async function setup(page, baseURL, { settings = { defaultHarness: 'pi', agents: { pi: configured } }, personal = 'personal-model', models = catalog, holdModels = false } = {}) {
+async function setup(page, baseURL, { settings = { defaultHarness: 'pi', agents: { pi: configured } }, personal = 'personal-model', models = catalog, holdModels = false, agent } = {}) {
   const state = await parityFixture(page, { baseURL });
   Object.assign(state, { chat: null, creates: [], sends: [], errors: [] });
   page.on('pageerror', error => state.errors.push(error.message));
@@ -41,11 +41,13 @@ async function setup(page, baseURL, { settings = { defaultHarness: 'pi', agents:
       if (request.method() === 'GET') return route.fulfill({ json: { items: state.sends.map((message, i) => ({ ...message, id: `message-${i}`, role: 'user', authorId: 'parity-owner', createdAt: '2026-10-23T12:00:00Z' })), hasMore: false } });
       state.sends.push(request.postDataJSON()); state.chat.workspaceLocked = true; return route.fulfill({ json: { ok: true } });
     }
+    if (path.endsWith('/native')) return route.fulfill({ json: { configured: {}, settings: null, interactions: [] } });
     if (path.endsWith('/runs')) return route.fulfill({ json: { items: [] } });
     if (path.endsWith('/activities')) return route.fulfill({ json: { items: [], cursor: '0', hasMore: false } });
     expect(request.method()).toBe('GET'); return route.fulfill({ json: state.chat });
   });
-  await page.goto(root); await expect(page).toHaveURL(new URL(root, baseURL).href); await expect(page).toHaveTitle(/WovenMatter/);
+  const entry = agent ? `${root}&agent=${agent}` : root;
+  await page.goto(entry); await expect(page).toHaveURL(new URL(entry, baseURL).href); await expect(page).toHaveTitle(/WovenMatter/);
   await expect(draft(page)).toBeVisible(); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   return state;
 }
@@ -59,8 +61,8 @@ async function send(page, state) {
 test('welcome resolves workspace defaults and preserves complete Pi configuration on first send', async ({ page, baseURL }, info) => {
   const state = await setup(page, baseURL);
   await expect(model(page)).toContainText('Workspace model'); await expect(thinking(page)).toContainText('High');
-  const agent = page.getByRole('button', { name: /^Agent / });
-  await expect(agent.locator('img.agent-logo')).toHaveCount(1); await expect(agent.locator('.lucide-cpu')).toHaveCount(0); await expect(model(page).locator('.lucide-cpu')).toHaveCount(1);
+  await expect(page.locator('.composer-area').getByRole('button', { name: /^Agent / })).toHaveCount(0);
+  await expect(model(page).locator('.lucide-cpu')).toHaveCount(1); await expect(thinking(page).locator('.lucide-brain')).toHaveCount(1);
   await thinking(page).click(); await expect(page.getByRole('option')).toHaveText(['Model default (Low)', 'Off', 'Low', 'High']); await page.keyboard.press('Escape');
   await draft(page).fill('Use the real welcome defaults');
   await page.screenshot({ path: info.outputPath('resolved-welcome-defaults.png') }); await send(page, state);
@@ -79,12 +81,12 @@ for (const example of [
 
 test('model and thinking choices survive a folder change and explicitly override configured thinking', async ({ page, baseURL }) => {
   const state = await setup(page, baseURL); await draft(page).fill('Retain all welcome choices');
-  await chooseModel(page, 'First catalog model'); await expect(thinking(page)).toContainText('Model default (High)');
+  await chooseModel(page, 'First catalog model'); await expect(thinking(page)).toContainText('High');
   await thinking(page).click(); await expect(page.getByRole('option')).toHaveText(['Model default (High)', 'Off', 'High']); await page.getByRole('option', { name: 'Off', exact: true }).click();
   await page.getByRole('button', { name: /^Conversation folder/ }).click(); await page.getByRole('option', { name: folder.name, exact: true }).click();
   await expect(draft(page)).toHaveValue('Retain all welcome choices'); await expect(model(page)).toContainText('First catalog model'); await expect(thinking(page)).toContainText('Off');
   await chooseThinking(page, 'Model default (High)'); await send(page, state);
-  expect(state.creates[0]).toMatchObject({ model: 'first-model', folderId: folder.id, pi: { codeMode: 'only', subagentConcurrency: 4 } }); expect(state.creates[0].pi).not.toHaveProperty('thinking'); clean(state);
+  expect(state.creates[0]).toMatchObject({ harness: 'pi', model: 'first-model', folderId: folder.id, pi: { codeMode: 'only', subagentConcurrency: 4 } }); expect(state.creates[0].pi).not.toHaveProperty('thinking'); clean(state);
 });
 
 test('stale workspace model remains unavailable until an explicit selection', async ({ page, baseURL }) => {
@@ -102,19 +104,37 @@ test('stale thinking is explicit and can be cleared without losing other Pi defa
   await send(page, state); expect(state.creates[0].pi).toEqual({ thinking: 'low', codeMode: 'only', subagentConcurrency: 4 }); clean(state);
 });
 
-test('catalog loading blocks send and native welcome defers unreported thinking choices', async ({ page, baseURL }) => {
-  const state = await setup(page, baseURL, { holdModels: true, settings: { defaultHarness: 'pi', agents: { pi: configured, claude_code: { model: 'personal-model', thinking: 'high', permission: 'ask' } } } });
-  await draft(page).fill('Wait for authoritative catalog'); await expect(model(page)).toBeDisabled(); await expect(sender(page)).toBeDisabled(); expect(state.creates).toEqual([]);
-  state.releaseModels(); await expect(model(page)).toBeEnabled(); await expect(sender(page)).toBeEnabled();
-  await page.getByRole('button', { name: /^Agent / }).click(); await page.getByRole('option', { name: /^Claude Code / }).click();
-  await expect(model(page)).toContainText('Personal model'); await expect(thinking(page)).toHaveCount(0); await expect(page.getByRole('button', { name: /^Native permissions/ })).toHaveCount(0);
-  await expect(draft(page)).toHaveValue('Wait for authoritative catalog');
-  await page.getByRole('button', { name: /^Agent / }).click(); await page.getByRole('option', { name: /^Pi Durable / }).click();
-  await expect(model(page)).toContainText('Workspace model'); await expect(thinking(page)).toContainText('High'); clean(state);
+test('catalog loading keeps Thinking discoverable and blocks send until authoritative choices arrive', async ({ page, baseURL }) => {
+  const state = await setup(page, baseURL, { holdModels: true });
+  await draft(page).fill('Wait for authoritative catalog'); await expect(model(page)).toBeDisabled(); await expect(thinking(page)).toBeVisible(); await expect(thinking(page)).toBeDisabled(); await expect(sender(page)).toBeDisabled(); expect(state.creates).toEqual([]);
+  state.releaseModels(); await expect(model(page)).toBeEnabled(); await expect(thinking(page)).toBeEnabled(); await expect(sender(page)).toBeEnabled(); clean(state);
 });
 
-test('an empty catalog cannot create a doomed native first message', async ({ page, baseURL }) => {
-  const state = await setup(page, baseURL, { models: [], settings: { defaultHarness: 'codex', agents: {} } });
-  await draft(page).fill('Keep until a model exists'); await expect(model(page)).toBeEnabled(); await expect(sender(page)).toBeDisabled();
-  await model(page).click(); await expect(page.getByText('No models are available. An administrator can connect a provider in Connections.', { exact: true })).toBeVisible(); expect(state.creates).toEqual([]); clean(state);
+test('creation-entry harness survives folder and model changes without inventing native thinking', async ({ page, baseURL }) => {
+  const state = await setup(page, baseURL, { agent: 'claude_code', settings: { defaultHarness: 'pi', agents: { claude_code: { model: 'workspace-model', thinking: 'high', permission: 'ask' } } } });
+  await expect(page.locator('.composer-area').getByRole('button', { name: /^Agent / })).toHaveCount(0);
+  await expect(thinking(page)).toHaveText('Thinking levelThinking'); await expect(thinking(page)).toBeDisabled();
+  await expect(page.getByRole('button', { name: /^Native permissions/ })).toHaveCount(0);
+  await draft(page).fill('Keep the selected native harness');
+  await chooseModel(page, 'Personal model');
+  await page.getByRole('button', { name: /^Conversation folder/ }).click(); await page.getByRole('option', { name: folder.name, exact: true }).click();
+  await expect(draft(page)).toHaveValue('Keep the selected native harness'); await expect(thinking(page)).toBeDisabled();
+  await send(page, state);
+  expect(state.creates[0]).toMatchObject({ harness: 'claude_code', model: 'personal-model', folderId: folder.id });
+  expect(state.creates[0]).not.toHaveProperty('pi'); expect(state.creates[0]).not.toHaveProperty('native'); clean(state);
+});
+
+test('Thinking stays visible and disabled without authorized models or supported Pi choices', async ({ page, baseURL }, info) => {
+  const models = [];
+  const state = await setup(page, baseURL, { models, settings: { defaultHarness: 'pi', agents: {} } });
+  await draft(page).fill('Keep until a model exists'); await expect(model(page)).toBeDisabled(); await expect(model(page)).toContainText('Model'); await expect(sender(page)).toBeDisabled();
+  await expect(thinking(page)).toBeVisible(); await expect(thinking(page)).toBeDisabled(); await expect(thinking(page)).toContainText('Thinking');
+  await thinking(page).focus(); await page.keyboard.press('Enter'); await expect(page.getByRole('listbox')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('empty-catalog-thinking.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 855, height: 769 });
+  await expect(thinking(page)).toBeVisible(); await expect(thinking(page)).toBeDisabled();
+  await page.screenshot({ path: info.outputPath('empty-catalog-thinking-855.png'), animations: 'disabled' });
+  models.push(catalog[1]); await page.reload(); await expect(model(page)).toContainText('Personal model');
+  await expect(thinking(page)).toBeVisible(); await expect(thinking(page)).toBeDisabled();
+  expect(state.creates).toEqual([]); clean(state);
 });

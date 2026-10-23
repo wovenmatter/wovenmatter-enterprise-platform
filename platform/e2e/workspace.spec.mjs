@@ -2763,18 +2763,32 @@ test("composer thinking choices follow each model and clear the previous overrid
   await expect(thinking).toBeFocused();
   await choose(page, "Thinking level", "high");
   await expect(thinking).toHaveAttribute("data-value", "high");
-  await choose(page, "Conversation model", "mandatory-thinking-fixture");
-  await expect(thinking).toHaveAttribute("data-value", "");
-  await thinking.click();
-  await expect(page.getByRole("option")).toHaveText([
-    "Model default",
-    "Low",
-    "High",
-    "Max",
-  ]);
-  await page.keyboard.press("Escape");
+  // A confirmed PATCH must drive the controls even while canonical refresh waits.
+  let releaseRefresh, heldReads = 0;
+  const pendingRefresh = new Promise(resolve => { releaseRefresh = resolve; });
+  const detailPath = `**/enterprise/api/conversations/${c.id}`;
+  const holdRefresh = async route => {
+    if (route.request().method() === "GET") { heldReads++; await pendingRefresh; }
+    return route.continue();
+  };
+  await page.route(detailPath, holdRefresh);
+  try {
+    await choose(page, "Conversation model", "mandatory-thinking-fixture");
+    await expect.poll(() => heldReads).toBeGreaterThan(0);
+    await expect(model).toHaveAttribute("data-value", "mandatory-thinking-fixture");
+    await expect(thinking).toHaveAttribute("data-value", "");
+    await thinking.click();
+    await expect(page.getByRole("option")).toHaveText(["Model default", "Low", "High", "Max"]);
+    await page.keyboard.press("Escape");
+  } finally {
+    releaseRefresh();
+  }
   await choose(page, "Thinking level", "max");
   await expect(thinking).toHaveAttribute("data-value", "max");
+  expect((await (await page.request.get(`/enterprise/api/conversations/${c.id}`)).json()).pi.thinking).toBe("max");
+  await choose(page, "Thinking level", "");
+  await expect(thinking).toHaveAttribute("data-value", "");
+  expect((await (await page.request.get(`/enterprise/api/conversations/${c.id}`)).json()).pi.thinking).toBeUndefined();
   await choose(page, "Conversation model", "no-thinking-fixture");
   await expect(thinking).toHaveAttribute("data-value", "");
   await expect(thinking).toBeDisabled();

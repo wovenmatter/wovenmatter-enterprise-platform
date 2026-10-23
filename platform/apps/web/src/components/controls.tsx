@@ -536,6 +536,12 @@ export function useComposerLayout() {
  * WovenMatter composer selector: a full-height trigger with the current
  * choice, and a titled popout listing full labels with a checked selection.
  */
+// Desktop session menus stay visible when unavailable. A sole different choice
+// is actionable; a sole selected choice (or only unavailable choices) is not.
+export function sessionMenuUnavailable(options: PickerOption[], selection: string) {
+  return !options.some(option => !option.disabled && option.value !== selection);
+}
+
 export function Picker({
   label,
   heading,
@@ -544,6 +550,7 @@ export function Picker({
   value,
   options,
   placeholder,
+  valueLabel,
   disabled,
   width = 288,
   emptyMessage,
@@ -560,6 +567,7 @@ export function Picker({
   value: string;
   options: PickerOption[];
   placeholder: string;
+  valueLabel?: string;
   disabled?: boolean;
   width?: number;
   emptyMessage?: string;
@@ -572,6 +580,7 @@ export function Picker({
   }, [disabled, popup.open, close]);
   const id = useId();
   const current = options.find((option) => option.value === value);
+  const currentLabel = valueLabel ?? current?.label ?? placeholder;
   function choose(option?: PickerOption) {
     if (disabled || !option || option.disabled) return;
     popup.close(true);
@@ -588,7 +597,7 @@ export function Picker({
         aria-expanded={popup.open}
         aria-controls={popup.open ? `${id}-list` : undefined}
         aria-labelledby={`${id}-label ${id}-value`}
-        title={title ?? (current ? `${heading}: ${current.label}` : heading)}
+        title={title ?? (current ? `${heading}: ${currentLabel}` : heading)}
         // aria-disabled keeps keyboard focus when a pending save disables it.
         aria-disabled={disabled || undefined}
         onClick={() => {
@@ -605,7 +614,7 @@ export function Picker({
         </span>
         {leadingIcon ? <span className="composer-picker-icon" aria-hidden="true">{leadingIcon}</span> : <Icon icon={icon} size={16} weight="control" />}
         <span className="composer-picker-value" id={`${id}-value`}>
-          {current?.label ?? placeholder}
+          {currentLabel}
         </span>
         <Icon icon={ChevronDown} size={14} weight="control" />
       </button>

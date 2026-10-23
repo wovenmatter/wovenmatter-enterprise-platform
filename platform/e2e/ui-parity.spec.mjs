@@ -40,7 +40,7 @@ test('menus and pickers focus visible choices, navigate, dismiss', async ({ page
   expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
 });
 
-test('open pickers become inert when canonical work disables controls; empty popouts dismiss by keyboard', async ({ page, baseURL }) => {
+test('open pickers become inert when canonical work disables controls; empty session menus stay disabled', async ({ page, baseURL }) => {
   const state = await parityFixture(page, { baseURL });
   await page.goto(workspace);
   const model = picker(page, 'Conversation model');
@@ -50,18 +50,14 @@ test('open pickers become inert when canonical work disables controls; empty pop
   await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
   await expect(page.getByRole('listbox')).toHaveCount(0);
   expect(state.writes).toEqual([]);
-  // New document with no model options: popup itself takes focus for Escape.
+  // Desktop keeps empty session menus visible but inert.
   await page.context().unrouteAll();
   await parityFixture(page, { baseURL, emptyModels: true }); await page.goto(workspace);
+  await expect(picker(page, 'Conversation model')).toBeDisabled();
+  await expect(picker(page, 'Thinking level')).toBeVisible(); await expect(picker(page, 'Thinking level')).toBeDisabled();
   await picker(page, 'Conversation model').focus(); await page.keyboard.press('Enter');
-  await expect(page.getByText('No models are available.', { exact: false })).toBeVisible();
-  const emptyList = page.getByRole('listbox', { name: 'Model', exact: true });
-  await expect(emptyList).toBeFocused();
-  await expect(picker(page, 'Conversation model')).toHaveAttribute('aria-controls', await emptyList.getAttribute('id'));
-  await expect(emptyList).toHaveAccessibleDescription('No models are available. An administrator can connect a provider in Connections.');
-  await page.keyboard.press('Escape');
-  await expect(page.getByText('No models are available.', { exact: false })).toHaveCount(0);
-  await expect(picker(page, 'Conversation model')).toBeFocused();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(picker(page, 'Conversation model')).toHaveAttribute('title', 'No models are available. An administrator can connect a provider in Connections.');
   // Exercise the new clipboard stub after both persisted init scripts run.
   await page.getByRole('button', { name: 'Copy code', exact: true }).click();
   expect(await page.evaluate(() => window.clipboardWrites)).toEqual(['const revision = 1;']);
@@ -483,13 +479,13 @@ for (const method of ['selected', 'ArrowUp']) {
 test('open picker remains within the viewport when its polled catalog grows', async ({ page, baseURL }) => {
   await page.clock.install();
   const state = await parityFixture(page, { baseURL });
-  state.models = state.models.slice(0, 1);
+  // Keep a real alternative: a sole selected model is intentionally disabled.
   await page.goto(workspace); await picker(page, 'Conversation model').click();
   const current = page.getByRole('option', { selected: true }); await expect(current).toBeFocused();
   state.models.push(...manyModels());
   const refreshed = page.waitForResponse(response => response.url().endsWith('/inference/models'));
   await page.clock.fastForward(60000); await refreshed;
-  await expect(page.getByRole('option')).toHaveCount(61);
+  await expect(page.getByRole('option')).toHaveCount(62);
   await expect.poll(async () => {
     const box = await page.locator('.popup.picker').boundingBox();
     return box.y + box.height <= page.viewportSize().height - 8;

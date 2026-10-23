@@ -2,8 +2,9 @@ import { useState } from "react";
 import { Brain, Cpu, KeyRound } from "lucide-react";
 import { send, useResource, type Conversation, type Model } from "../api";
 import { acceptsModel } from "../agents";
-import { Picker, Switch } from "../components/controls";
+import { Picker, Switch, sessionMenuUnavailable } from "../components/controls";
 import { ErrorNotice, Field } from "../components/ui";
+const thinkingLabel = (id: string) => id.replaceAll("_", " ").replace(/\b\w/g, letter => letter.toUpperCase());
 type Option = { id: string; label: string };
 type NativeQuestion = { id: string; prompt: string; options: Option[]; allowsMultiple: boolean; allowsFreeText: boolean; required: boolean; type?: "string" | "boolean" | "number" | "integer" | "multiselect" | "external"; hidden?: boolean; default?: string[]; when?: {key:string;op:"eq"|"neq";value:string|string[]|number|boolean}[]; url?: string };
 type Interaction = { id: string; kind: "approval" | "question"; title: string; detail?: string; options: Option[]; questions: NativeQuestion[] };
@@ -14,6 +15,9 @@ export function useNativeControls({ conversation, models, disabled, onSaving, on
   const [busy, setBusy] = useState(false);
   const settings = native.data?.settings;
   const modelOptions = models.filter(model => acceptsModel(conversation?.harness ?? "pi", model.provider)).map(model => ({ value: model.id, label: settings?.models.find(option => option.id === model.id)?.label ?? model.name }));
+  const model = conversation?.model || settings?.model || "";
+  const thinking = native.data?.configured.thinking ?? settings?.thinking ?? "";
+  const thinkingOptions = (settings?.thinkingLevels ?? []).map(option => ({ value: option.id, label: option.label?.trim() || thinkingLabel(option.id) }));
   async function update(body: unknown) {
     if (!conversation || disabled || busy) return;
     setBusy(true); onSaving(true); setError("");
@@ -23,8 +27,8 @@ export function useNativeControls({ conversation, models, disabled, onSaving, on
   if (!conversation || conversation.harness === "pi") return { controls: null, feedback: null };
   return {
     controls: <div className="composer-model-controls native-selectors" role="group" aria-label="Native session settings">
-      <Picker label="Native model" heading="Model" icon={Cpu} value={conversation.model || settings?.model || ""} placeholder="Agent default model" disabled={disabled || busy || settings?.canConfigure === false} options={modelOptions} onChange={model => void update({model})} />
-      {settings?.thinkingLevels.length ? <Picker label="Native thinking level" heading="Thinking Level" icon={Brain} value={native.data?.configured.thinking ?? settings.thinking} placeholder="Thinking" disabled={disabled || busy || !settings.canConfigure} options={settings.thinkingLevels.map(option => ({ value: option.id, label: option.label }))} onChange={thinking => void update({ native: { thinking } })} /> : null}
+      <Picker label="Native model" heading="Model" icon={Cpu} value={model} placeholder="Model" disabled={disabled || busy || settings?.canConfigure === false || sessionMenuUnavailable(modelOptions, model)} options={modelOptions} onChange={model => void update({model})} />
+      <Picker label="Native thinking level" heading="Thinking Level" icon={Brain} value={thinking} placeholder={thinking ? thinkingLabel(thinking) : "Thinking"} disabled={disabled || busy || !settings?.canConfigure || sessionMenuUnavailable(thinkingOptions, thinking)} options={thinkingOptions} onChange={thinking => void update({ native: { thinking } })} />
       {settings?.permissions.length ? <Picker label="Native permissions" heading="Permissions" icon={KeyRound} value={native.data?.configured.permission ?? settings.permission} placeholder="Permissions" disabled={disabled || busy || !settings.canConfigure} options={settings.permissions.map(option => ({ value: option.id, label: option.label }))} onChange={permission => void update({ native: { permission } })} /> : null}
     </div>,
     feedback: <div className="native-controls"><ErrorNotice message={error || native.error} />

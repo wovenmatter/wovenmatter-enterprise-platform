@@ -2,7 +2,7 @@ import { ComposerTools, defaultConversationTools, type ConversationTools } from 
 import { ComposerAttachments, ComposerAttachmentChips, type ComposerAttachment } from "./composer-attachments";
 import { useNativeControls } from "./native-controls";
 import { WorkspaceNotePanel } from "../shell/WorkspaceDetails";
-import { agents, agentName, agentLogo, acceptsModel } from "../agents";
+import { agents, agentName, acceptsModel } from "../agents";
 import {
   ConversationRunWork,
   NativeChecklist,
@@ -67,6 +67,7 @@ import {
   MenuLink,
   MenuSeparator,
   Picker,
+  sessionMenuUnavailable,
   useComposerLayout,
   type PickerOption,
 } from "../components/controls";
@@ -94,6 +95,7 @@ import {
 export type { Model, Conversation } from "../api";
 type AgentDefaults = { defaultHarness: string; agents: Record<string, { model?: string; thinking?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number }> };
 type WelcomePi = { thinking?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number };
+const thinkingLabel = (level: string) => level === "xhigh" ? "Extra high" : level.charAt(0).toUpperCase() + level.slice(1);
 type Message = {
   attachments?: ComposerAttachment[];
   id: string;
@@ -285,7 +287,7 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [tools, setTools] = useState(defaultConversationTools);
   const [uploading, setUploading] = useState(false);
-  const [harness, setHarness] = useState(initialAgent);
+  const harness = initialAgent;
   const [modelChoice, setModelChoice] = useState<string>();
   // Undefined inherits workspace defaults; empty explicitly chooses model default.
   const [thinkingChoice, setThinkingChoice] = useState<string>();
@@ -303,17 +305,16 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
   const unavailableThinking = harness === "pi" && Boolean(thinking && !levels.includes(thinking));
   const unavailableFolder = Boolean(folderId && folders && !folders.some(folder => folder.id === folderId));
   const ready = Boolean(folders && defaults && model) && catalogReady && !catalogError && !folderError && !unavailableFolder && !unavailableModel && !unavailableThinking;
-  const thinkingLabel = (level: string) => level === "xhigh" ? "Extra high" : level.charAt(0).toUpperCase() + level.slice(1);
   const modelOptions: PickerOption[] = [
     ...(unavailableModel ? [{ value: model, label: `${model} (unavailable)`, disabled: true }] : []),
     ...available.map(item => ({ value: item.id, label: item.name || item.id,
       detail: available.some(other => other !== item && (other.name || other.id) === (item.name || item.id)) ? `${providerNames[item.provider] ?? item.provider} · ${item.id}` : undefined })),
   ];
-  const thinkingOptions: PickerOption[] = [
+  const thinkingOptions: PickerOption[] = harness === "pi" && (levels.length > 0 || unavailableThinking) ? [
     { value: "", label: selectedModel?.defaultThinkingLevel ? `Model default (${thinkingLabel(selectedModel.defaultThinkingLevel)})` : "Model default" },
     ...(unavailableThinking ? [{ value: thinking, label: `${thinkingLabel(thinking)} (unavailable)`, disabled: true }] : []),
     ...levels.map(level => ({ value: level, label: thinkingLabel(level) })),
-  ];
+  ] : [];
   async function submit() {
     if ((!draft.trim() && !attachments.length) || busy || uploading || !ready) return;
     setBusy(true); setError("");
@@ -335,9 +336,8 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
         <textarea aria-label="Message your agent" placeholder="Message your agent…" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} />
         <div className="composer-controls">
           <ComposerAttachments orgId={org.id} projectId={project.id} attachments={attachments} onChange={setAttachments} disabled={busy} onBusy={setUploading} />
-          <Picker label="Agent" heading="Agent" icon={Cpu} leadingIcon={<img className={`agent-logo agent-${harness}`} src={agentLogo(harness)} alt="" />} value={harness} placeholder="Agent" options={agents.map(agent => ({ value: agent.id, label: agent.name, description: agent.detail }))} onChange={value => { setHarness(value); setModelChoice(undefined); setThinkingChoice(undefined); }} disabled={busy} />
-          <Picker label="Model" heading="Model" icon={Cpu} width={360} value={model} placeholder={catalogReady ? "Select a model" : "Loading models…"} options={modelOptions} emptyMessage="No models are available. An administrator can connect a provider in Connections." onChange={value => { setModelChoice(value); setThinkingChoice(""); }} disabled={busy || !catalogReady || Boolean(catalogError)} />
-          {harness === "pi" && (levels.length > 0 || unavailableThinking) ? <Picker label="Thinking level" heading="Thinking Level" icon={Brain} value={thinking} placeholder="Model default" options={thinkingOptions} onChange={setThinkingChoice} disabled={busy || !catalogReady} /> : null}
+          <Picker label="Model" heading="Model" icon={Cpu} width={360} value={model} placeholder="Model" options={modelOptions} title={catalogReady && !available.length ? "No models are available. An administrator can connect a provider in Connections." : undefined} onChange={value => { setModelChoice(value); setThinkingChoice(""); }} disabled={busy || !catalogReady || Boolean(catalogError) || sessionMenuUnavailable(modelOptions, model)} />
+          <Picker label="Thinking level" heading="Thinking Level" icon={Brain} value={harness === "pi" ? thinking : ""} placeholder="Thinking" valueLabel={!thinking && harness === "pi" ? (selectedModel?.defaultThinkingLevel ? thinkingLabel(selectedModel.defaultThinkingLevel) : "Thinking") : undefined} options={thinkingOptions} onChange={setThinkingChoice} disabled={busy || !catalogReady || Boolean(catalogError) || !selectedModel || sessionMenuUnavailable(thinkingOptions, thinking)} />
           <ComposerTools settings={tools} onChange={setTools} disabled={busy} />
           <div className="composer-send-actions"><ComposerCollapse collapsed={collapsed} onChange={setCollapsed} /><ComposerMicrophone />
             <button className="send-button" aria-label="Send message" type="submit" disabled={busy || uploading || !ready || (!draft.trim() && !attachments.length)}><Icon icon={ArrowUp} size={16} weight="send" /></button>
@@ -572,7 +572,8 @@ function ModelControls({
     setValue(current);
     setThinking(currentThinking);
   }, [current, currentThinking]);
-  const levels = models.find((m) => m.id === value)?.thinkingLevels ?? [];
+  const selectedModel = models.find((m) => m.id === value);
+  const levels = selectedModel?.thinkingLevels ?? [];
   async function change(body: unknown) {
     onSaving(true);
     onError("");
@@ -594,8 +595,8 @@ function ModelControls({
     }
   }
   const modelOptions: PickerOption[] = [
-    ...(current && !models.some((m) => m.id === current)
-      ? [{ value: current, label: `${current} (unavailable)`, disabled: true }]
+    ...(value && !models.some((m) => m.id === value)
+      ? [{ value, label: `${value} (unavailable)`, disabled: true }]
       : []),
     ...models.map((m) => {
       const label = m.name || m.id;
@@ -612,7 +613,7 @@ function ModelControls({
       };
     }),
   ];
-  const thinkingOptions: PickerOption[] = [
+  const thinkingOptions: PickerOption[] = levels.length || thinking ? [
     { value: "", label: "Model default" },
     ...(thinking && !levels.includes(thinking)
       ? [{ value: thinking, label: `${thinking} (unavailable)`, disabled: true }]
@@ -624,7 +625,7 @@ function ModelControls({
           ? "Extra high"
           : level.charAt(0).toUpperCase() + level.slice(1),
     })),
-  ];
+  ] : [];
   return (
     <div className="composer-model-controls">
       <Picker
@@ -633,13 +634,11 @@ function ModelControls({
         icon={Cpu}
         width={360}
         value={value}
-        placeholder="Select a model"
+        placeholder="Model"
         options={modelOptions}
-        emptyMessage="No models are available. An administrator can connect a provider in Connections."
-        disabled={disabled || !canEdit || !conversation}
+        title={!models.length ? "No models are available. An administrator can connect a provider in Connections." : undefined}
+        disabled={disabled || !canEdit || !conversation || sessionMenuUnavailable(modelOptions, value)}
         onChange={(model) => {
-          setValue(model);
-          setThinking("");
           void change({ model });
         }}
       />
@@ -648,16 +647,17 @@ function ModelControls({
         heading="Thinking Level"
         icon={Brain}
         value={thinking}
-        placeholder="Model default"
+        placeholder="Thinking"
+        valueLabel={!thinking ? (selectedModel?.defaultThinkingLevel ? thinkingLabel(selectedModel.defaultThinkingLevel) : "Thinking") : undefined}
         options={thinkingOptions}
         disabled={
           disabled ||
           !canEdit ||
           !conversation ||
-          (!levels.length && !thinking)
+          !selectedModel ||
+          sessionMenuUnavailable(thinkingOptions, thinking)
         }
         onChange={(next) => {
-          setThinking(next);
           void change({ pi: { thinking: next || null } });
         }}
       />
