@@ -24,11 +24,12 @@ async function chooseLayout(page, title, side) {
 }
 const nav = page => page.locator('.sidebar');
 const contents = page => page.getByRole('complementary', { name: 'Workspace content', exact: true });
-const x = async locator => (await locator.boundingBox()).x;
+const settled = page => page.evaluate(() => Promise.all([...document.querySelectorAll('.sidebar-layout,.sidebar,.sidebar-content-slot,#main')].flatMap(node => node.getAnimations()).map(animation => animation.finished.catch(() => {}))));
+const x = async locator => { await settled(locator.page()); return (await locator.boundingBox()).x; };
 const assertClean = state => { expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]); };
 
-test('split defaults, independent collapse/reveal, reload and keyboard focus', async ({ page, baseURL }, testInfo) => {
-  const state = await setup(page, baseURL);
+test('explicit split, independent collapse/reveal, reload and keyboard focus', async ({ page, baseURL }, testInfo) => {
+  const state = await setup(page, baseURL, prefs('split'));
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(workspace);
   await expect(page).toHaveTitle(/WovenMatter/);
@@ -130,13 +131,13 @@ test('device-local preferences isolate users, reject malformed storage and never
   expect(await page.evaluate(key => JSON.parse(localStorage.getItem(key)), key)).toMatchObject({ version: 1, style: 'single', side: 'right' });
   await page.route('**/api/session', route => route.fulfill({ json: { user: { ...user, id: 'another-member', role: 'member' }, csrfToken: null } }));
   await page.route('**/api/organizations', route => route.fulfill({ json: { items: [{ ...org, role: 'member', libraryAccess: 'read' }] } }));
-  await page.reload(); await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'split');
+  await page.reload(); await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'adaptive');
   await page.goto(`${base}/workspaces`);
   await expect(nav(page).getByRole('link', { name: 'Members', exact: true })).toHaveCount(0);
   await expect(nav(page).getByRole('link', { name: 'Connections', exact: true })).toHaveCount(0);
   await expect(nav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveCount(0);
   await page.evaluate(() => localStorage.setItem('wme:sidebar:v1:another-member', '{invalid'));
-  await page.goto(workspace); await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'split');
+  await page.goto(workspace); await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'adaptive');
   assertClean(state);
 });
 
@@ -144,7 +145,7 @@ for (const style of ['split', 'single', 'adaptive']) {
   test(`${style} compact drawers stay below the header, contain focus and restore it`, async ({ page, baseURL }, testInfo) => {
     const state = await setup(page, baseURL, prefs(style, style === 'split' ? 'left' : 'right'));
     await page.setViewportSize({ width: 390, height: 844 }); await page.goto(root);
-    const opener = page.getByRole('button', { name: 'Open navigation', exact: true });
+    const opener = page.getByRole('button', { name: 'Show navigation sidebar', exact: true });
     await opener.focus(); await page.keyboard.press('Enter');
     let drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
     await expect(drawer).toBeVisible();
@@ -170,11 +171,11 @@ for (const style of ['split', 'single', 'adaptive']) {
     await contents(page).getByRole('searchbox', { name: 'Search chats' }).fill('Retained');
     await contents(page).getByRole('tab', { name: 'Chats', exact: true }).focus();
     await page.keyboard.press('Escape'); await expect(drawer).toHaveCount(0);
-    await expect(page.getByRole('button', { name: style === 'split' ? 'Show workspace sidebar' : 'Open navigation', exact: true })).toBeFocused();
+    await expect(page.getByRole('button', { name: style === 'split' ? 'Show workspace sidebar' : 'Show navigation sidebar', exact: true })).toBeFocused();
     await page.setViewportSize({ width: 855, height: 900 });
     await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
     if (style === 'split') {
-      await expect(nav(page)).toBeVisible();
+      await expect(nav(page)).toBeHidden();
       await page.getByRole('button', { name: 'Show workspace sidebar' }).click();
       await expect(page.getByRole('dialog', { name: 'Workspace sidebar', exact: true })).toBeVisible();
       await page.keyboard.press('Escape');
@@ -226,10 +227,10 @@ test('unavailable browser storage keeps the session usable and discloses non-per
   await page.addInitScript(() => { Storage.prototype.setItem = () => { throw new DOMException('Synthetic blocked browser storage', 'SecurityError'); }; });
   await page.goto(workspace);
   await page.getByRole('link', { name: 'Personal settings', exact: true }).click();
-  await page.getByRole('radio', { name: /^Adaptive Sidebar/ }).check();
+  await page.getByRole('radio', { name: /^Single Sidebar/ }).check();
   await expect(page.getByRole('alert')).toContainText('Browser storage is unavailable');
   await page.getByRole('link', { name: 'Back to organization', exact: true }).click();
-  await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'adaptive');
+  await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'single');
   assertClean(state);
 });
 
@@ -268,10 +269,10 @@ for (const side of ['left', 'right']) {
       await page.setViewportSize({ width, height: 900 });
       for (const route of ['', '/calendar', '/databases']) {
         await page.goto(`${root}${route}?folder=${folder.id}&conversation=parity-chat`);
-        await expect(nav(page)).toBeVisible();
         if (width < 904) {
+          await expect(nav(page)).toBeHidden();
           await expect(contents(page)).toBeHidden();
-          await page.getByRole('button', { name: 'Show workspace sidebar', exact: true }).click();
+          await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).click();
           await expect(page.getByRole('dialog', { name: 'Workspace sidebar', exact: true })).toBeVisible();
           await expect(contents(page)).toBeVisible();
           await page.screenshot({ path: testInfo.outputPath(`adaptive-${side}-${width}-content-drawer.png`) });
@@ -332,14 +333,16 @@ test('Single folder plus returns cancelled chooser focus to the visible content 
   assertClean(state);
 });
 
-test('Adaptive intermediate folder drawer restores focus to its actual folder opener', async ({ page, baseURL }) => {
+test('Adaptive compact folder drawer restores focus to its in-surface reveal', async ({ page, baseURL }) => {
   const state = await setup(page, baseURL, prefs('adaptive'));
   await page.setViewportSize({ width: 855, height: 900 }); await page.goto(root);
+  const opener = page.getByRole('button', { name: 'Show navigation sidebar' });
+  await opener.click();
   const link = nav(page).getByRole('link', { name: folder.name, exact: true });
   await link.focus(); await page.keyboard.press('Enter');
   const drawer = page.getByRole('dialog', { name: 'Workspace sidebar', exact: true });
   await expect(drawer).toBeVisible();
   await page.keyboard.press('Escape'); await expect(drawer).toHaveCount(0);
-  await expect(link).toBeFocused();
+  await expect(opener).toBeFocused();
   assertClean(state);
 });

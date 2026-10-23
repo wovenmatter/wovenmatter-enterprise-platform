@@ -90,8 +90,9 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
     expect(geometry.main.top).toBeGreaterThanOrEqual(geometry.header.bottom);
     expect(geometry.composer.bottom).toBeLessThanOrEqual(844);
     expect(geometry.composer.top).toBeGreaterThan(geometry.header.bottom);
-    if (width <= 760) {
-      await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
+    if (width < 904) {
+      await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).click();
+      if (await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).isVisible()) await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).click();
       const drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
       await expect(drawer).toBeVisible();
       await expect(page.locator('.platform-header')).toHaveAttribute('inert', '');
@@ -106,7 +107,7 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
       await recents.click();
       await page.screenshot({ path: testInfo.outputPath(`${role}-drawer-${width}.png`) });
       await page.keyboard.press('Escape');
-      await expect(page.getByRole('button', { name: 'Open navigation', exact: true })).toBeFocused();
+      await expect(page.getByRole('button', { name: 'Show navigation sidebar', exact: true })).toBeFocused();
       await expect(page.locator('.platform-header')).not.toHaveAttribute('inert');
     }
     await page.screenshot({ path: testInfo.outputPath(`${role}-workspace-${width}.png`) });

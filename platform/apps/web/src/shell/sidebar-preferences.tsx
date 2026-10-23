@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 
-// DashboardDesign.swift (0c1f8f82): split is the default, with left as the
-// movable rail's default side. Enterprise preferences are account/device local.
+// Enterprise intentionally defaults to Adaptive (desktop defaults to Split).
+// Existing valid account/browser selections keep their version-1 storage key.
 export const sidebarStyles = [
   { value: "adaptive", title: "Adaptive Sidebar", detail: "Keep navigation visible and open folder contents beside it." },
   { value: "single", title: "Single Sidebar", detail: "Open folder contents in place of the movable navigation sidebar." },
@@ -18,7 +18,7 @@ type Preferences = {
   contentVisible: boolean;
   singleVisible: boolean;
 };
-const defaults: Preferences = { version: 1, style: "split", side: "left", navigationVisible: true, contentVisible: true, singleVisible: true };
+const defaults: Preferences = { version: 1, style: "adaptive", side: "left", navigationVisible: true, contentVisible: true, singleVisible: true };
 export const sidebarStorageKey = (userId: string) => `wme:sidebar:v1:${userId}`;
 function readPreferences(key: string): Preferences {
   try {
@@ -35,28 +35,18 @@ function readPreferences(key: string): Preferences {
   } catch { return defaults; }
 }
 
-const subscribeNarrow = (changed: () => void) => {
-  const query = matchMedia("(max-width: 760px)");
-  query.addEventListener("change", changed);
-  return () => query.removeEventListener("change", changed);
-};
-const subscribeCompactContent = (changed: () => void) => {
-  const query = matchMedia("(max-width: 1100px)");
-  query.addEventListener("change", changed);
-  return () => query.removeEventListener("change", changed);
-};
-const subscribeCompactAdaptive = (changed: () => void) => {
-  const query = matchMedia("(max-width: 903px)");
-  query.addEventListener("change", changed);
-  return () => query.removeEventListener("change", changed);
+const subscribeWidth = (changed: () => void) => {
+  window.addEventListener("resize", changed);
+  return () => window.removeEventListener("resize", changed);
 };
 type SidebarContextValue = {
   preferences: Preferences;
   update: (changes: Partial<Omit<Preferences, "version">>) => void;
   storageError: boolean;
   narrow: boolean;
-  compactContent: boolean;
-  compactAdaptive: boolean;
+  compact: boolean;
+  drawerWidth: number;
+  pagedAdaptive: boolean;
   workspaceBase: string | undefined;
   workspaceSearch: string;
   contentState: { search: string; tab: "chats" | "notes" };
@@ -88,9 +78,13 @@ export function SidebarProvider({ userId, children }: { userId: string; children
   const contentState = workspaceBase ? contentStates[workspaceBase] ?? { search: "", tab: "chats" as const } : { search: "", tab: "chats" as const };
   const [selection, setSelection] = useState<{ workspace: string | undefined; contents: boolean }>({ workspace: workspaceBase, contents: new URLSearchParams(location.search).has("folder") });
   const contentsSelected = selection.workspace === workspaceBase ? selection.contents : new URLSearchParams(location.search).has("folder");
-  const narrow = useSyncExternalStore(subscribeNarrow, () => matchMedia("(max-width: 760px)").matches);
-  const compactContent = useSyncExternalStore(subscribeCompactContent, () => matchMedia("(max-width: 1100px)").matches);
-  const compactAdaptive = useSyncExternalStore(subscribeCompactAdaptive, () => matchMedia("(max-width: 903px)").matches);
+  const width = useSyncExternalStore(subscribeWidth, () => window.innerWidth);
+  const narrow = width <= 760; // Organization-only navigation retains its menu.
+  const compact = width < 904;
+  const drawerWidth = Math.min(width * .82, 320);
+  // Native Adaptive has two adjacent drawer pages. Only page them when their
+  // combined native width would exceed this browser viewport (e.g. 390px).
+  const pagedAdaptive = compact && 2 * drawerWidth > width;
   const creatingChat = location.pathname === workspaceBase && new URLSearchParams(location.search).get("new") === "1";
   const wasCreatingChat = useRef(creatingChat);
   useEffect(() => {
@@ -99,11 +93,11 @@ export function SidebarProvider({ userId, children }: { userId: string; children
       chatTrigger.current = null;
       requestAnimationFrame(() => {
         if (document.querySelector("dialog[open]")) return;
-        if (new URLSearchParams(location.search).get("conversation") !== trigger.conversation) document.querySelector<HTMLElement>('[aria-label="Message your agent"]')?.focus();
-        else if (trigger.element.checkVisibility()) trigger.element.focus();
+        if (new URLSearchParams(location.search).get("conversation") !== trigger.conversation) document.querySelector<HTMLElement>('.composer-area textarea')?.focus({ preventScroll: true });
+        else if (trigger.element.checkVisibility() && !trigger.element.closest("[inert]")) trigger.element.focus({ preventScroll: true });
         else {
-          const fallback = Array.from(document.querySelectorAll<HTMLElement>('.workspace-detail-actions a, .mobile-menu')).find(element => element.checkVisibility());
-          fallback?.focus();
+          const fallback = Array.from(document.querySelectorAll<HTMLElement>('.workspace-detail-actions a, .workspace-reveal-controls button, .mobile-menu')).find(element => element.checkVisibility() && !element.closest("[inert]"));
+          fallback?.focus({ preventScroll: true });
         }
       });
     }
@@ -117,7 +111,7 @@ export function SidebarProvider({ userId, children }: { userId: string; children
     if (changes.style) setDrawer(null);
   }
   return <SidebarContext.Provider value={{
-    preferences, update, storageError, narrow, compactContent, compactAdaptive, workspaceBase,
+    preferences, update, storageError, narrow, compact, drawerWidth, pagedAdaptive, workspaceBase,
     workspaceSearch: workspaceBase ? queries.current[workspaceBase] ?? "" : "",
     contentState,
     updateContentState: changes => {
@@ -128,18 +122,12 @@ export function SidebarProvider({ userId, children }: { userId: string; children
       setSelection({ workspace: workspaceBase, contents: true });
       if (preferences.style !== "split") {
         update({ singleVisible: true });
-        if (narrow || preferences.style === "adaptive" && compactAdaptive) {
-          // A folder can open the intermediate drawer directly, without the
-          // header button. Preserve that keyboard origin before moving focus.
-          if (!drawer) drawerOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-          setDrawer("content");
-        }
-      } else if (narrow) setDrawer(null);
+        if (compact) setDrawer("content");
+      } else if (compact) setDrawer(null);
     },
     showNavigation: () => {
       setSelection({ workspace: workspaceBase, contents: false });
-      if (narrow) setDrawer("navigation");
-      else setDrawer(null);
+      if (compact) setDrawer("navigation");
     },
     contentTarget, setContentTarget, drawer, setDrawer, drawerOpener,
     rememberChatTrigger: element => { chatTrigger.current = { element, conversation: new URLSearchParams(queries.current[workspaceBase ?? ""] ?? "").get("conversation") }; },
@@ -152,5 +140,5 @@ export function useSidebar() {
 }
 
 export function focusSidebarControl(selector: string) {
-  requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus());
+  requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true }));
 }

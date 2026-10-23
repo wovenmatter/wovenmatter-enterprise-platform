@@ -46,7 +46,7 @@ async function setup(page, baseURL, { theme = 'green', role = 'owner', count = 1
   return state;
 }
 
-for (const theme of ['green','cognac','dark']) test(`${theme}: platform, organization and split workspace match desktop structure`, async ({page,baseURL}) => {
+for (const theme of ['green','cognac','dark']) test(`${theme}: platform, organization and adaptive workspace match desktop structure`, async ({page,baseURL}) => {
   const state=await setup(page,baseURL,{theme});await mkdir(evidence,{recursive:true});
   await page.goto('/enterprise/');await expect(page.getByRole('heading',{name:'Organizations',exact:true})).toBeVisible();await expect(page.locator('.sidebar')).toHaveCount(0);await expect(page.getByRole('link',{name:'Accounts',exact:true})).toBeVisible();
   await page.screenshot({path:`${evidence}/${theme}-platform.png`});
@@ -55,7 +55,7 @@ for (const theme of ['green','cognac','dark']) test(`${theme}: platform, organiz
   await page.goto(workspace);await expect(page.getByRole('heading',{name:'Retained parity conversation',exact:true})).toBeVisible();
   for(const name of ['Pi Durable','Codex','Claude Code','Grok Build','OpenCode']) await expect(page.locator('.sidebar').getByRole('link',{name,exact:true})).toBeVisible();
   await expect(page.getByRole('complementary',{name:'Workspace content'})).toBeVisible();await expect(page.getByRole('button',{name:'Conversation members'})).toHaveCount(0);await expect(page.locator('.session-mode')).toHaveCount(0);
-  const widths=await page.locator('.sidebar,.workspace-detail-rail').evaluateAll(elements=>elements.map(element=>Math.round(element.getBoundingClientRect().width)));expect(widths).toEqual([256,256]);
+  const widths=await page.locator('.sidebar,.sidebar-content-slot').evaluateAll(elements=>elements.map(element=>Math.round(element.getBoundingClientRect().width)));expect(widths).toEqual([256,256]);
   await page.getByRole('tab',{name:'Notes',exact:true}).click();await page.getByRole('link',{name:'Research notes',exact:true}).click();await expect(page.getByRole('textbox',{name:'Document body'})).toHaveValue(/Launch plan/);await expect(page.getByRole('heading',{name:'Retained parity conversation',exact:true})).toBeVisible();
   await page.screenshot({path:`${evidence}/${theme}-workspace-note.png`});await page.getByRole('button',{name:'Close note',exact:true}).click();await expect(page.getByRole('region',{name:'Open note'})).toHaveCount(0);await page.screenshot({path:`${evidence}/${theme}-workspace.png`});expect(state.errors).toEqual([]);expect(state.external).toEqual([]);
 });
@@ -63,7 +63,7 @@ for (const theme of ['green','cognac','dark']) test(`${theme}: platform, organiz
 test('membership landing, legacy workspace redirects and mobile drawer',async({page,baseURL})=>{
   const state=await setup(page,baseURL,{role:'member'});await page.goto('/enterprise/');await expect(page).toHaveURL(new RegExp('/workspaces$'));for(const name of ['Members','Connections','Settings'])await expect(page.getByRole('navigation',{name:'Organization navigation'}).getByRole('link',{name,exact:true})).toHaveCount(0);
   await page.goto(`${base}/projects/${project.id}?folder=all`);await expect(page).toHaveURL(new RegExp('/workspaces/'+project.id));await expect(page.getByRole('textbox',{name:'Message your agent',exact:true})).toBeVisible();
-  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Open navigation'}).click();await expect(page.getByRole('dialog',{name:'Navigation'})).toBeVisible();await page.getByRole('link',{name:'Calendar',exact:true}).click();await expect(page.getByRole('heading',{name:'Calendar',exact:true})).toBeVisible();await expect(page.getByRole('dialog',{name:'Navigation'})).toHaveCount(0);await page.screenshot({path:`evidence/mobile-calendar.png`.replace('evidence',evidence)});expect(state.errors).toEqual([]);
+  await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Show navigation sidebar'}).click();await page.getByRole('button',{name:'Back to workspace navigation'}).click();await expect(page.getByRole('dialog',{name:'Navigation'})).toBeVisible();await page.getByRole('link',{name:'Calendar',exact:true}).click();await expect(page.getByRole('heading',{name:'Calendar',exact:true})).toBeVisible();await expect(page.getByRole('dialog',{name:'Navigation'})).toHaveCount(0);await page.screenshot({path:`evidence/mobile-calendar.png`.replace('evidence',evidence)});expect(state.errors).toEqual([]);
 });
 
 test('notes format, save, query insertion, history and reload persist',async({page,baseURL})=>{

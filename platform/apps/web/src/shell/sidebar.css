@@ -1,35 +1,65 @@
-/* Desktop 0c1f8f82, DashboardDesign.pages / WorkspaceView.railGroup.
- * Enterprise retains its 760px navigation drawer breakpoint. At <=1100px,
- * split content is recoverable in a drawer rather than silently disappearing.
- */
-.sidebar-shell .shell-body { display: flex; position: relative; }
-.sidebar-shell .main-content { flex: 1; order: 2; }
-.sidebar-shell .sidebar-layout { display: contents; }
-.sidebar-shell .sidebar { position: static; flex: 0 0 var(--rail-width); width: var(--rail-width); order: 1; }
-.sidebar-shell .sidebar-content-slot { display: flex; flex: 0 0 var(--rail-width); width: var(--rail-width); min-width: 0; min-height: 0; order: 3; }
+/* WovenMatter 0c1f8f82: WorkspaceView.desktopShell / compactShell.
+ * Numeric geometry keeps the portal target, navigation and center tree mounted.
+ * Interrupted CSS transitions continue from the currently rendered position. */
+.sidebar-shell .shell-body { display: block; position: relative; overflow: hidden; padding: 0; }
+.sidebar-shell .main-content {
+  position: absolute; top: 8px; bottom: 8px;
+  left: var(--sidebar-center-left); width: var(--sidebar-center-width);
+  transform: translateX(var(--sidebar-center-offset));
+  transition: left .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1), transform .3s cubic-bezier(.2,.8,.2,1), opacity .3s ease, padding-top .3s cubic-bezier(.2,.8,.2,1), border-radius .3s ease;
+}
+.sidebar-shell .sidebar-layout {
+  position: absolute; top: 8px; bottom: 8px;
+  left: var(--sidebar-group-left); width: var(--sidebar-group-width);
+  transform: translateX(var(--sidebar-group-offset));
+  pointer-events: none; z-index: 2; opacity: var(--sidebar-group-opacity);
+  transition: left .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1), transform .3s cubic-bezier(.2,.8,.2,1), opacity .3s ease;
+}
+.sidebar-shell .sidebar, .sidebar-shell .sidebar-content-slot {
+  display: flex; position: absolute; top: 0; bottom: 0;
+  width: var(--sidebar-page-width); min-height: 0; min-width: 0;
+  pointer-events: auto;
+  transition: left .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1), transform .3s cubic-bezier(.2,.8,.2,1), opacity .3s ease, visibility 0s;
+}
+.sidebar-shell .sidebar { left: var(--sidebar-nav-left); }
+.sidebar-shell .sidebar-content-slot { left: var(--sidebar-content-left); }
 .sidebar-shell .sidebar-content-slot > .workspace-detail-rail { display: flex; width: 100%; flex: 1; }
-.sidebar-shell .sidebar.rail-hidden,
-.sidebar-shell .sidebar-content-slot.rail-hidden { display: none; }
-.sidebar-shell .sidebar.rail-visible { display: flex; }
-.sidebar-shell[data-sidebar-style="single"][data-sidebar-side="left"] .sidebar-content-slot { order: 1; }
-.sidebar-shell[data-sidebar-style="single"][data-sidebar-side="right"] .sidebar { order: 3; }
-.sidebar-shell[data-sidebar-style="adaptive"][data-sidebar-side="right"] .sidebar { order: 3; }
-.sidebar-shell .sidebar-layout.adaptive-expanded {
-  display: flex;
-  flex: 0 0 calc(2 * var(--rail-width));
-  min-height: 0;
-  min-width: 0;
-  order: 1;
-  border-radius: var(--surface-radius);
-  overflow: hidden;
+.sidebar-shell .rail-hidden {
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateX(-24px);
+  transition-delay: 0s, 0s, 0s, 0s, .3s;
+}
+.sidebar-shell[data-sidebar-style="split"] .sidebar-content-slot.rail-hidden,
+.sidebar-shell[data-sidebar-side="right"] .rail-hidden { transform: translateX(24px); }
+.sidebar-shell .rail-visible { opacity: 1; visibility: visible; transform: translateX(0); }
+.sidebar-shell:not([data-sidebar-style="split"]):not([data-sidebar-style="organization"]) .sidebar-layout::before {
+  content: ""; position: absolute; inset: 0; border-radius: var(--surface-radius);
   background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace);
   box-shadow: inset 0 0 0 1px var(--rail-rim), inset 0 0 0 2px var(--rail-inner), 0 0 0 .5px var(--rail-edge);
 }
-.sidebar-shell[data-sidebar-side="right"] .sidebar-layout.adaptive-expanded { order: 3; }
-.sidebar-shell .adaptive-expanded .sidebar,
-.sidebar-shell .adaptive-expanded .workspace-detail-rail { border-radius: 0; box-shadow: none; background: transparent; }
+.sidebar-shell:not([data-sidebar-style="split"]):not([data-sidebar-style="organization"]) .sidebar,
+.sidebar-shell:not([data-sidebar-style="split"]):not([data-sidebar-style="organization"]) .workspace-detail-rail { border-radius: 0; box-shadow: none; background: transparent; }
 .sidebar-shell .adaptive-expanded .sidebar-content-slot { border-left: 1px solid var(--line); }
-.sidebar-shell[data-sidebar-side="right"] .adaptive-expanded .sidebar-content-slot { order: 1; border-left: 0; border-right: 1px solid var(--line); }
+.sidebar-shell[data-sidebar-side="right"] .adaptive-expanded .sidebar-content-slot { border-left: 0; border-right: 1px solid var(--line); }
+.workspace-reveal-controls { position: absolute; inset: 12px 12px auto; height: 36px; z-index: 5; pointer-events: none; }
+.workspace-reveal-controls .sidebar-reveal { position: absolute; width: 36px; height: 36px; min-width: 36px; padding: 0; pointer-events: auto; }
+.workspace-reveal-controls [data-side="left"] { left: 0; }
+.workspace-reveal-controls [data-side="right"] { right: 0; }
+/* A shared toolbar band reserves room on conversations and every subpage. */
+.sidebar-shell .main-content.project-workspace[data-reveal-space="true"] { padding-top: 60px; }
+.sidebar-shell .sidebar-top { display: none; }
+.sidebar-shell .sidebar-backdrop { position: absolute; inset: 0; z-index: 3; display: block; width: 100%; height: 100%; border: 0; border-radius: 0; background: transparent; }
+.sidebar-shell[data-compact="true"] .main-content,
+.sidebar-shell[data-compact="true"] .sidebar-layout { top: 0; bottom: 0; }
+.sidebar-shell[data-drawer-open="true"] .main-content { opacity: .58; border-radius: 28px; }
+.sidebar-shell .drawer-open { z-index: 4; }
+.sidebar-shell .drawer-open .sidebar-top { position: absolute; display: flex; top: 0; right: 0; height: 44px; min-height: 44px; padding: 0 8px; z-index: 1; pointer-events: auto; }
+.sidebar-shell .drawer-open .mobile-close { display: inline-grid; }
+.sidebar-shell[data-compact="true"] .sidebar,
+.sidebar-shell[data-compact="true"] .sidebar-content-slot { top: 44px; }
+.sidebar-shell[data-compact="true"] .sidebar-layout::before { content: ""; position: absolute; inset: 0; border-radius: var(--surface-radius); background: var(--rail-reduced); }
+.sidebar-shell[data-compact="true"] .sidebar,
+.sidebar-shell[data-compact="true"] .workspace-detail-rail { background: transparent; box-shadow: none; }
 .sidebar-shell .workspace-rail-title { justify-content: space-between; gap: 4px; min-height: 68px; padding: 0 4px 0 8px; }
 .sidebar-shell .workspace-rail-title > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-controls { display: inline-flex; flex: none; align-items: center; gap: 0; }
@@ -40,49 +70,36 @@
 .sidebar-shell .workspace-detail-heading small { white-space: nowrap; }
 .sidebar-shell .workspace-detail-actions { flex-direction: column; gap: 1px; }
 .sidebar-shell .workspace-detail-actions > .nav-link { font-size: 13px; padding-inline: 8px; }
-.sidebar-shell .sidebar-layout.drawer-open {
-  position: absolute;
-  top: var(--shell-inset);
-  bottom: var(--shell-inset);
-  left: var(--shell-inset);
-  z-index: 40;
-  display: flex;
-  flex-direction: column;
-  width: min(320px, calc(100vw - 2 * var(--shell-inset)));
-  min-height: 0;
-  overflow: hidden;
-  border-radius: var(--surface-radius);
-  background: var(--rail-reduced);
-  box-shadow: inset 0 0 0 1px var(--rail-rim), 0 8px 32px var(--scrim);
-}
-.sidebar-shell .sidebar-layout.drawer-open[data-side="right"] { left: auto; right: var(--shell-inset); }
-.sidebar-shell .drawer-open .sidebar,
-.sidebar-shell .drawer-open .sidebar-content-slot { position: static; flex: 1; width: 100%; min-height: 0; order: 2; border: 0; }
-.sidebar-shell .drawer-open .sidebar,
-.sidebar-shell .drawer-open .workspace-detail-rail { border-radius: 0; background: transparent; box-shadow: none; }
-.sidebar-shell .drawer-open .sidebar-top { order: 0; display: flex; justify-content: flex-end; min-height: 44px; padding: 0 8px; }
-.sidebar-shell .drawer-open .mobile-close { display: inline-grid; }
-.sidebar-shell .sidebar-backdrop { position: fixed; inset: 0; z-index: 30; display: block; width: 100%; height: 100%; border: 0; border-radius: 0; background: var(--scrim); }
 .sidebar-style-choices { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; padding: 0; border: 0; }
 .sidebar-style-choice { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: var(--control-radius); cursor: pointer; }
 .sidebar-style-choice:has(input:checked) { background: var(--soft); border-color: var(--ring); }
 .sidebar-style-choice input { flex: none; margin: 4px 0 0; accent-color: var(--primary); }
 .sidebar-style-choice strong, .sidebar-style-choice small { display: block; }
 .sidebar-style-choice small { margin-top: 2px; color: var(--muted); }
-@media (max-width: 1100px) {
-  .sidebar-shell[data-sidebar-style="split"] .sidebar-layout:not(.drawer-open) .sidebar-content-slot { display: none; }
-}
-@media (max-width: 903px) {
-  /* Two 256px rails must leave the source's 360px minimum center width. */
-  .sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout:not(.drawer-open) { display: contents; }
-  .sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout:not(.drawer-open) .sidebar-content-slot { display: none; }
-}
-@media (max-width: 760px) {
-  /* Apply the breakpoint before React receives matchMedia's change event. */
-  .sidebar-shell .sidebar-layout:not(.drawer-open),
-  .sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout:not(.drawer-open) { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell .main-content, .sidebar-shell .sidebar-layout,
+  .sidebar-shell .sidebar, .sidebar-shell .sidebar-content-slot { transition: none; }
 }
 @media (pointer: coarse) {
   .sidebar-controls .icon-button { width: 44px; min-width: 44px; height: 44px; }
-  .sidebar-shell .sidebar-reveal, .sidebar-shell .mobile-close { min-width: 44px; min-height: 44px; }
+  .sidebar-shell .mobile-close { min-width: 44px; min-height: 44px; }
+}
+
+/* Split's compact drawers are independently anchored to their own edge. The
+ * stable full-width host never carries a right drawer across from the left. */
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .sidebar-layout { left: 0; width: 100%; transform: none; }
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .sidebar { left: 0; }
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .sidebar-content-slot { left: calc(100% - var(--sidebar-page-width)); }
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .sidebar.rail-hidden { transform: translateX(-100%); }
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .sidebar-content-slot.rail-hidden { transform: translateX(100%); }
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .sidebar-layout::before { width: var(--sidebar-page-width); }
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .sidebar-layout[data-side="right"]::before { left: auto; right: 0; }
+.sidebar-shell[data-sidebar-style="split"][data-compact="true"] .drawer-open[data-side="left"] .sidebar-top { right: calc(100% - var(--sidebar-page-width)); }
+.sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout,
+.sidebar-shell[data-sidebar-style="single"] .sidebar-layout { border-radius: var(--surface-radius); overflow: hidden; }
+
+@media (max-width: 760px) {
+  /* Preserve the shared header's previous menu-row height without putting
+   * workspace rail controls back into that header. */
+  .sidebar-shell:not([data-sidebar-style="organization"]) .platform-brand-row { min-height: 40px; }
 }

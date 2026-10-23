@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   Link,
   Navigate,
@@ -8,7 +8,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { Menu, PanelLeftOpen, PanelRightOpen, X } from "lucide-react";
+import { Menu, PanelLeft, PanelRight, X } from "lucide-react";
 import {
   send,
   useResource,
@@ -53,15 +53,40 @@ function ShellContent({
     "/enterprise/api/organizations",
   );
   const [creating, setCreating] = useState(false);
-  const { preferences, update, narrow, compactContent, compactAdaptive, workspaceBase, contentsSelected, setContentTarget, drawer, setDrawer, drawerOpener } = useSidebar();
+  const { preferences, update, narrow, compact, drawerWidth, pagedAdaptive, workspaceBase, contentsSelected, setContentTarget, drawer, setDrawer, drawerOpener } = useSidebar();
   const split = !workspaceBase || preferences.style === "split";
-  const adaptiveDrawer = !split && preferences.style === "adaptive" && compactAdaptive;
+  const isCompact = workspaceBase ? compact : narrow;
+  const adaptive = Boolean(workspaceBase && preferences.style === "adaptive");
   const singleContent = !split && contentsSelected;
-  const navigationVisible = workspaceBase ? split ? preferences.navigationVisible : preferences.singleVisible && (preferences.style === "adaptive" || !singleContent) : true;
-  const contentVisible = Boolean(workspaceBase && (split ? preferences.contentVisible && !compactContent : preferences.singleVisible && singleContent && !adaptiveDrawer));
-  const mobileOpen = drawer !== null;
-  const showNavigation = mobileOpen ? drawer === "navigation" : !narrow && navigationVisible;
-  const showContent = narrow ? drawer === "content" : drawer === "content" || contentVisible;
+  const expanded = adaptive && contentsSelected && !(isCompact && pagedAdaptive);
+  const navigationVisible = workspaceBase ? split ? preferences.navigationVisible : preferences.singleVisible && (adaptive || !singleContent) : true;
+  const contentVisible = Boolean(workspaceBase && (split ? preferences.contentVisible : preferences.singleVisible && singleContent));
+  const mobileOpen = isCompact && drawer !== null;
+  const showNavigation = isCompact ? mobileOpen && (expanded || drawer === "navigation") : navigationVisible;
+  const showContent = isCompact ? mobileOpen && (expanded || drawer === "content") : contentVisible;
+  const lastDrawer = useRef<"navigation" | "content">("navigation");
+  if (drawer) lastDrawer.current = drawer;
+  const side = split ? (drawer ?? lastDrawer.current) === "content" ? "right" : "left" : preferences.side;
+  const pageWidth = isCompact ? drawerWidth : 256;
+  const groupWidth = pageWidth * (expanded ? 2 : 1);
+  const groupLeft = split && !isCompact ? "8px" : side === "left" ? isCompact ? "0px" : "8px" : `calc(100% - ${groupWidth + (isCompact ? 0 : 8)}px)`;
+  const groupShown = isCompact ? mobileOpen : split || preferences.singleVisible;
+  const leftSpace = isCompact ? 0 : split ? navigationVisible ? 264 : 0 : preferences.side === "left" && preferences.singleVisible ? groupWidth + 8 : 0;
+  const rightSpace = isCompact ? 0 : split ? contentVisible ? 264 : 0 : preferences.side === "right" && preferences.singleVisible ? groupWidth + 8 : 0;
+  const revealNavigation = Boolean(workspaceBase && (isCompact || (split ? !navigationVisible : !preferences.singleVisible)));
+  const revealContent = Boolean(workspaceBase && split && (isCompact || !contentVisible));
+  const layoutStyle = {
+    "--sidebar-page-width": `${pageWidth}px`,
+    "--sidebar-group-width": split && !isCompact ? "calc(100% - 16px)" : `${groupWidth}px`,
+    "--sidebar-group-left": groupLeft,
+    "--sidebar-group-opacity": groupShown ? 1 : 0,
+    "--sidebar-group-offset": groupShown ? "0px" : side === "left" ? `-${groupWidth + 8}px` : `${groupWidth + 8}px`,
+    "--sidebar-nav-left": expanded && side === "right" ? `${pageWidth}px` : "0px",
+    "--sidebar-content-left": split && !isCompact ? "calc(100% - 256px)" : expanded && side === "left" ? `${pageWidth}px` : "0px",
+    "--sidebar-center-left": `${(isCompact ? 0 : 8) + leftSpace}px`,
+    "--sidebar-center-width": `calc(100% - ${(isCompact ? 0 : 16) + leftSpace + rightSpace}px)`,
+    "--sidebar-center-offset": mobileOpen ? `${side === "left" ? groupWidth : -groupWidth}px` : "0px",
+  } as CSSProperties;
   const drawerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState("");
   const menuButton = useRef<HTMLButtonElement>(null);
@@ -79,21 +104,24 @@ function ShellContent({
     setDrawer(page);
   }
   useEffect(() => {
-    if (!narrow && !(drawer === "content" && (split && compactContent || adaptiveDrawer))) setDrawer(null);
-  }, [narrow, compactContent, split, adaptiveDrawer]);
+    if (!isCompact) setDrawer(null);
+  }, [isCompact, setDrawer]);
   useEffect(() => {
     if (!mobileOpen) return;
-    drawerRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus();
+    drawerRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus({ preventScroll: true });
     return () => {
       requestAnimationFrame(() => {
         if (document.querySelector("dialog[open]")) return;
-        const target = drawerOpener.current ?? menuButton.current;
-        if (target?.checkVisibility()) target.focus();
+        const target = drawerOpener.current;
+        const reveal = document.querySelector<HTMLElement>(`[data-sidebar-reveal="${split ? drawer : "single"}"]`);
+        if (reveal?.checkVisibility()) reveal.focus({ preventScroll: true });
+        else if (target?.checkVisibility()) target.focus({ preventScroll: true });
+        else menuButton.current?.focus({ preventScroll: true });
       });
     };
   }, [mobileOpen]);
   function reveal(page: "navigation" | "content") {
-    if (narrow || (page === "content" && (split && compactContent || adaptiveDrawer))) {
+    if (isCompact) {
       if (!split) update({ singleVisible: true });
       openDrawer(page); return;
     }
@@ -101,13 +129,13 @@ function ShellContent({
     focusSidebarControl(`[data-sidebar-hide="${page}"]`);
   }
   return (
-    <div className={`app-shell ${!orgRoute ? "platform-shell" : "sidebar-shell"}`} data-sidebar-style={workspaceBase ? preferences.style : "organization"} data-sidebar-side={preferences.side}>
+    <div className={`app-shell ${!orgRoute ? "platform-shell" : "sidebar-shell"}`} data-sidebar-style={workspaceBase ? preferences.style : "organization"} data-sidebar-side={preferences.side} data-compact={isCompact} data-drawer-open={mobileOpen}>
       <a className="skip-link" href="#main">
         Skip to content
       </a>
       <header className="platform-header" inert={mobileOpen}>
         <div className="platform-brand-row">
-          {orgRoute ? <button
+          {orgRoute && !workspaceBase ? <button
             ref={menuButton}
             className="icon-button mobile-menu"
             aria-label="Open navigation"
@@ -115,9 +143,7 @@ function ShellContent({
           >
             <Icon icon={Menu} size={18} weight="control" />
           </button> : null}
-          {orgRoute && !narrow && !navigationVisible && !(!split && singleContent && preferences.singleVisible) ? <button type="button" className="icon-button sidebar-reveal" data-sidebar-reveal={split ? "navigation" : "single"} aria-label="Show navigation sidebar" onClick={() => reveal(!split && singleContent ? "content" : "navigation")}><Icon icon={preferences.side === "right" && !split ? PanelRightOpen : PanelLeftOpen} size={18} /></button> : null}
           <Brand />
-          {workspaceBase && (split && (!contentVisible || narrow) || adaptiveDrawer && contentsSelected && !narrow) ? <button type="button" className="icon-button sidebar-reveal" data-sidebar-reveal="content" aria-label="Show workspace sidebar" onClick={() => reveal("content")}><Icon icon={!split && preferences.side === "left" ? PanelLeftOpen : PanelRightOpen} size={18} /></button> : null}
         </div>
         <nav aria-label="Platform navigation">
           {user.role === "owner" ? <>
@@ -135,7 +161,7 @@ function ShellContent({
         </nav>
         <ErrorNotice message={error} />
       </header>
-      <div className="shell-body">
+      <div className="shell-body" style={orgRoute ? layoutStyle : undefined}>
         {mobileOpen ? (
           <button
             className="sidebar-backdrop"
@@ -149,9 +175,9 @@ function ShellContent({
           role={mobileOpen ? "dialog" : undefined}
           aria-modal={mobileOpen || undefined}
           aria-label={mobileOpen ? drawer === "content" ? "Workspace sidebar" : "Navigation" : undefined}
-          className={`sidebar-layout ${mobileOpen ? "drawer-open" : ""} ${!split && preferences.style === "adaptive" && contentsSelected && preferences.singleVisible && !compactAdaptive && !mobileOpen ? "adaptive-expanded" : ""}`}
+          className={`sidebar-layout ${mobileOpen ? "drawer-open" : ""} ${expanded ? "adaptive-expanded" : ""}`}
           data-drawer={drawer ?? undefined}
-          data-side={split ? drawer === "content" ? "right" : "left" : preferences.side}
+          data-side={side}
           onClick={event => {
             if (!mobileOpen || !(event.target instanceof Element)) return;
             const link = event.target.closest("a[href]");
@@ -161,14 +187,14 @@ function ShellContent({
             if (!mobileOpen || event.target instanceof Element && event.target.closest("dialog[open]")) return;
             if (event.key === "Escape") { event.preventDefault(); setDrawer(null); }
             if (event.key === "Tab") {
-              const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("a[href],button:not([disabled]),select:not([disabled]),input:not([disabled]),summary")).filter(element => element.checkVisibility());
+              const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("a[href],button:not([disabled]),select:not([disabled]),input:not([disabled]),summary")).filter(element => element.checkVisibility() && !element.closest("[inert]"));
               const first = controls[0], last = controls.at(-1);
-              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus({ preventScroll: true }); }
+              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus({ preventScroll: true }); }
             }
           }}
         >
-          {mobileOpen ? <div className="sidebar-top">
+          <div className="sidebar-top" hidden={!mobileOpen}>
             <button
               className="icon-button mobile-close"
               aria-label="Close navigation"
@@ -176,8 +202,8 @@ function ShellContent({
             >
               <Icon icon={X} size={16} weight="control" />
             </button>
-          </div> : null}
-          <aside className={`sidebar ${showNavigation ? "rail-visible" : "rail-hidden"}`} aria-label="Organization sidebar">
+          </div>
+          <aside className={`sidebar ${showNavigation ? "rail-visible" : "rail-hidden"}`} aria-label="Organization sidebar" inert={!showNavigation}>
           <Routes>
             <Route
               path="/organizations/:orgId/*"
@@ -190,13 +216,18 @@ function ShellContent({
             />
           </Routes>
           </aside>
-          <div ref={setContentTarget} className={`sidebar-content-slot ${showContent ? "rail-visible" : "rail-hidden"}`} />
+          <div ref={setContentTarget} className={`sidebar-content-slot ${showContent ? "rail-visible" : "rail-hidden"}`} inert={!showContent} />
         </div> : null}
         <main
           id="main"
           className={`main-content ${/\/organizations\/[^/]+\/workspaces\/[^/]+/.test(location.pathname) ? "project-workspace" : ""}`}
           inert={mobileOpen}
+          data-reveal-space={revealNavigation || revealContent}
         >
+          {workspaceBase ? <div className="workspace-reveal-controls">
+            {revealNavigation ? <button type="button" className="icon-button sidebar-reveal" data-side={split ? "left" : preferences.side} data-sidebar-reveal={split ? "navigation" : "single"} aria-label="Show navigation sidebar" title="Show navigation sidebar" onClick={() => reveal(!split && singleContent ? "content" : "navigation")}><Icon icon={!split && preferences.side === "right" ? PanelRight : PanelLeft} size={18} /></button> : null}
+            {revealContent ? <button type="button" className="icon-button sidebar-reveal" data-side="right" data-sidebar-reveal="content" aria-label="Show workspace sidebar" title="Show workspace sidebar" onClick={() => reveal("content")}><Icon icon={PanelRight} size={18} /></button> : null}
+          </div> : null}
           {organizations.loading ? (
             <Loading />
           ) : organizations.error ? (

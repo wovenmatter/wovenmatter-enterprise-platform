@@ -338,7 +338,8 @@ test('coarse-pointer actions retain 44-point targets and Markdown utility strips
       });
       for (const item of geometry) { expect(item.height).toBeGreaterThanOrEqual(44); expect(item.width).toBeGreaterThanOrEqual(44); expect(item.contained).toBe(true); }
     }
-    await page.getByRole('button', { name: 'Open navigation', exact: true }).tap();
+    await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).tap();
+    await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).tap();
     const plus = page.getByRole('link', { name: `New chat in ${folder.name}`, exact: true });
     const box = await plus.boundingBox(); expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
     await plus.tap(); await expect(page.getByRole('dialog', { name: 'New conversation', exact: true })).toBeVisible();
@@ -377,7 +378,7 @@ test('narrow navigation opens from the left and preserves keyboard return across
   await page.getByRole('link', { name: 'Parity workspace', exact: true }).click();
   await expect(page).toHaveURL(/\/workspaces\/parity-project$/);
   await expect(sidebar).toBeHidden();
-  await page.setViewportSize({ width: 761, height: 844 });
+  await page.setViewportSize({ width: 904, height: 844 });
   await expect(menu).toBeHidden(); await expect(sidebar).toBeVisible();
   await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
   expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);

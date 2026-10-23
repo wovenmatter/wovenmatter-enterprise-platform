@@ -41,9 +41,8 @@ export function WorkspaceDetails({ project, chats, folderName, query, base, erro
   }
   const rows = tab === "chats" ? visibleChats : visibleNotes;
   const pinned = (item: Conversation | ContentRecord) => "data" in item ? Boolean(item.data.pinned) : item.pinned;
-  // Compact Adaptive uses one drawer page at a time, so keep creation actions
-  // reachable when navigation is behind the Back control.
-  const showQuickActions = sidebar.preferences.style !== "adaptive" || sidebar.compactAdaptive;
+  // Keep creation actions reachable in the viewport-limited paged drawer.
+  const showQuickActions = sidebar.preferences.style !== "adaptive" || sidebar.pagedAdaptive;
   return <aside className="workspace-detail-rail" aria-label="Workspace content">
     <header className="workspace-detail-heading"><SidebarControls page="content" placement="leading" onBack={() => {
       sidebar.showNavigation(); navigate(`${base}?${query}`);
