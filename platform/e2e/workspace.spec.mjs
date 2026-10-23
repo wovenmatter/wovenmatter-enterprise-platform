@@ -2563,9 +2563,17 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
   ).toBe(true);
   const rail = await page.locator(".sidebar").elementHandle();
   const draft = page.getByLabel("Message your agent");
+  await expect(page.locator(".sidebar")).toBeVisible();
+  await expect(page.locator(".sidebar-backdrop")).toHaveCount(0);
+  async function showNavigation() {
+    const reveal = page.getByRole("button", { name: "Show navigation sidebar", exact: true });
+    if (await reveal.isVisible()) await reveal.click();
+    const back = page.getByRole("button", { name: "Back to workspace navigation", exact: true });
+    if (await back.isVisible()) await back.click();
+    await expect(page.locator(".sidebar")).toBeVisible();
+  }
   await draft.fill("Keep this unsent project draft");
-  await page.getByRole("button", { name: "Show navigation sidebar", exact: true }).click();
-  if (await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).isVisible()) await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).click();
+  await showNavigation();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Workspace Files", exact: true })
@@ -2574,8 +2582,7 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
     page.getByRole("heading", { name: "Workspace Files", exact: true }),
   ).toBeVisible();
   expect(await rail.evaluate((node) => node.isConnected)).toBe(true);
-  await page.getByRole("button", { name: "Show navigation sidebar", exact: true }).click();
-  if (await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).isVisible()) await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).click();
+  await showNavigation();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Workspace layout review", exact: true })
@@ -2585,8 +2592,7 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
   await expect(draft).toHaveValue("Keep this unsent project draft");
   await expect(page).toHaveURL(url => url.origin === f.origin && url.pathname === base
     && url.searchParams.get("folder") === "all" && url.searchParams.get("conversation") === first.id);
-  await page.getByRole("button", { name: "Show navigation sidebar", exact: true }).click();
-  if (await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).isVisible()) await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).click();
+  await showNavigation();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Read-only research", exact: true })
@@ -2598,6 +2604,11 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
   await expect(page.locator(".thread-header h2")).toHaveText(
     "Workspace layout review",
   );
+  await expect(draft).toHaveValue("Keep this unsent project draft");
+  // Adaptive opens contents on folder selection, then expands that same page
+  // beside navigation when the viewport has room for both rails.
+  await page.locator(".sidebar").getByRole("link", { name: "All Workspaces", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Workspace content" })).toBeVisible();
   await expect(draft).toHaveValue("Keep this unsent project draft");
   await page.screenshot({ path: `${evidence}/workspace-855.png` });
   await page.setViewportSize({ width: 1536, height: 1024 });
@@ -2628,8 +2639,7 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
     modelControls[0].right <= modelControls[1].left ||
       modelControls[0].bottom <= modelControls[1].top,
   ).toBe(true);
-  await page.getByRole("button", { name: "Show navigation sidebar", exact: true }).click();
-  if (await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).isVisible()) await page.getByRole("button", { name: "Back to workspace navigation", exact: true }).click();
+  await showNavigation();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Read-only research", exact: true })
