@@ -1,4 +1,6 @@
-import { NativeControls } from "./native-controls";
+import { ComposerTools, defaultConversationTools, type ConversationTools } from "./composer-tools";
+import { ComposerAttachments, ComposerAttachmentChips, type ComposerAttachment } from "./composer-attachments";
+import { useNativeControls } from "./native-controls";
 import { WorkspaceNotePanel } from "../shell/WorkspaceDetails";
 import { agents, agentName, acceptsModel } from "../agents";
 import {
@@ -24,8 +26,11 @@ import {
   ChevronDown,
   Copy,
   Cpu,
-  FolderOpen,
+  Folder,
   MessageSquare,
+  Mic,
+  FileText,
+  Paperclip,
   Settings,
   Square,
   Trash2,
@@ -87,6 +92,7 @@ import {
 } from "../components/ui";
 export type { Model, Conversation } from "../api";
 type Message = {
+  attachments?: ComposerAttachment[];
   id: string;
   requestId?: string;
   role: "user" | "assistant";
@@ -142,6 +148,7 @@ export function ConversationsPage({ project }: { project: Project }) {
       ? requestedConversation
       : undefined;
   const creating = query.get("new") === "1";
+  const [startError, setStartError] = useState("");
   useEffect(() => {
     if (requestedConversation) list.reload();
   }, [requestedConversation, list.reload]);
@@ -187,6 +194,7 @@ export function ConversationsPage({ project }: { project: Project }) {
           <Thread
             key={conversationId}
             id={conversationId}
+            initialError={startError}
             project={project}
             models={models.data?.items ?? []}
             refresh={workspaceChanged}
@@ -208,12 +216,20 @@ export function ConversationsPage({ project }: { project: Project }) {
             />
           )
         ) : !agentDefaults.data && agentDefaults.loading ? <Loading /> : (
-          <WorkspaceWelcome key={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "loading"} title={selectedFolder?.name ?? project.name} initialAgent={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "pi"} models={models.data?.items ?? []} onStart={async (harness, model, content) => {
-            const chat = await send<Conversation>(`/enterprise/api/projects/${project.id}/conversations`, { harness, model: model || undefined, folderId: selectedFolder?.id ?? null, mode: "write" });
+          <WorkspaceWelcome key={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "loading"} title={selectedFolder?.name ?? project.name} initialAgent={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "pi"} models={models.data?.items ?? []}
+            project={project} folders={folders.data?.items} folderError={folders.error} folderId={query.get("folder") === "all" ? null : query.get("folder")}
+            onFolderChange={folderId => setQuery(current => { const next = new URLSearchParams(current); next.set("folder", folderId ?? "all"); return next; }, { replace: true })}
+            onStart={async (harness, model, content, folderId, attachments, tools) => {
+            setStartError("");
+            const chat = await send<Conversation>(`/enterprise/api/projects/${project.id}/conversations`, { harness, model: model || undefined, folderId, tools, mode: "write" });
             const draftKey = `wme:draft:${user.id}:${chat.id}`, pendingKey = `wme:pending:${user.id}:${chat.id}`;
-            const pending = { id: crypto.randomUUID(), content, kind: "message" as const };
-            saveConversationDraft(draftKey, content, "message"); savePendingMessage(pendingKey, pending);
-            try { await send(`/enterprise/api/conversations/${chat.id}/messages`, { content, kind: "message", requestId: pending.id }); settleConversationInput(pendingKey, draftKey, pending); } catch { /* Retained pending request is safely retried in the thread. */ }
+            const pending = { id: crypto.randomUUID(), content, kind: "message" as const, attachments };
+            saveConversationDraft(draftKey, content, "message", undefined, attachments); savePendingMessage(pendingKey, pending);
+            try { await send(`/enterprise/api/conversations/${chat.id}/messages`, { content, kind: "message", requestId: pending.id, attachments: attachments.map(({kind,id}) => ({kind,id})) }); settleConversationInput(pendingKey, draftKey, pending); } catch (error) {
+              // A known rejection has no admitted message. Keep the saved draft
+              // editable in its new chat; only an unknown delivery keeps a retry identity.
+              if (error instanceof ApiError && error.status < 500) { clearPendingMessage(pendingKey); setStartError(errorMessage(error)); }
+            }
             select(chat.id, chat.folderId); workspaceChanged();
           }} />
         )}
@@ -255,11 +271,47 @@ export function ConversationsPage({ project }: { project: Project }) {
     </div>
   );
 }
-function WorkspaceWelcome({ title, initialAgent, models, onStart }: { title: string; initialAgent: string; models: Model[]; onStart: (harness: string, model: string, content: string) => Promise<void> }) {
+function WorkspaceWelcome({ title, initialAgent, models, project, folders, folderError, folderId, onFolderChange, onStart }: {
+  title: string; initialAgent: string; models: Model[]; project: Project; folders?: WorkspaceFolder[]; folderError?: string;
+  folderId: string | null; onFolderChange: (id: string | null) => void;
+  onStart: (harness: string, model: string, content: string, folderId: string | null, attachments: ComposerAttachment[], tools: ConversationTools) => Promise<void>;
+}) {
+  const { org } = useWorkspace();
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [tools, setTools] = useState(defaultConversationTools);
+  const [uploading, setUploading] = useState(false);
   const [harness, setHarness] = useState(initialAgent), [model, setModel] = useState("");
+  const [collapsed, setCollapsed] = useState(false);
   const [draft, setDraft] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
-  async function submit() { if (!draft.trim() || busy) return; setBusy(true); setError(""); try { await onStart(harness, model, draft); } catch (e) { setError(errorMessage(e)); setBusy(false); } }
-  return <div className="workspace-welcome"><header className="thread-header"><h2>{title}</h2></header><Empty title="What would you like to work on?">Start a conversation with your agent.</Empty><div className="composer-area"><ErrorNotice message={error} /><form onSubmit={event => { event.preventDefault(); void submit(); }}><textarea aria-label="Message your agent" placeholder="Message your agent…" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} /><div className="composer-controls"><Picker label="Agent" heading="Agent" icon={Cpu} value={harness} placeholder="Agent" options={agents.map(agent => ({ value: agent.id, label: agent.name, description: agent.detail }))} onChange={value => { setHarness(value); setModel(""); }} disabled={busy} />{<Picker label="Model" heading="Model" icon={Cpu} value={model} placeholder="Workspace default" options={[{ value: "", label: "Workspace default" }, ...models.filter(model => acceptsModel(harness, model.provider)).map(model => ({ value: model.id, label: model.name }))]} onChange={setModel} disabled={busy} />}<div className="composer-send-actions"><button className="send-button" aria-label="Send message" type="submit" disabled={busy || !draft.trim()}><Icon icon={ArrowUp} size={16} weight="send" /></button></div></div></form><div className="composer-status" role="status">{busy ? "Starting conversation…" : "Shared with your workspace"}</div></div></div>;
+  const unavailableFolder = Boolean(folderId && folders && !folders.some(folder => folder.id === folderId));
+  const ready = Boolean(folders) && !folderError && !unavailableFolder;
+  async function submit() { if ((!draft.trim() && !attachments.length) || busy || uploading || !ready) return; setBusy(true); setError(""); try { await onStart(harness, model, draft, folderId, attachments, tools); } catch (e) { setError(errorMessage(e)); setBusy(false); } }
+  return <div className="workspace-welcome"><header className="thread-header"><h2>{title}</h2></header><Empty title="What would you like to work on?">Start a conversation with your agent.</Empty><div className="composer-area"><ErrorNotice message={error || folderError || (unavailableFolder ? "This folder is unavailable. Choose All Workspaces or another folder." : "")} /><form className={collapsed ? "composer-collapsed" : undefined} onSubmit={event => { event.preventDefault(); void submit(); }}>
+    <ConversationFolder folders={folders} folderId={folderId} disabled={busy || !folders || Boolean(folderError)} onChange={onFolderChange} />
+    <ComposerAttachmentChips projectId={project.id} attachments={attachments} onChange={setAttachments} disabled={busy} />
+    <textarea aria-label="Message your agent" placeholder="Message your agent…" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} /><div className="composer-controls"><ComposerAttachments orgId={org.id} projectId={project.id} attachments={attachments} onChange={setAttachments} disabled={busy} onBusy={setUploading} /><Picker label="Agent" heading="Agent" icon={Cpu} value={harness} placeholder="Agent" options={agents.map(agent => ({ value: agent.id, label: agent.name, description: agent.detail }))} onChange={value => { setHarness(value); setModel(""); }} disabled={busy} />{<Picker label="Model" heading="Model" icon={Cpu} value={model} placeholder="Workspace default" options={[{ value: "", label: "Workspace default" }, ...models.filter(model => acceptsModel(harness, model.provider)).map(model => ({ value: model.id, label: model.name }))]} onChange={setModel} disabled={busy} />}<ComposerTools settings={tools} onChange={setTools} disabled={busy} /><div className="composer-send-actions"><ComposerCollapse collapsed={collapsed} onChange={setCollapsed} /><ComposerMicrophone /><button className="send-button" aria-label="Send message" type="submit" disabled={busy || uploading || !ready || (!draft.trim() && !attachments.length)}><Icon icon={ArrowUp} size={16} weight="send" /></button></div></div></form><div className="composer-status" role="status">{busy ? "Starting conversation…" : "Shared with your workspace"}</div></div></div>;
+}
+
+function ConversationFolder({ folders, folderId, disabled, locked, workingDirectory, onChange }: {
+  folders?: WorkspaceFolder[]; folderId: string | null; disabled: boolean; locked?: boolean;
+  workingDirectory?: string | null; onChange: (id: string | null) => void;
+}) {
+  return <div className="composer-folder-row"><Picker label="Conversation folder" heading="Folder" icon={Folder}
+    className={`composer-folder${locked ? " composer-folder-locked" : ""}`} width={320} value={folderId ?? ""}
+    placeholder="All Workspaces" title={locked ? `The folder is fixed after the first message.${workingDirectory ? ` Working directory: ${workingDirectory}` : ""}` : "Choose a folder in this workspace"}
+    options={[{ value: "", label: "All Workspaces" }, ...(folderId && !folders?.some(folder => folder.id === folderId) ? [{ value: folderId, label: "Unavailable folder", disabled: true }] : []), ...(folders?.map(folder => ({ value: folder.id, label: folder.name })) ?? [])]}
+    disabled={disabled || locked} onChange={value => onChange(value || null)} /></div>;
+}
+
+function ComposerMicrophone() {
+  return <button type="button" className="composer-microphone" disabled aria-label="Dictation coming later" title="Dictation coming later"><Icon icon={Mic} size={16} weight="control" /></button>;
+}
+
+function ComposerCollapse({ collapsed, onChange }: { collapsed: boolean; onChange: (value: boolean) => void }) {
+  return <button type="button" className="composer-collapse" aria-label={collapsed ? "Expand composer" : "Collapse composer"}
+    title={collapsed ? "Expand composer" : "Collapse composer"} aria-expanded={!collapsed} onClick={() => onChange(!collapsed)}>
+    <Icon icon={ChevronDown} size={18} weight="control" className={collapsed ? undefined : "composer-collapse-up"} />
+  </button>;
 }
 
 function PiSDKSettings({ conversationId }: { conversationId: string }) {
@@ -615,6 +667,7 @@ function RetainedReply({ id, message }: { id: string; message: Message }) {
 }
 export function Thread({
   id,
+  initialError = "",
   project,
   models,
   refresh,
@@ -622,13 +675,14 @@ export function Thread({
   asset,
 }: {
   id: string;
+  initialError?: string;
   project?: Project;
   models: Model[];
   refresh: () => void;
   onDeleted: () => void;
   asset?: { onSaved: () => void };
 }) {
-  const { user } = useWorkspace();
+  const { user, org } = useWorkspace();
   const assetSaved = useRef(asset?.onSaved);
   assetSaved.current = asset?.onSaved;
   const [, setWorkspaceQuery] = useSearchParams();
@@ -658,6 +712,8 @@ export function Thread({
   const [olderLoaded, setOlderLoaded] = useState(false);
   const draftKey = `wme:draft:${user.id}:${id}`;
   const [savedDraft] = useState(() => loadConversationDraft(draftKey));
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>(restored?.attachments ?? savedDraft?.attachments ?? []);
+  const [uploading, setUploading] = useState(false);
   const [draft, setDraft] = useState(
     restored?.content ?? savedDraft?.content ?? "",
   );
@@ -665,8 +721,8 @@ export function Thread({
     restored?.kind ?? savedDraft?.kind ?? "message",
   );
   useEffect(() => {
-    saveConversationDraft(draftKey, draft, kind);
-  }, [draftKey, draft, kind]);
+    saveConversationDraft(draftKey, draft, kind, undefined, attachments);
+  }, [draftKey, draft, kind, attachments]);
   const inputElement = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const input = inputElement.current;
@@ -678,6 +734,7 @@ export function Thread({
   }, [draft]);
   const [nativeOpen, setNativeOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [acceptedMessage, setAcceptedMessage] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
   const [uncertain, setUncertain] = useState(Boolean(restored));
   const request = useRef<
@@ -685,10 +742,12 @@ export function Thread({
         id: string;
         content: string;
         kind?: "message" | "comment";
+        attachments?: ComposerAttachment[];
       }
     | undefined
   >(restored);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
+  const [collapsed, setCollapsed] = useState(false);
   // A navigation can lose the POST acknowledgement after durable admission.
   // Reconcile only this user's exact receipt; never replay an uncertain input.
   useEffect(() => {
@@ -702,14 +761,17 @@ export function Thread({
           message.authorId === user.id &&
           message.requestId === pending.id &&
           message.content === pending.content.trim() &&
+          JSON.stringify((message.attachments ?? []).map(({kind,id}) => ({kind,id}))) === JSON.stringify((pending.attachments ?? []).map(({kind,id}) => ({kind,id}))) &&
           (message.kind ?? "message") === (pending.kind ?? "message"),
       )
     )
       return;
     request.current = undefined;
+    if (pending.kind !== "comment") setAcceptedMessage(true);
     settleConversationInput(pendingKey, draftKey, pending);
     setUncertain(false);
     setDraft((current) => (current === pending.content ? "" : current));
+    setAttachments(current => JSON.stringify(current) === JSON.stringify(pending.attachments ?? []) ? [] : current);
     setError("");
   }, [messages.data, uncertain, pendingKey, user.id]);
   const [streamState, setStreamState] = useState("Connecting…");
@@ -750,6 +812,8 @@ export function Thread({
     runs.data?.items.filter((r) => activeStatuses.has(r.status)) ?? [];
   const creator = Boolean(detail.data);
   const canAct = Boolean(detail.data);
+  const native = useNativeControls({ conversation: detail.data, models, disabled: active.length > 0 || sending || uncertain || modelSaving,
+    onSaving: setModelSaving, onSaved: () => { detail.reload(); refresh(); } });
   async function stop() {
     try {
       await send(`/enterprise/api/conversations/${id}/cancel`, {});
@@ -920,7 +984,8 @@ export function Thread({
       !canAct ||
       sending ||
       modelSaving ||
-      (!draft.trim() && !request.current)
+      uploading ||
+      (!draft.trim() && !attachments.length && !request.current)
     )
       return;
     if (kind === "message" && !active.length && detail.data?.harness === "pi" && !detail.data?.model) {
@@ -933,6 +998,7 @@ export function Thread({
       id: crypto.randomUUID(),
       content: draft,
       kind,
+      attachments,
     };
     request.current = pending;
     savePendingMessage(pendingKey, pending);
@@ -941,11 +1007,15 @@ export function Thread({
         content: pending.content,
         requestId: pending.id,
         kind: pending.kind ?? "message",
+        attachments: (pending.attachments ?? []).map(({kind,id}) => ({kind,id})),
       });
       request.current = undefined;
+      if (pending.kind !== "comment") setAcceptedMessage(true);
+      detail.reload();
       settleConversationInput(pendingKey, draftKey, pending);
       setUncertain(false);
       setDraft("");
+      setAttachments([]);
       messages.reload();
       runs.reload();
       refresh();
@@ -1099,6 +1169,7 @@ export function Thread({
                 <time dateTime={m.createdAt}>{date(m.createdAt)}</time>
               </div>
               <div className="message-content">
+                {m.attachments?.length ? <div className="message-attachments">{m.attachments.map(item => <span key={`${item.kind}:${item.id}`}><Icon icon={item.kind === "conversation" ? MessageSquare : item.kind === "note" ? FileText : Paperclip} size={14} />{item.title}</span>)}</div> : null}
                 {m.role === "assistant" ? (
                   activityByRun.has(m.runId) ? (
                     <>
@@ -1231,7 +1302,7 @@ export function Thread({
           ))}
       </div>
       <div className="composer-area">
-        {detail.data && detail.data.harness !== "pi" ? <NativeControls conversation={detail.data} models={models} onSaved={() => { detail.reload(); refresh(); }} /> : null}
+        {native.feedback}
         {!following ? (
           <button
             type="button"
@@ -1251,7 +1322,7 @@ export function Thread({
           items={activity.items}
           activeRunIds={new Set(active.map((run) => run.id))}
         />
-        <form
+        <form className={collapsed ? "composer-collapsed" : undefined}
           onSubmit={(e) => {
             e.preventDefault();
             void submit();
@@ -1261,68 +1332,21 @@ export function Thread({
             Message your agent
           </label>
           {!asset ? (
-            <div className="composer-folder-row">
-              <Picker
-                label="Conversation folder"
-                heading="Folder"
-                icon={FolderOpen}
-                className="composer-folder"
-                width={320}
-                value={detail.data?.folderId ?? ""}
-                placeholder="All Workspaces"
-                title={
-                  detail.data?.workingDirectory ??
-                  "Choose a working folder before sending"
-                }
-                options={[
-                  { value: "", label: "All Workspaces" },
-                  ...(detail.data?.folderId &&
-                  !folders.data?.items.some((f) => f.id === detail.data?.folderId)
-                    ? [{ value: detail.data.folderId, label: "Removed folder" }]
-                    : []),
-                  ...(folders.data?.items.map((f) => ({
-                    value: f.id,
-                    label: f.name,
-                  })) ?? []),
-                ]}
-                disabled={
-                  !detail.data ||
-                  detail.data.workspaceLocked ||
-                  detail.data.createdBy !== user.id ||
-                  sending ||
-                  modelSaving ||
-                  uncertain
-                }
-                onChange={async (value) => {
-                  const navigationTarget = window.location.href;
-                  const folderId = value || null;
-                  setModelSaving(true);
-                  try {
-                    const updated = await send<Conversation>(
-                      `/enterprise/api/conversations/${id}/organization`,
-                      { folderId },
-                      "PATCH",
-                    );
-                    if (window.location.href === navigationTarget)
-                      setWorkspaceQuery(
-                        (current) => {
-                          const next = new URLSearchParams(current);
-                          next.set("folder", updated.folderId ?? "all");
-                          return next;
-                        },
-                        { replace: true },
-                      );
-                    detail.reload();
-                    workspaceChanged();
-                  } catch (e) {
-                    setError(errorMessage(e));
-                  } finally {
-                    setModelSaving(false);
-                  }
-                }}
-              />
-            </div>
+            <ConversationFolder folders={folders.data?.items} folderId={detail.data?.folderId ?? null}
+              workingDirectory={detail.data?.workingDirectory} locked={detail.data?.workspaceLocked || acceptedMessage}
+              disabled={!detail.data || !folders.data || Boolean(folders.error) || sending || modelSaving || uncertain}
+              onChange={async folderId => {
+                const navigationTarget = window.location.href;
+                setModelSaving(true);
+                try {
+                  const updated = await send<Conversation>(`/enterprise/api/conversations/${id}/organization`, { folderId }, "PATCH");
+                  if (window.location.href === navigationTarget) setWorkspaceQuery(current => { const next = new URLSearchParams(current); next.set("folder", updated.folderId ?? "all"); return next; }, { replace: true });
+                  detail.reload(); workspaceChanged();
+                } catch (e) { setError(errorMessage(e)); }
+                finally { setModelSaving(false); }
+              }} />
           ) : null}
+          <ComposerAttachmentChips projectId={project?.id} attachments={attachments} onChange={setAttachments} disabled={sending || uncertain} />
           <textarea
             ref={inputElement}
             id="message"
@@ -1345,20 +1369,22 @@ export function Thread({
             }}
           />
           <div className="composer-controls">
+            {!asset && project ? <ComposerAttachments key={id} orgId={org.id} projectId={project.id} attachments={attachments} onChange={setAttachments} disabled={sending || uncertain || !canAct || kind === "comment"} onBusy={setUploading} /> : null}
             {(!detail.data?.harness || detail.data.harness === "pi") ? <ModelControls
               conversation={detail.data}
               models={models}
               disabled={
                 active.length > 0 || sending || uncertain || modelSaving
               }
-              canEdit={creator && canAct}
+              canEdit={canAct}
               onSaving={setModelSaving}
               onSaved={() => {
                 detail.reload();
                 refresh();
               }}
               onError={setError}
-            /> : null}
+            /> : native.controls}
+            {!asset ? <ComposerTools conversationId={id} settings={detail.data?.tools} onSaved={detail.reload} onSaving={setModelSaving} disabled={!canAct || sending || uncertain || modelSaving} /> : null}
             <div className="composer-send-actions">
               <div className="message-kind">
                 <Picker
@@ -1378,13 +1404,16 @@ export function Thread({
                     {
                       value: "comment",
                       label: "Comment",
+                      disabled: attachments.length > 0,
                       description: "Saved for later agent context without starting work.",
                     },
                   ]}
                   onChange={(value) => setKind(value as "message" | "comment")}
                 />
               </div>
-              {active.length ? (
+              <ComposerCollapse collapsed={collapsed} onChange={setCollapsed} />
+              <ComposerMicrophone />
+              {active.length && !draft.trim() && !attachments.length && !uncertain ? (
                 <button
                   className="stop-button"
                   type="button"
@@ -1395,8 +1424,7 @@ export function Thread({
                 >
                   <Icon icon={Square} size={12} weight="control" />
                 </button>
-              ) : null}
-              <button
+              ) : <button
                 type="submit"
                 className={`send-button${uncertain ? " retry" : ""}`}
                 aria-label={
@@ -1410,7 +1438,8 @@ export function Thread({
                   !canAct ||
                   sending ||
                   modelSaving ||
-                  (!draft.trim() && !uncertain)
+                  uploading ||
+                  (!draft.trim() && !attachments.length && !uncertain)
                 }
               >
                 {uncertain ? (
@@ -1418,7 +1447,7 @@ export function Thread({
                 ) : (
                   <Icon icon={ArrowUp} size={16} weight="send" />
                 )}
-              </button>
+              </button>}
             </div>
           </div>
         </form>

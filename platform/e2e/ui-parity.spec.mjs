@@ -16,8 +16,8 @@ const picker = (page, label) => page.getByRole('button', { name: new RegExp(`^${
 test('menus and pickers focus visible choices, navigate, dismiss', async ({ page, baseURL }) => {
   const state = await parityFixture(page, { baseURL });
   await page.goto(workspace);
-  const menu = page.getByRole('button', { name: `Actions for folder ${folder.name}`, exact: true });
-  await menu.focus(); await page.keyboard.press('Enter');
+  const menu = page.getByRole('link', { name: folder.name, exact: true });
+  await menu.focus(); await page.keyboard.press('Shift+F10');
   await expect(page.getByRole('menuitem').first()).toBeFocused();
   await page.keyboard.press('End'); await expect(page.getByRole('menuitem').last()).toBeFocused();
   await page.keyboard.press('Home'); await expect(page.getByRole('menuitem').first()).toBeFocused();
@@ -33,7 +33,7 @@ test('menus and pickers focus visible choices, navigate, dismiss', async ({ page
   await page.keyboard.press('ArrowDown'); await expect(page.getByRole('option', { name: 'Other synthetic model' })).toBeFocused();
   await expect(page.getByRole('listbox')).toBeVisible();
   await page.keyboard.press('Tab'); await expect(page.getByRole('listbox')).toHaveCount(0); await expect(model).toBeFocused();
-  await model.click(); await menu.click();
+  await model.click(); await menu.click({ button: 'right' });
   await expect(page.getByRole('listbox')).toHaveCount(0); await expect(page.getByRole('menu')).toBeVisible();
   await page.getByRole('heading', { name: 'Retained parity conversation' }).click();
   await expect(page.getByRole('menu')).toHaveCount(0);
@@ -499,7 +499,7 @@ test('confirmation checkboxes keep a visible keyboard focus outline in every the
     await page.context().unrouteAll();
     const state = await parityFixture(page, { baseURL, theme });
     await page.goto(workspace);
-    await page.getByRole('button', { name: `Actions for folder ${folder.name}`, exact: true }).click();
+    await page.getByRole('link', { name: folder.name, exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Remove folder…', exact: true }).click();
     const checkbox = page.getByRole('checkbox');
     await checkbox.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');

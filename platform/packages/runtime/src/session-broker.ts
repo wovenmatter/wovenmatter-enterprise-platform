@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Socket } from "node:net";
 import type { RuntimeRequest } from "./types.js";
+import { MAX_INPUT_BYTES } from "./attachments.js";
 
 /** Stable private session endpoints. Native processes never receive upstream capabilities. */
 export async function sessionBroker(
@@ -67,7 +68,7 @@ export async function sessionBroker(
       let size = 0;
       req.on("data", (chunk) => {
         size += chunk.length;
-        if (size > 16 * 1024 * 1024) upstream.destroy();
+        if (size > MAX_INPUT_BYTES) upstream.destroy();
       });
       upstream.on("error", () => {
         if (!res.headersSent) res.writeHead(502);

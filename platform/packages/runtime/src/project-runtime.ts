@@ -834,6 +834,7 @@ export class ProjectDockerRuntime implements Runtime {
           request.connectionId,
           request.access,
           request.prompt,
+          request.attachments,
           request.resumeId,
           request.generation,
           request.userId,

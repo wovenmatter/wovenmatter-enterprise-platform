@@ -1,5 +1,30 @@
 # Organization workspace native parity
 
+## Current folder and attachment follow-up
+
+Source inspected from freshly fetched WovenMatter `origin/main`:
+**`f885d2818f9cc380612bd1f4cf32176d3c99dd5e`** (PR #151). The reference checkout
+was not moved. Relevant original changes are folder roots
+`1596b976d0ffc3426613900185dfc440e6a8af32`, persistent scratch
+`e0168b0bd52ba7130c70e12f5487b58ff8138330` and locked picker presentation
+`b6453dce1e8ee08d5a730f83c30ba046ab22957b`.
+
+| Behavior | Exact current source | Enterprise adaptation and proof |
+| --- | --- | --- |
+| Named folder versus All Workspaces | `app/App/ApplicationModel.swift:5202–5262,5333–5355`; `app/Sources/WovenMatterDashboardStore/WorkspaceDatabase+Scratch.swift:5–47`; `app/Sources/WovenMatterCore/WorkspaceScratchDirectory.swift:3–12` | Retains existing backend behavior: named chats share the saved blank folder root; unfoldered chats reserve a distinct stable scratch root under `/workspace/.WovenMatter/scratch`. Reservation precedes creation, survives retries/restarts and is never silently rerouted. Cloud filesystem resolution, held directory identity and traversal/symlink rejection remain. `folder-binding.test.ts` covers five harness selections, rejected first input, accepted launch failure and resumed binding. |
+| Native cwd and persistence | `app/Sources/WovenMatterClient/LocalACPClient.swift:730–753,842–848,946–953`; `OpenCodeSessionCoordinator.swift:132–144,192–203`; `app/App/Models/OpenCodeModel.swift:357–407,467–491,524–542` | All engines receive the persisted cwd. ACP fixtures exercise actual child process cwd and new/load arguments; OpenCode HTTP fixtures check create/resume directory; Pi fixtures exercise actual native file tools. Enterprise `pi` maps to desktop `default_agent` / Pi Durable, not the retired raw `pi` engine. Native private history remains in `/session`, outside the shared workspace. |
+| First-send admission and failures | `ApplicationModel.swift:2592–2601,2683–2710`; `app/Sources/WovenMatterClient/LocalACPSessionCoordinator.swift:415–500`; `app/Sources/WovenMatterDashboardStore/WorkspaceDatabase+LocalACP.swift:581–606` | Pre-admission rejection leaves drafts mutable. Accepted user messages lock the root even if launch fails. Stable receipts reject changed content/references; unknown outcomes are never automatically replayed. A folder change cannot migrate launched sessions. |
+| ACP photo/file input and steering | `LocalACPClient.swift:1230,1297–1301,1402,1472–1530` | Immutable authorized snapshots become ACP image/base64, UTF-8 resource or binary resource_link blocks, backed by content-addressed private `/session/attachments` files. No-follow held-directory writes reject symlinks/hardlinks and repair altered ordinary copies. Grok uses the desktop concurrent `session/prompt` path when steering includes attachments. `attachments.test.ts`, `native-harnesses.test.ts`. |
+| OpenCode attachments | `OpenCodeSessionCoordinator.swift:743–807` | Narrow vendored `task-gateway-native.mjs` extension passes `{uri,name}` data files on create/prompt and receipt-checked `delivery:steer`; preserves the existing native lifecycle and unknown-outcome fences. Deterministic HTTP fixture validates byte equality, root and resume. |
+| Pi Durable attachment limitation | Desktop embedded `default-agent` advertises `image:false` and accepts text blocks | The embedded SDK is unchanged. Enterprise's wrapper stages private immutable bytes and gives the existing native read/document tools explicit paths, including during steering. This preserves file access; it is not native image-prompt support. `enterprise-pi.test.ts` verifies actual native file-tool access. |
+| Input limits and isolation | `app/Sources/WovenMatterCore/MessageAttachments.swift:295–299` | 8 files, 25 MiB each, 50 MiB total. Authenticated input envelopes are 72 MiB to carry base64; text is bounded at 512 KiB UTF-8 and output limits remain unchanged. API admission reserves text overhead and rejects oversized notes explicitly. Synthetic 50 MiB staging and authenticated Unix-broker forwarding verify bytes without a provider. Per-chat tools remain enforced at the current-authority API broker, not merely in the prompt. |
+
+No dependency, pinned CLI, embedded Pi source or SDK-generation update is part of
+this follow-up. Selective preview code overlays preserve its existing Node runtime.
+These deterministic checks establish source/transport/root behavior; hosted
+`container-boundary` remains a separate mandatory gate. Live provider-specific
+attachment limits and image interpretation are not proved by synthetic fixtures.
+
 Source: immutable WovenMatter commit `04fe05090e107df92c498a4563b742978c91d933`.
 The source checkout and acceptance evidence are operator files outside Git.
 

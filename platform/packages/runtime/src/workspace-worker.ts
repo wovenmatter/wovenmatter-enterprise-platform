@@ -213,6 +213,7 @@ export async function launchWorkspaceWorker(
         model: next.model,
         ...(next.pi ? { pi: next.pi } : {}),
         prompt: next.prompt,
+        ...(next.attachments ? { attachments: next.attachments } : {}),
         access: next.access,
         mountEvidence: sandbox.attestations,
         gateway: {

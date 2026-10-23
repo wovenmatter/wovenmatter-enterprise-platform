@@ -133,7 +133,7 @@ test('Agents and Folders are independent sections with working folder navigation
   await rail.getByRole('link', { name: folder.name, exact: true }).click();
   await expect(page).toHaveURL(new URL(`${base}/workspaces/${project.id}?folder=${folder.id}&conversation=parity-chat`, baseURL).href);
   await expect(page.getByRole('textbox', { name: 'Message your agent', exact: true })).toBeVisible();
-  await rail.getByRole('button', { name: `Actions for folder ${folder.name}`, exact: true }).click();
+  await rail.getByRole('link', { name: folder.name, exact: true }).click({ button: 'right' });
   await expect(page.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible();
   expect(state.errors).toEqual([]); expect(state.external).toEqual([]);
 });

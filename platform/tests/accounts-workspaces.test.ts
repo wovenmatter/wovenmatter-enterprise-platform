@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { platformFixture } from "./fixtures/platform.js";
 import { createDatabase, migrateFoundation } from "../apps/api/src/db/index.js";
 import { migrateNativeHarnesses } from "../apps/api/src/conversations/native-schema.js";
+import { migrateConversationAttachments } from "../apps/api/src/conversations/attachments.js";
+import { migrateConversationTools } from "../apps/api/src/conversations/conversation-tools.js";
 import { uploadFile, shareFile, revokeShare, readCurrentFile } from "../apps/api/src/files/service.js";
 
 test("owner alone manages platform identities and pending accounts can join multiple organizations safely", async (t) => {
@@ -123,7 +125,7 @@ test("populated foundation migration preserves identities, grants, invitations a
 test("full populated upgrade retains authentication, archived native history, indexes and explicitly shared organization files", async (t) => {
   const db = await createDatabase(":memory:");
   const legacyDatabase = { ...db, migrate: (name: string, sql: string, options?: { rebuild?: boolean }) =>
-    ["platform-accounts-workspaces-v2", "conversation-five-native-harnesses-v1"].includes(name)
+    ["platform-accounts-workspaces-v2", "conversation-five-native-harnesses-v1", "conversation-tool-settings-v1", "conversation-attachments-v1"].includes(name)
       ? Promise.resolve() : db.migrate(name, sql, options) };
   const f = await platformFixture(t, { database: legacyDatabase, startConversations: false });
   f.ctx.onAccessChanged = undefined;
@@ -146,6 +148,12 @@ test("full populated upgrade retains authentication, archived native history, in
   await migrateFoundation(db);
   await migrateNativeHarnesses({ ...f.ctx, db });
   for (const table of unchanged) assert.deepEqual(await db.all(`SELECT * FROM ${table} ORDER BY rowid`), snapshots.get(table), table);
+  // Apply later additive migrations only after the native table rebuild, as
+  // production startup does; a legacy fixture must not apply future columns first.
+  await migrateConversationTools({ ...f.ctx, db });
+  await migrateConversationAttachments({ ...f.ctx, db });
+  assert.equal((await db.get<any>("SELECT tool_settings FROM conversations WHERE id='legacy-chat'"))!.tool_settings, '{}');
+  assert.equal((await db.get<any>("SELECT attachments FROM conversation_messages WHERE id='legacy-user'"))!.attachments, '[]');
   for (const index of indexes) assert.ok(await db.get("SELECT name FROM sqlite_master WHERE type='index' AND name=?", [index.name]), index.name);
   assert.equal((await db.get<any>("SELECT access FROM project_members WHERE project_id=? AND user_id=?", [f.projectA, f.users.read.id]))!.access, "write");
   const chat = await db.get<any>("SELECT * FROM conversations WHERE id='legacy-chat'");

@@ -1,8 +1,11 @@
+import { readConversationTools } from "./conversation-tools.js";
+import { storedAttachments } from "./attachments.js";
 import type { Runtime } from "@wovenmatter-enterprise/runtime";
 import type { AppContext, User } from "../context.js";
 export type Harness = import("@wovenmatter-enterprise/runtime").Harness;
 export type Mode = "read" | "write";
 export interface ConversationRow {
+  tool_settings?: string;
   folder_id?: string | null;
   working_directory?: string | null;
   directory_device?: string | null;
@@ -52,6 +55,7 @@ export interface RunRow {
   completed_at: string | null;
 }
 export interface MessageRow {
+  attachments?: string;
   content_truncated?: number;
   activity_count?: number;
   id: string;
@@ -150,6 +154,7 @@ export function conversationView(c: ConversationRow) {
     harness: c.harness,
     pi: JSON.parse(c.pi_options ?? "{}"),
     native: JSON.parse(c.native_options ?? "{}"),
+    tools: readConversationTools(c.tool_settings),
     model: c.model,
     connectionId: c.connection_id,
     createdAt: c.created_at,
@@ -191,6 +196,7 @@ export function messageView(m: MessageRow) {
     authorId: m.author_id,
     authorName: m.author_name ?? null,
     content: m.content,
+    attachments: storedAttachments(m.attachments).map(({body, ...reference}) => reference),
     contentTruncated: Boolean(m.content_truncated),
     activityCount: m.activity_count ?? undefined,
     citations: JSON.parse(m.citations),

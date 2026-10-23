@@ -1,33 +1,37 @@
 import { useState } from "react";
-import { Brain, Cpu, ShieldCheck } from "lucide-react";
+import { Brain, Cpu, KeyRound } from "lucide-react";
 import { send, useResource, type Conversation, type Model } from "../api";
-import { agentName, acceptsModel } from "../agents";
+import { acceptsModel } from "../agents";
 import { Picker, Switch } from "../components/controls";
 import { ErrorNotice, Field } from "../components/ui";
 type Option = { id: string; label: string };
 type NativeQuestion = { id: string; prompt: string; options: Option[]; allowsMultiple: boolean; allowsFreeText: boolean; required: boolean; type?: "string" | "boolean" | "number" | "integer" | "multiselect" | "external"; hidden?: boolean; default?: string[]; when?: {key:string;op:"eq"|"neq";value:string|string[]|number|boolean}[]; url?: string };
 type Interaction = { id: string; kind: "approval" | "question"; title: string; detail?: string; options: Option[]; questions: NativeQuestion[] };
 type Native = { harness: string; runId: string | null; configured: { thinking?: string; permission?: string }; settings: null | { model: string; thinking: string; permission: string; models: Option[]; thinkingLevels: Option[]; permissions: Option[]; canSteer: boolean; canConfigure: boolean }; interactions: Interaction[] };
-export function NativeControls({ conversation, models, onSaved }: { conversation: Conversation; models: Model[]; onSaved: () => void }) {
-  const native = useResource<Native>(`/enterprise/api/conversations/${conversation.id}/native`, 2500);
+export function useNativeControls({ conversation, models, disabled, onSaving, onSaved }: { conversation?: Conversation; models: Model[]; disabled: boolean; onSaving: (saving: boolean) => void; onSaved: () => void }) {
+  const native = useResource<Native>(conversation && conversation.harness !== "pi" ? `/enterprise/api/conversations/${conversation.id}/native` : null, 2500);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const settings = native.data?.settings;
-  const modelOptions = models.filter(model => acceptsModel(conversation.harness, model.provider)).map(model => ({ value: model.id, label: settings?.models.find(option => option.id === model.id)?.label ?? model.name }));
+  const modelOptions = models.filter(model => acceptsModel(conversation?.harness ?? "pi", model.provider)).map(model => ({ value: model.id, label: settings?.models.find(option => option.id === model.id)?.label ?? model.name }));
   async function update(body: unknown) {
-    setBusy(true); setError("");
+    if (!conversation || disabled || busy) return;
+    setBusy(true); onSaving(true); setError("");
     try { await send(`/enterprise/api/conversations/${conversation.id}`, body, "PATCH"); onSaved(); native.reload(); }
-    catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    catch (e) { setError((e as Error).message); } finally { setBusy(false); onSaving(false); }
   }
-  return <div className="native-controls"><ErrorNotice message={error || native.error} />
-    {native.data?.interactions.map(interaction => <NativeInteraction key={interaction.id} conversationId={conversation.id} interaction={interaction} onResolved={native.reload} />)}
-    <div className="native-selectors"><span className="native-agent-name">{agentName(conversation.harness)}</span>
-      <Picker label="Native model" heading="Model" icon={Cpu} value={conversation.model || settings?.model || ""} placeholder="Agent default model" disabled={busy || settings?.canConfigure === false} options={modelOptions} onChange={model => void update({model})} />
-      {settings?.thinkingLevels.length ? <Picker label="Native thinking level" heading="Thinking Level" icon={Brain} value={native.data?.configured.thinking ?? settings.thinking} placeholder="Thinking" disabled={busy || !settings.canConfigure} options={settings.thinkingLevels.map(option => ({ value: option.id, label: option.label }))} onChange={thinking => void update({ native: { thinking } })} /> : null}
-      {settings?.permissions.length ? <Picker label="Native permissions" heading="Permissions" icon={ShieldCheck} value={native.data?.configured.permission ?? settings.permission} placeholder="Permissions" disabled={busy || !settings.canConfigure} options={settings.permissions.map(option => ({ value: option.id, label: option.label }))} onChange={permission => void update({ native: { permission } })} /> : null}
-    </div>
-    {settings && ((conversation.model && settings.model && conversation.model !== settings.model) || (native.data?.configured.thinking && native.data.configured.thinking !== settings.thinking) || (native.data?.configured.permission && native.data.configured.permission !== settings.permission)) ? <small role="status">Saved settings will apply on the next turn.</small> : null}
-  </div>;
+  if (!conversation || conversation.harness === "pi") return { controls: null, feedback: null };
+  return {
+    controls: <div className="composer-model-controls native-selectors">
+      <Picker label="Native model" heading="Model" icon={Cpu} value={conversation.model || settings?.model || ""} placeholder="Agent default model" disabled={disabled || busy || settings?.canConfigure === false} options={modelOptions} onChange={model => void update({model})} />
+      {settings?.thinkingLevels.length ? <Picker label="Native thinking level" heading="Thinking Level" icon={Brain} value={native.data?.configured.thinking ?? settings.thinking} placeholder="Thinking" disabled={disabled || busy || !settings.canConfigure} options={settings.thinkingLevels.map(option => ({ value: option.id, label: option.label }))} onChange={thinking => void update({ native: { thinking } })} /> : null}
+      {settings?.permissions.length ? <Picker label="Native permissions" heading="Permissions" icon={KeyRound} value={native.data?.configured.permission ?? settings.permission} placeholder="Permissions" disabled={disabled || busy || !settings.canConfigure} options={settings.permissions.map(option => ({ value: option.id, label: option.label }))} onChange={permission => void update({ native: { permission } })} /> : null}
+    </div>,
+    feedback: <div className="native-controls"><ErrorNotice message={error || native.error} />
+      {native.data?.interactions.map(interaction => <NativeInteraction key={interaction.id} conversationId={conversation.id} interaction={interaction} onResolved={native.reload} />)}
+      {settings && ((conversation.model && settings.model && conversation.model !== settings.model) || (native.data?.configured.thinking && native.data.configured.thinking !== settings.thinking) || (native.data?.configured.permission && native.data.configured.permission !== settings.permission)) ? <small role="status">Saved settings will apply on the next turn.</small> : null}
+    </div>,
+  };
 }
 function NativeInteraction({ conversationId, interaction, onResolved }: { conversationId: string; interaction: Interaction; onResolved: () => void }) {
   const [busy, setBusy] = useState(false);

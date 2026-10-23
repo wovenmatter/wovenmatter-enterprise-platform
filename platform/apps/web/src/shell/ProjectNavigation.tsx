@@ -41,6 +41,7 @@ import {
 import { AsyncForm, Field, Modal, ErrorNotice } from "../components/ui";
 import {
   DisclosureChevron,
+  ContextMenu,
   Icon,
   Menu,
   MenuItem,
@@ -87,8 +88,9 @@ function NewChat({ label, to }: { label: string; to: string }) {
 /** DashboardFolderHoverCard at native 24e503f, DashboardSharedViews.swift:989.
  * Counts include only conversations already authorized by the project API.
  */
-function FolderRailLink({ folder, workspace, count, to, selected, onSelect }: {
+function FolderRailRow({ folder, workspace, count, to, selected, onSelect, actions, children }: {
   folder: WorkspaceFolder; workspace: string; count: number; to: string; selected: boolean; onSelect: () => void;
+  actions: ReactNode; children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLAnchorElement>(null);
@@ -131,8 +133,9 @@ function FolderRailLink({ folder, workspace, count, to, selected, onSelect }: {
     };
   }, [open]);
   const summary = `${count} ${count === 1 ? "conversation" : "conversations"}`;
-  return <>
-    <Link ref={anchor} className={`nav-link ${selected ? "active" : ""}`} to={to}
+  return <ContextMenu label={`Actions for folder ${folder.name}`} trigger={anchor} actions={actions} onOpen={close}>
+    {attributes => <>
+    <Link ref={anchor} {...attributes} className={`nav-link ${selected ? "active" : ""}`} to={to}
       aria-label={folder.name}
       data-folder-selection="true"
       aria-description={[workspace, summary, `Root folder: ${folder.rootPath}`, ...folder.referencePaths.map((path) => `Additional folder: ${path}`), folder.pinned ? "Pinned" : ""].filter(Boolean).join(", ")}
@@ -146,6 +149,7 @@ function FolderRailLink({ folder, workspace, count, to, selected, onSelect }: {
       {folder.pinned ? <Icon icon={Pin} size={11} className="rail-pin" /> : null}
       <span className="rail-count" aria-hidden="true">{count}</span>
     </Link>
+    {children}
     {open ? <div ref={card} id={id} role="tooltip" popover="manual" className="popup folder-hover-card"
       onPointerEnter={() => clearTimeout(timer.current)} onPointerLeave={deferClose}>
       <strong>{folder.name}</strong>
@@ -156,7 +160,8 @@ function FolderRailLink({ folder, workspace, count, to, selected, onSelect }: {
         {folder.referencePaths.length ? <><strong>Additional folders</strong>{folder.referencePaths.map((path) => <span key={path}>{path}</span>)}</> : null}
       </div>
     </div> : null}
-  </>;
+    </>}
+  </ContextMenu>;
 }
 
 export function ProjectNavigation({
@@ -260,6 +265,17 @@ function WorkspaceRail({
     kind: "create" | "rename" | "references" | "remove";
     folder?: WorkspaceFolder;
   } | null>(null);
+  const folderModalTrigger = useRef<HTMLElement | null>(null);
+  function openFolderModal(next: NonNullable<typeof modal>) {
+    folderModalTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setModal(next);
+  }
+  useLayoutEffect(() => {
+    if (modal) return;
+    const trigger = folderModalTrigger.current;
+    folderModalTrigger.current = null;
+    if (trigger?.isConnected) trigger.focus({ preventScroll: true });
+  }, [modal]);
   const [renameChat, setRenameChat] = useState<Conversation | null>(null);
   const writable = Boolean(project);
   const onWorkspace = location.pathname.endsWith(projectId);
@@ -432,23 +448,17 @@ function WorkspaceRail({
             type="button"
             className="nav-link"
             aria-label="New workspace folder"
-            onClick={() => setModal({ kind: "create" })}
+            onClick={() => openFolderModal({ kind: "create" })}
           >
             <Icon icon={Plus} size={13} />
             <span>New folder</span>
           </button>
         ) : null}
         {folders.data?.items.map((f, index, all) => (
-          <div className="rail-row" key={f.id}>
-            <FolderRailLink folder={f} workspace={project?.name ?? "Workspace"}
-              count={count(f.id)} selected={onWorkspace && selected === f.id && !trash}
-              to={url({ folder: f.id })} onSelect={selectFolder} />
-            {writable ? (
-              <Menu
-                label={`Actions for folder ${f.name}`}
-                iconSize={12}
-                className="rail-action"
-              >
+          <FolderRailRow key={f.id} folder={f} workspace={project?.name ?? "Workspace"}
+            count={count(f.id)} selected={onWorkspace && selected === f.id && !trash}
+            to={url({ folder: f.id })} onSelect={selectFolder}
+            actions={writable ? <>
                 <MenuItem
                   onSelect={() =>
                     void mutation(
@@ -484,28 +494,27 @@ function WorkspaceRail({
                 >
                   Move down
                 </MenuItem>
-                <MenuItem onSelect={() => setModal({ kind: "rename", folder: f })}>
+                <MenuItem onSelect={() => openFolderModal({ kind: "rename", folder: f })}>
                   Rename
                 </MenuItem>
                 <MenuItem
-                  onSelect={() => setModal({ kind: "references", folder: f })}
+                  onSelect={() => openFolderModal({ kind: "references", folder: f })}
                 >
                   Reference locations…
                 </MenuItem>
                 <MenuSeparator />
                 <MenuItem
                   danger
-                  onSelect={() => setModal({ kind: "remove", folder: f })}
+                  onSelect={() => openFolderModal({ kind: "remove", folder: f })}
                 >
                   Remove folder…
                 </MenuItem>
-              </Menu>
-            ) : null}
+            </> : null}>
             <NewChat
               label={`New chat in ${f.name}`}
               to={url({ folder: f.id, new: "1" })}
             />
-          </div>
+          </FolderRailRow>
         ))}
       </RailSection>
       <Link

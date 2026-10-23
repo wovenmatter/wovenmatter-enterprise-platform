@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
+import {mkdir, mkdtemp, readFile, rm, writeFile} from "node:fs/promises";
 import {existsSync} from "node:fs";
 import {join} from "node:path";
 import {tmpdir} from "node:os";
 import {createServer} from "node:http";
+import {fileURLToPath} from "node:url";
 import {runNative, nativeEnvironment, nativeCommand, harnessCatalog, nativeRunTokens, grokConfiguration} from "../src/native-harnesses.ts";
 import {JsonRpcProcess} from "../src/rpc.ts";
 import {SteeringChannel} from "../src/steering.ts";
@@ -12,14 +13,14 @@ import type {ContainerRequest, Harness, RuntimeEvent} from "../src/types.ts";
 import type {NativeSessionState} from "../src/native.ts";
 
 const request = (harness: Harness, directory: string): ContainerRequest => ({runId:"fixture-run",projectId:"fixture-project",harness,model:"fixture-model",prompt:"hello",access:"write",workingDirectory:directory,gateway:{baseUrl:"http://127.0.0.1:4101/inference",token:"fixture_local_broker_capability_only"}});
-async function fixture(t: any, harness: Harness) {
+async function fixture(t: any, harness: Harness, directory?: string) {
   const home = await mkdtemp(join(tmpdir(), "wme-native-fixture-"));
   const trace = join(home,"trace.jsonl"), retained: NativeSessionState = {}, processes: JsonRpcProcess[] = [];
   t.after(async()=> {for(const process of processes)process.close();await Promise.all(processes.map(p=>p.stopped));await rm(home,{recursive:true,force:true});});
   const launch = (command: string,args: string[],env: Record<string,string>,cwd: string) => {
     assert.equal(command,nativeCommand(request(harness,home)).command);
     if(harness==='grok_build')assert.deepEqual(args.slice(-3),['agent','--no-leader','stdio']);
-    assert.equal(cwd,home);
+    assert.equal(cwd,directory ?? home);
     assert.equal(existsSync(join(home,'.codex')),true,'Codex home must exist before the real adapter starts');
     const child = new JsonRpcProcess(process.execPath,[join(process.cwd(),"platform/runtime/native-protocol-fixture.mjs"),command,...args],{...env,FIXTURE_TRACE:trace},cwd);
     processes.push(child);return child;
@@ -55,6 +56,45 @@ test("Grok custom models preserve all three native protocols and never serialize
   }
 });
 for(const harness of ['codex','claude_code','grok_build'] as const) {
+  test(`${harness} named and scratch cwd survive native reopen while files use private multimodal snapshots`,async t=>{
+    const root=await mkdtemp(join(tmpdir(),'wme-native-folders-'));
+    t.after(()=>rm(root,{recursive:true,force:true}));
+    for(const kind of ['Named folder','scratch/2026-10-23-example-12345678']) {
+      const directory=join(root,'.WovenMatter',kind);
+      await mkdir(directory,{recursive:true});
+      const f=await fixture(t,harness,directory),channel=new SteeringChannel();
+      const attachments=[
+        {name:'pixel.png',mimeType:'image/png',data:Buffer.from('synthetic image bytes').toString('base64')},
+        {name:'note.txt',mimeType:'text/plain',data:Buffer.from('Résumé snapshot').toString('base64')},
+        {name:'document.pdf',mimeType:'application/pdf',data:Buffer.from('%PDF-fixture').toString('base64')},
+      ];
+      const input={...request(harness,directory),prompt:'steer',attachments};
+      const running=runNative(input,()=>{},new AbortController().signal,channel,f.retained,f);
+      await channel.submit({id:'attached-steering',sequence:1,authorId:'u',authorName:'User',content:'Use attached files',attachments});
+      await running;await channel.settle();
+      const trace=await f.readTrace();
+      const inputs=trace.filter(item=>item.method==='session/prompt'||item.method==='_session/steering');
+      assert.equal(inputs.length,2);
+      for(const item of inputs) {
+        assert.deepEqual(item.params.prompt.find((block:any)=>block.type==='image'),{type:'image',mimeType:'image/png',data:attachments[0].data});
+        const resource=item.params.prompt.find((block:any)=>block.type==='resource').resource;
+        assert.equal(resource.text,'Résumé snapshot');
+        const linked=item.params.prompt.find((block:any)=>block.type==='resource_link');
+        const path=fileURLToPath(linked.uri);
+        assert.ok(path.startsWith(f.home+'/attachments/'));
+        assert.ok(!path.startsWith(directory+'/'));
+        assert.ok(item.params.prompt[0].text.includes(path));
+        assert.equal(await readFile(path,'utf8'),'%PDF-fixture');
+      }
+      assert.equal(trace.some(item=>item.method==='_x.ai/interject'),false,'Grok file input must use its concurrent multimodal prompt');
+      (f.retained.native as any).rpc.close();await (f.retained.native as any).rpc.stopped;
+      await runNative({...input,runId:'cold-reopen',prompt:'Continue',resumeId:'native_fixture'},()=>{},new AbortController().signal,new SteeringChannel(),{},f);
+      const final=await f.readTrace();
+      assert.equal(final.find(item=>item.method==='session/new').params.cwd,directory);
+      assert.equal(final.find(item=>item.method==='session/load').params.cwd,directory);
+      assert.equal(existsSync(join(directory,'.codex')),false,'Private native home must not be created in the project folder');
+    }
+  });
   test(`${harness} command, root ordering, native settings, stream, retained session and load`,async t=>{
     const f=await fixture(t,harness), events: RuntimeEvent[]=[], channel=new SteeringChannel();
     const r={...request(harness,f.home),prompt:'steer',native:{thinking:'high'}};
@@ -156,4 +196,52 @@ test('OpenCode v2 HTTP lifecycle preserves cwd, native receipts, approval and tr
   assert.ok(paths.some(path=>path.endsWith('/prompt')));
   assert.equal(paths.filter(path=>path.endsWith('/form/form_fixture/reply')).length,1,'Invalid response must never cross the native transport');
   assert.ok(!JSON.stringify(events).includes('fixture-secret'));
+});
+
+test('OpenCode named and scratch sessions send image files on initial input and ordered steering',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'wme-opencode-attachments-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  for(const kind of ['Named folder','scratch/2026-10-23-opencode-12345678']) {
+    const directory=join(root,'.WovenMatter',kind),home=await mkdtemp(join(tmpdir(),'wme-opencode-private-'));
+    await mkdir(directory,{recursive:true});
+    t.after(()=>rm(home,{recursive:true,force:true}));
+    let session:any,active=false,creations=0;
+    const submissions:any[]=[];
+    const server=createServer(async(req,res)=>{
+      let raw='';for await(const chunk of req)raw+=chunk;
+      const body=raw?JSON.parse(raw):{},path=new URL(req.url!,'http://localhost').pathname;
+      let value:any;
+      if(path==='/api/info')value={pid:123,version:'2.1.2'};
+      else if(path==='/api/session/active')value={data:active?{[session.id]:true}:{}};
+      else if(path==='/api/session'&&req.method==='POST'){creations++;session={...body,model:{providerID:'enterprise',id:'fixture-model'}};value={data:session};}
+      else if(path==='/api/model')value={data:[{providerID:'enterprise',id:'fixture-model',enabled:true,variants:[]}]};
+      else if(path==='/api/model/default')value={data:{providerID:'enterprise',id:'fixture-model'}};
+      else if(path.endsWith('/model')){session.model=body.model;value={};}
+      else if(path.endsWith('/prompt')){submissions.push(body);active=submissions.length===1;value={data:{id:body.id}};}
+      else if(path.endsWith('/permission')||path.endsWith('/form'))value={data:[]};
+      else if(path.endsWith('/message'))value={data:submissions.length<2?[]:submissions.slice().reverse().flatMap((item,index)=>[{id:'answer-'+item.id,sessionID:session.id,role:'assistant',parts:[{type:'text',text:'Files inspected '+index}]},{id:item.id,sessionID:session.id,role:'user',parts:[]}])};
+      else value={data:session};
+      res.setHeader('content-type','application/json');res.end(JSON.stringify(value));
+    });
+    await new Promise<void>(resolve=>server.listen(0,'127.0.0.1',resolve));
+    try {
+      const registrationPath=join(home,'registration.json');
+      await writeFile(registrationPath,JSON.stringify({pid:123,version:'2.1.2',password:'fixture-secret',url:`http://127.0.0.1:${(server.address() as any).port}`}));
+      const attachments=[{name:'photo.png',mimeType:'image/png',data:Buffer.from('synthetic photo').toString('base64')}];
+      const channel=new SteeringChannel(),events:RuntimeEvent[]=[];
+      const running=runNative({...request('opencode',directory),attachments},event=>{events.push(event)},new AbortController().signal,channel,{}, {home,instances:{registrationPath,async action(){}}});
+      await channel.submit({id:'image-steering',sequence:1,authorId:'u',authorName:'User',content:'Inspect again',attachments});
+      await running;await channel.settle();
+      assert.equal(session.location.directory,directory);
+      assert.equal(submissions.length,2);
+      assert.equal(submissions[1].delivery,'steer');
+      assert.notEqual(submissions[0].id,submissions[1].id);
+      for(const input of submissions)assert.deepEqual(input.files,[{name:'photo.png',uri:'data:image/png;base64,'+attachments[0].data}]);
+      assert.ok(events.some(event=>event.type==='native_update'&&event.update.sessionUpdate==='woven_native_settings'&&(event.update.settings as any).canSteer===true));
+      await runNative({...request('opencode',directory),runId:'cold-reopen',resumeId:session.id,attachments},()=>{},new AbortController().signal,new SteeringChannel(),{}, {home,instances:{registrationPath,async action(){}}});
+      assert.equal(creations,1,'Cold reopen must resume the saved native session');
+      assert.equal(session.location.directory,directory);
+      assert.equal(submissions.length,3);
+    } finally { await new Promise<void>(resolve=>server.close(()=>resolve())); }
+  }
 });

@@ -1,5 +1,6 @@
 import { isAbsolute, posix, resolve, relative, sep } from "node:path";
 import { realpath, lstat } from "node:fs/promises";
+import { validateAttachments } from "./attachments.js";
 import {
   RuntimeError,
   type ContainerRequest,
@@ -9,6 +10,11 @@ import {
 
 export const MAX_LINE = 1024 * 1024;
 export const MAX_OUTPUT = 16 * 1024 * 1024;
+export const MAX_PROMPT_BYTES = 512 * 1024;
+export function validateInputText(value: unknown, allowEmpty = false): asserts value is string {
+  if (typeof value !== "string" || (!allowEmpty && !value.length) || Buffer.byteLength(value) > MAX_PROMPT_BYTES)
+    throw new RuntimeError("invalid_request", "Prompt exceeds the supported size");
+}
 export function identity(value: string): string {
   if (
     typeof value !== "string" ||
@@ -18,6 +24,7 @@ export function identity(value: string): string {
   return value;
 }
 export function validateContainerRequest(input: ContainerRequest): void {
+  validateAttachments(input.attachments);
   if (
     typeof input.workingDirectory !== "string" ||
     (input.workingDirectory !== "/workspace" &&
@@ -47,15 +54,7 @@ export function validateContainerRequest(input: ContainerRequest): void {
   if (input.native !== undefined && (!input.native || typeof input.native !== "object" ||
       Object.entries(input.native).some(([key, value]) => !["thinking", "permission"].includes(key) || typeof value !== "string" || !/^[a-zA-Z0-9_.-]{1,100}$/.test(value))))
     throw new RuntimeError("invalid_request", "Invalid native configuration");
-  if (
-    typeof input.prompt !== "string" ||
-    input.prompt.length < 1 ||
-    Buffer.byteLength(input.prompt) > 512 * 1024
-  )
-    throw new RuntimeError(
-      "invalid_request",
-      "Prompt exceeds the supported size",
-    );
+  validateInputText(input.prompt);
   if (
     typeof input.model !== "string" ||
     !/^[a-zA-Z0-9][a-zA-Z0-9_./:@+-]{0,255}$/.test(input.model)

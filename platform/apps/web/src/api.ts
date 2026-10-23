@@ -163,6 +163,7 @@ export type Run = {
   completedAt?: string | null;
 };
 export type Conversation = {
+  tools?: { notes: boolean; history: boolean; usage: boolean; calendar: boolean; library: boolean };
   folderId: string | null;
   workingDirectory: string | null;
   workspaceLocked: boolean;

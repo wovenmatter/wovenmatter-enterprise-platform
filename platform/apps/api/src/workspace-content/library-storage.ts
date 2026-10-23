@@ -173,15 +173,21 @@ async function insertAsset(ctx: AppContext, user: User, projectId: string, asset
 export async function captureLibraryMessage(ctx: AppContext, user: User, projectId: string, messageId: string) {
  return withContentLock(ctx, `library:${projectId}`, async () => {
   await ctx.requireProject(user, projectId);
-  const message = await ctx.db.get<{ content: string; citations: string }>(`SELECT m.content,m.citations FROM conversation_messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=? AND c.project_id=? AND c.deleted_at IS NULL AND c.asset_id IS NULL`, [messageId, projectId]);
+  const message = await ctx.db.get<{ content: string; citations: string; attachments: string }>(`SELECT m.content,m.citations,m.attachments FROM conversation_messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=? AND c.project_id=? AND c.deleted_at IS NULL AND c.asset_id IS NULL`, [messageId, projectId]);
   if (!message) return;
   const latest = await ctx.db.get<{ordinal: number | null}>(`SELECT MAX(n.ordinal) ordinal FROM conversation_native_records n JOIN conversation_runs r ON r.id=n.run_id WHERE r.assistant_message_id=?`, [messageId]);
-  const digest = createHash("sha256").update(message.content + message.citations + String(latest?.ordinal ?? 0)).digest("hex");
+  const digest = createHash("sha256").update(message.content + message.citations + message.attachments + String(latest?.ordinal ?? 0)).digest("hex");
   if (await ctx.db.get("SELECT 1 FROM workspace_library_messages WHERE message_id=? AND digest=?", [messageId, digest])) return;
   // Chunk bytes are read sequentially by the authenticated manifest decoder;
   // loading a page of base64 chunk payloads here would multiply peak memory.
   const archive = await ctx.db.all<{payload: string; ordinal: number; source_id: string}>(`SELECT n.payload,n.ordinal,n.source_id FROM conversation_native_records n JOIN conversation_runs r ON r.id=n.run_id WHERE r.assistant_message_id=? AND n.kind!='native-file.chunk' ORDER BY n.ordinal DESC LIMIT 200`, [messageId]);
   for (const asset of discoverLibraryAssets(message.content)) await insertAsset(ctx, user, projectId, asset, { messageId });
+  for (const attachment of JSON.parse(message.attachments ?? "[]")) {
+    if (attachment.kind !== "file" || !attachment.versionId) continue;
+    const auth = await authorizeFile(ctx, user, attachment.id, projectId, false, true);
+    if (auth.row.project_id !== projectId) continue;
+    await insertAsset(ctx, user, projectId, { source: `workspace-file:${attachment.id}/${attachment.versionId}`, title: attachment.title, type: libraryKind(attachment.title) }, { messageId, fileId: attachment.id, versionId: attachment.versionId });
+  }
   const sources = new Map<string, unknown[]>();
   for (const record of archive) {
    try {

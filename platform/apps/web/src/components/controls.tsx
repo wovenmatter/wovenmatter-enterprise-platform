@@ -6,10 +6,12 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type AriaAttributes,
   type ChangeEvent,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   Check,
@@ -76,22 +78,29 @@ function place(anchor: DOMRect, node: HTMLElement, align: "start" | "end") {
   return { top, left };
 }
 type Focus = "selected" | "first" | "last";
-function usePopup(align: "start" | "end") {
+export function usePopup<T extends HTMLElement = HTMLButtonElement>(
+  align: "start" | "end",
+  anchorRef?: RefObject<T | null>,
+) {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
-  const trigger = useRef<HTMLButtonElement>(null);
+  const defaultTrigger = useRef<T>(null);
+  const trigger = anchorRef ?? defaultTrigger;
+  const [pointerOffset, setPointerOffset] = useState<{ x: number; y: number } | null>(null);
   const popup = useRef<HTMLDivElement>(null);
   const initialFocus = useRef<Focus>("selected");
   const entry = useRef({ close: () => setOpen(false) });
   const close = useCallback((restoreFocus: boolean) => {
     setOpen(false);
     if (restoreFocus) trigger.current?.focus({ preventScroll: true });
-  }, []);
-  const show = useCallback((focus: Focus) => {
+  }, [trigger]);
+  const show = useCallback((focus: Focus, point?: { x: number; y: number }) => {
     initialFocus.current = focus;
+    const bounds = trigger.current?.getBoundingClientRect();
+    setPointerOffset(point && bounds ? { x: point.x - bounds.left, y: point.y - bounds.top } : null);
     setStyle({ visibility: "hidden" });
     setOpen(true);
-  }, []);
+  }, [trigger]);
   useLayoutEffect(() => {
     const node = popup.current;
     if (!open || !node) return;
@@ -107,7 +116,9 @@ function usePopup(align: "start" | "end") {
         close(false);
         return;
       }
-      const position = place(anchor, node, align);
+      const position = place(pointerOffset
+        ? new DOMRect(anchor.left + pointerOffset.x, anchor.top + pointerOffset.y, 0, 0)
+        : anchor, node, align);
       // Position before focusing: hidden elements cannot take focus.
       node.style.top = `${position.top}px`;
       node.style.left = `${position.left}px`;
@@ -186,7 +197,7 @@ function usePopup(align: "start" | "end") {
       window.removeEventListener("resize", reposition);
       if (activePopup === entry.current) activePopup = null;
     };
-  }, [open, align, close]);
+  }, [open, align, close, trigger, pointerOffset]);
   function keys(event: KeyboardEvent<HTMLDivElement>, choose?: () => void) {
     const node = popup.current;
     if (!node) return;
@@ -234,7 +245,7 @@ function focusPopupItem(node: HTMLElement, item: HTMLElement) {
 function focusable(node: HTMLElement) {
   return Array.from(
     node.querySelectorAll<HTMLElement>(
-      '[role="menuitem"]:not(:disabled),[role="option"]:not([aria-disabled="true"])',
+      '[role="menuitem"]:not(:disabled),[role="option"]:not([aria-disabled="true"]),[role="switch"]:not(:disabled)',
     ),
   );
 }
@@ -254,6 +265,7 @@ export function Menu({
   className = "",
   align = "end",
   triggerText,
+  disabled,
 }: {
   label: string;
   triggerText?: string;
@@ -263,14 +275,20 @@ export function Menu({
   iconWeight?: IconWeight;
   className?: string;
   align?: "start" | "end";
+  disabled?: boolean;
 }) {
   const popup = usePopup(align);
+  const close = popup.close;
+  useLayoutEffect(() => {
+    if (disabled && popup.open) close(true);
+  }, [disabled, popup.open, close]);
   const id = useId();
   return (
     <>
       <button
         ref={popup.trigger}
         type="button"
+        disabled={disabled}
         className={`icon-button menu-trigger ${className}`}
         aria-label={label}
         title={label}
@@ -302,6 +320,49 @@ export function Menu({
       ) : null}
     </>
   );
+}
+
+/** A row's actions, opened at the pointer or from its existing focusable link. */
+export function ContextMenu({ label, trigger, actions, children, onOpen }: {
+  label: string;
+  trigger: RefObject<HTMLAnchorElement | null>;
+  actions: ReactNode;
+  children: (attributes: AriaAttributes) => ReactNode;
+  onOpen: () => void;
+}) {
+  const popup = usePopup("start", trigger);
+  const id = useId();
+  return <>
+    <div className="rail-row"
+      onClick={() => popup.close(false)}
+      onContextMenu={event => {
+        if (!actions) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+        popup.show("first", { x: event.clientX, y: event.clientY });
+      }}
+      onKeyDown={event => {
+        if (!actions || event.target !== trigger.current ||
+          !(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+        popup.show("first");
+      }}>
+      {children(actions ? {
+        "aria-haspopup": "menu",
+        "aria-expanded": popup.open,
+        "aria-controls": popup.open ? id : undefined,
+        "aria-keyshortcuts": "Shift+F10",
+      } : {})}
+    </div>
+    {popup.open ? <div ref={popup.popup} id={id} role="menu" tabIndex={-1}
+      aria-label={label} popover="manual" className="popup menu" style={popup.style}
+      onKeyDown={event => popup.keys(event)}>
+      <MenuContext.Provider value={popup.close}>{actions}</MenuContext.Provider>
+    </div> : null}
+  </>;
 }
 export function MenuItem({
   children,

@@ -7,6 +7,7 @@ import { JsonRpcProcess, type RpcMessage } from "./rpc.js";
 import { agentInstructions, runtimeEnvironment, egressEnvironment, type NativeSessionState } from "./native.js";
 import { steeringText, type SteeringChannel } from "./steering.js";
 import { RuntimeError, type ContainerRequest, type EventSink, type Harness } from "./types.js";
+import { prepareAttachments, attachmentPrompt, openCodeFiles } from "./attachments.js";
 
 const source = (name: string) => import(new URL(`./embedded/native-harnesses/${name}.mjs`, import.meta.url).href);
 export const harnessCatalog = [
@@ -101,6 +102,7 @@ export async function runNative(request: ContainerRequest, emit: EventSink, sign
   // per-harness state directories; native tools never discover the host home.
   for (const directory of [".codex", ".claude", ".grok", ".config", ".local/share", ".local/state"])
     await mkdir(join(home, directory), {recursive: true, mode: 0o700});
+  const files = await prepareAttachments(request.attachments, home);
   let state = retained.native as NativeState | undefined;
   if (state?.poison === request.runId) throw failure("native_outcome_uncertain");
   // An uncertain run identity cannot replay. A different explicit user run can
@@ -138,7 +140,7 @@ export async function runNative(request: ContainerRequest, emit: EventSink, sign
     return request.harness === "claude_code" ? {...value, model: request.model, models: []} : value;
   };
   if (request.harness === "opencode") {
-    await runOpenCode(request, state, signal, channel, home, update, interaction, publish, options.instances);
+    await runOpenCode(request, state, signal, channel, home, update, interaction, publish, openCodeFiles(files), options.instances);
     await output;
     return;
   }
@@ -212,7 +214,7 @@ export async function runNative(request: ContainerRequest, emit: EventSink, sign
     signal.addEventListener("abort", cancel, {once: true});
     try {
       // Submit the root first. Opening steering before this write can reorder inputs.
-      const completion = rpc.request("session/prompt", {sessionId, prompt: [{type: "text", text: request.prompt}], _meta: {wovenRunID: request.runId}}, 24 * 3600_000);
+      const completion = rpc.request("session/prompt", {sessionId, prompt: attachmentPrompt(request.prompt, files), _meta: {wovenRunID: request.runId}}, 24 * 3600_000);
       submitted = true;
       channel.set(async input => {
         const response = input.nativeResponse;
@@ -227,9 +229,15 @@ export async function runNative(request: ContainerRequest, emit: EventSink, sign
           await update({sessionUpdate: "woven_interaction_resolved", id: response.interactionId});
           return;
         }
-        if (request.harness === "grok_build") { await rpc.request("_x.ai/interject", {sessionId, text: steeringText(input)}); return; }
+        const files = await prepareAttachments(input.attachments, home);
+        if (request.harness === "grok_build") {
+          // Desktop LocalACPClient:1297–1301 uses a concurrent prompt for files.
+          if (files.length) await rpc.request("session/prompt", {sessionId, prompt: attachmentPrompt(steeringText(input), files), _meta: {wovenRunID: request.runId}}, 24 * 3600_000);
+          else await rpc.request("_x.ai/interject", {sessionId, text: steeringText(input)});
+          return;
+        }
         if (!state!.steering) throw failure("steering_unavailable");
-        const result = await rpc.request("_session/steering", {sessionId, prompt: [{type: "text", text: steeringText(input)}], _meta: {wovenRunID: request.runId, steering: {idleBehavior: "promptRequired"}}});
+        const result = await rpc.request("_session/steering", {sessionId, prompt: attachmentPrompt(steeringText(input), files), _meta: {wovenRunID: request.runId, steering: {idleBehavior: "promptRequired"}}});
         if (!["injected", "startedNewTurn"].includes(result.outcome)) throw failure("steering_rejected");
       });
       // ACP has no distinct root admission acknowledgement; only completion proves it.
@@ -249,7 +257,7 @@ export async function runNative(request: ContainerRequest, emit: EventSink, sign
 }
 
 async function runOpenCode(request: ContainerRequest, state: NativeState, signal: AbortSignal, channel: SteeringChannel, home: string,
-  update: (v: any) => Promise<void>, interaction: (v: any) => Promise<void>, publish: (v: any) => Promise<void>, supplied?: any) {
+  update: (v: any) => Promise<void>, interaction: (v: any) => Promise<void>, publish: (v: any) => Promise<void>, files: ReturnType<typeof openCodeFiles>, supplied?: any) {
   const environment = nativeEnvironment(request, home);
   const directory = join(home, ".config/opencode");
   await mkdir(directory, {recursive: true, mode: 0o700});
@@ -289,13 +297,18 @@ async function runOpenCode(request: ContainerRequest, state: NativeState, signal
   state.sessionId = native.sessionID;
   await publish({type: "native_session", sessionId: native.sessionID});
   const settings = await sessions.perform("opencode", native, "configure", {model: "enterprise/" + request.model, ...request.native});
-  await update({sessionUpdate: "woven_native_settings", settings: {...settings, canSteer: false}});
+  await update({sessionUpdate: "woven_native_settings", settings: {...settings, canSteer: true}});
   const execute = createNativeTaskExecutor({workspaceRoot: request.workingDirectory, instances});
   try {
     await execute({run: {id: request.runId, title: request.prompt.slice(0, 100), task: {prompt: request.prompt, configuration: {runtimeKind: "opencode", nativeWorkingDirectory: request.workingDirectory}}},
-      nativeSessionID: native.sessionID, signal, publish: update, bindSession: (id: string) => {if (id !== native.sessionID) throw failure("native_identity_changed");},
+      nativeSessionID: native.sessionID, files, signal, publish: update, bindSession: (id: string) => {if (id !== native.sessionID) throw failure("native_identity_changed");},
       interactive: {publish: interaction, bind: (control: any) => { channel.set(async input => {
-        if (!input.nativeResponse) throw failure("steering_unavailable");
+        if (!input.nativeResponse) {
+          const files = await prepareAttachments(input.attachments, home);
+          try { await control.submit({id: "msg_" + createHash("sha256").update(input.id).digest("hex"), text: steeringText(input), files: openCodeFiles(files)}); }
+          catch { state.poison = request.runId; throw failure("native_outcome_uncertain"); }
+          return;
+        }
         try { await control.respond(input.nativeResponse.interactionId, input.nativeResponse); }
         catch (error) {
           const code = (error as any).code;

@@ -1,3 +1,4 @@
+import { MAX_INPUT_BYTES } from "../../../../packages/runtime/src/attachments.js";
 import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.js";
@@ -256,7 +257,7 @@ export async function registerInferenceRoutes(
       method: path === "/v1/models" ? "GET" : "POST",
       url: `${gateway}${path}`,
       config: { internalInference: true },
-      bodyLimit: 8 * 1024 * 1024,
+      bodyLimit: MAX_INPUT_BYTES,
       handler: async (request, reply) => {
         const projectId = (request.params as { projectId: string }).projectId;
         const auth = request.headers.authorization;

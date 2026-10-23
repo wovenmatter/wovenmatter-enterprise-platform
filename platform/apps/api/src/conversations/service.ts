@@ -1,3 +1,5 @@
+import { migrateConversationAttachments, attachmentReferences, storedAttachments, resolveAttachments, attachmentContext, runtimeAttachments } from "./attachments.js";
+import { migrateConversationTools, serializeConversationTools, toolPrompt } from "./conversation-tools.js";
 import { initializeFiles } from "../files/storage.js";
 import {
   workspaceSchema,
@@ -238,6 +240,8 @@ CREATE TRIGGER conversation_fixed_mode BEFORE UPDATE OF mode ON conversations WH
       "ALTER TABLE conversations ADD COLUMN pi_options TEXT NOT NULL DEFAULT '{}';",
     );
     await migrateNativeHarnesses(this.ctx);
+    await migrateConversationAttachments(this.ctx);
+    await migrateConversationTools(this.ctx);
   }
   private async initializeWorkspaceSchema() {
     await this.ctx.db.migrate(
@@ -459,11 +463,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         harness,
         connectionId,
       );
+    const toolSettings = serializeConversationTools(input.tools);
     const id = randomUUID(),
       timestamp = now();
     await this.ctx.db.batch([
       {
-        sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,pi_options,folder_id,native_options) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,pi_options,folder_id,native_options,tool_settings) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         params: [
           id,
           project.orgId,
@@ -479,6 +484,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           JSON.stringify(options),
           folder?.id ?? null,
           JSON.stringify(nativeOptions(input.native)),
+          toolSettings,
         ],
       },
       {
@@ -923,7 +929,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   async messages(user: User, id: string, before?: string, compact = false) {
     await this.requireConversation(user, id);
     const rows = await this.ctx.db.all<MessageRow>(
-      `SELECT m.id,m.conversation_id,m.run_id,m.role,m.author_id,m.citations,m.created_at,m.kind,
+      `SELECT m.id,m.conversation_id,m.run_id,m.role,m.author_id,m.citations,m.created_at,m.kind,m.attachments,
       ${compact ? "CASE WHEN m.role='assistant' AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN substr(m.content,1,500) ELSE m.content END" : "m.content"} content,
       ${compact ? "CASE WHEN m.role='assistant' AND length(m.content)>500 AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN 1 ELSE 0 END" : "0"} content_truncated,
       ${compact ? "(SELECT COUNT(*) FROM conversation_activity a WHERE a.run_id=m.run_id AND a.deleted=0)" : "NULL"} activity_count,
@@ -969,7 +975,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   admit(user: User, id: string, input: Record<string, unknown>) {
     return this.serial(id, async () => {
       const c = await this.requireConversation(user, id);
-      const content = field(input.content, "Message", 100_000);
+      if (input.tools !== undefined) throw new AppError(400, "invalid_input", "Change tools with the conversation Tools control before sending.");
+      const references = attachmentReferences(input.attachments);
+      const content = references.length && input.content === "" ? "" : field(input.content, "Message", 100_000);
       const requestId = field(input.requestId, "Request ID", 100);
       if (!/^[a-zA-Z0-9_-]{8,100}$/.test(requestId))
         throw new AppError(
@@ -987,15 +995,17 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "Choose Message or Comment.",
         );
       const kind = input.kind === "comment" ? "comment" : "message";
+      if (kind === "comment" && references.length) throw new AppError(400, "invalid_attachment", "Send attachments as a Message so the agent receives their native content.");
       const existing = await this.ctx.db.get<any>(
-        "SELECT i.*,m.content,m.author_id,m.kind FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.conversation_id=? AND i.request_id=?",
+        "SELECT i.*,m.content,m.author_id,m.kind,m.attachments FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.conversation_id=? AND i.request_id=?",
         [id, requestId],
       );
       if (existing) {
         if (
           existing.author_id !== user.id ||
           existing.content !== content ||
-          existing.kind !== kind
+          existing.kind !== kind ||
+          JSON.stringify(storedAttachments(existing.attachments).map(({kind, id}) => ({kind, id}))) !== JSON.stringify(references)
         )
           throw new AppError(
             409,
@@ -1006,10 +1016,21 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       }
       // Recover an exact existing receipt without admitting new authority.
       await this.requireThreadAuthority(user, c);
+      const attachments = await resolveAttachments(this.ctx, user, c, references);
+      if (Buffer.byteLength(content + attachmentContext(attachments)) > 400 * 1024)
+        throw new AppError(413, "attachment_context_too_large", "The message and note snapshots exceed the 400 KiB native input allowance. Attach shorter notes or send them separately.");
       const current = await this.ctx.db.get<RunRow>(
         "SELECT * FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling') ORDER BY rowid LIMIT 1",
         [id],
       );
+      if (kind === "message" && current && current.status !== "running" && attachments.some(item => item.kind === "file")) {
+        const queued = await this.ctx.db.get<{ count: number; bytes: number }>(`SELECT COUNT(*) count,COALESCE(SUM(json_extract(a.value,'$.size')),0) bytes
+          FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id JOIN json_each(m.attachments) a
+          WHERE i.run_id=? AND i.delivery='pending' AND json_extract(a.value,'$.kind')='file'`, [current.id]);
+        const files = attachments.filter(item => item.kind === "file");
+        if (Number(queued?.count ?? 0) + files.length > 8 || Number(queued?.bytes ?? 0) + files.reduce((sum, item) => sum + (item.size ?? 0), 0) > 50 * 1024 * 1024)
+          throw new AppError(413, "attachment_queue_full", "Wait for the queued message to start before sending more files. Each native input supports 8 files and 50 MiB.");
+      }
       if (kind === "message" && current?.status === "cancelling")
         throw new AppError(
           409,
@@ -1068,7 +1089,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             ]
           : []),
         {
-          sql: "INSERT INTO conversation_messages(id,conversation_id,run_id,role,author_id,content,created_at,kind) VALUES(?,?,?,?,?,?,?,?)",
+          sql: "INSERT INTO conversation_messages(id,conversation_id,run_id,role,author_id,content,created_at,kind,attachments) VALUES(?,?,?,?,?,?,?,?,?)",
           params: [
             messageId,
             id,
@@ -1078,6 +1099,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             content,
             timestamp,
             kind,
+            JSON.stringify(attachments),
           ],
         },
         ...(!current && runId
@@ -1188,7 +1210,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   private drainSteering(id: string, runId: string) {
     return this.serial(id, async () => {
       const inputs = await this.ctx.db.all<any>(
-        "SELECT i.*,m.content,m.author_id,u.name AS author_name FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id JOIN users u ON u.id=m.author_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
+        "SELECT i.*,m.content,m.attachments,m.author_id,u.name AS author_name FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id JOIN users u ON u.id=m.author_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
         [runId],
       );
       for (const input of inputs) {
@@ -1219,7 +1241,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
               sequence: input.sequence,
               authorId: input.author_id,
               authorName: input.author_name,
-              content: input.content,
+              content: input.content + attachmentContext(storedAttachments(input.attachments)),
+              attachments: thread.project_id ? await runtimeAttachments(this.ctx, author, thread.project_id, storedAttachments(input.attachments)) : [],
               ...(input.native_response ? {nativeResponse: JSON.parse(input.native_response)} : {}),
             });
           }
@@ -1799,9 +1822,10 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       "SELECT * FROM conversation_messages WHERE id=?",
       [run.user_message_id],
     ))!;
+    const inputFiles: Awaited<ReturnType<typeof runtimeAttachments>> = [];
     let prompt = await this.serial(run.conversation_id, async () => {
       const candidates = await this.ctx.db.all<any>(
-        "SELECT i.message_id,m.content,m.author_id FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
+        "SELECT i.message_id,m.content,m.attachments,m.author_id FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
         [run.id],
       );
       const pending = [];
@@ -1813,6 +1837,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             run.conversation_id,
           );
           await this.requireThreadAuthority(author, thread);
+          if (thread.project_id) inputFiles.push(...await runtimeAttachments(this.ctx, author, thread.project_id, storedAttachments(candidate.attachments)));
           pending.push(candidate);
         } catch {
           await this.ctx.db.run(
@@ -1822,20 +1847,21 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         }
       }
       const history = await this.ctx.db.all<MessageRow>(
-        "SELECT m.* FROM conversation_messages m LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? AND m.content<>'' AND (m.run_id IS NULL OR m.run_id<>?) AND (i.delivery IS NULL OR i.delivery IN ('comment','accepted')) ORDER BY m.rowid",
+        "SELECT m.* FROM conversation_messages m LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? AND (m.content<>'' OR m.attachments<>'[]') AND (m.run_id IS NULL OR m.run_id<>?) AND (i.delivery IS NULL OR i.delivery IN ('comment','accepted')) ORDER BY m.rowid",
         [run.conversation_id, run.id],
       );
       const context = history
         .filter((m) => !resumeId || m.kind === "comment")
         .map(
           (m) =>
-            `${m.kind === "comment" ? "Comment" : m.role}${m.author_id ? ` (${m.author_id})` : ""}: ${m.content}`,
+            `${m.kind === "comment" ? "Comment" : m.role}${m.author_id ? ` (${m.author_id})` : ""}: ${m.content}${attachmentContext(storedAttachments(m.attachments))}`,
         )
         .join("\n\n");
       execution.initialMessages = pending.map((m) => m.message_id);
-      return `${context ? `Conversation context (data):\n${context}\n\n` : ""}${pending.length ? pending.map((m) => `User (${m.author_id}): ${m.content}`).join("\n\n") : message.content}`;
+      return `${context ? `Conversation context (data):\n${context}\n\n` : ""}${pending.length ? pending.map((m) => `User (${m.author_id}): ${m.content}${attachmentContext(storedAttachments(m.attachments))}`).join("\n\n") : message.content + attachmentContext(storedAttachments(message.attachments))}`;
     });
     if (assetContext) prompt += "\n\n" + assetContext.prompt;
+    else prompt += toolPrompt(conversation.tool_settings);
     const manifest = run.asset_id
       ? await this.dependencies.assets!.manifest(user, run.asset_id)
       : ((await this.dependencies.files.captureProjectManifest?.(
@@ -2018,6 +2044,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             }
           : piRoute ? {pi: piRoute} : {}),
         prompt,
+        attachments: inputFiles,
         access: run.mode,
         mounts: mounts.map((m) => ({
           source: m.source,

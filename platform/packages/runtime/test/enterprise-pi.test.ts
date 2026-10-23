@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1216,6 +1217,37 @@ test("runPi executes embedded read tool and returns tool result to the model", a
     ),
     JSON.stringify(events),
   );
+});
+
+test("Pi named and scratch cwd read private attachment snapshots and retain the binding on reopen",async t=>{
+  const root=await mkdtemp(join(tmpdir(),'wme-pi-folder-attachments-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  for(const [index,kind] of ['Named folder','scratch/2026-10-23-pi-12345678'].entries()) {
+    const directory=join(root,'.WovenMatter',kind),sessionDirectory=join(root,'private-'+index);
+    await mkdir(directory,{recursive:true});await mkdir(sessionDirectory,{recursive:true});
+    await writeFile(join(directory,'relative.txt'),'Only this selected cwd');
+    const bytes=Buffer.from('Private immutable attachment'),hash=createHash('sha256').update(bytes).digest('hex');
+    const path=join(sessionDirectory,'attachments',hash,'note.txt');
+    const g=gateway(t,[readToolStream('relative.txt'),textStream('Read selected folder','cwd-result'),readToolStream(path),textStream('Read private attachment','attachment-result')]);
+    const events:RuntimeEvent[]=[];
+    const input={...request(g.baseUrl),runId:'folder-first-'+index,workingDirectory:directory,
+      attachments:[{name:'note.txt',mimeType:'text/plain',data:bytes.toString('base64')}]};
+    await runEnterprisePi(input,event=>{events.push(event)},new AbortController().signal,undefined,undefined,{sessionDirectory});
+    assert.equal(events.at(-1)?.type,'completed');
+    assert.ok(JSON.stringify(g.requests).includes('Only this selected cwd'));
+    assert.ok(JSON.stringify(g.requests).includes(path),'Text-only Pi prompt must point its native tools at the private snapshot');
+    const native=events.find(event=>event.type==='native_session');assert.ok(native&&native.type==='native_session');
+    const nativeID=native.sessionId;
+    events.length=0;
+    await runEnterprisePi({...input,runId:'folder-resume-'+index,resumeId:nativeID},event=>{events.push(event)},new AbortController().signal,undefined,undefined,{sessionDirectory});
+    assert.equal(events.at(-1)?.type,'completed');
+    assert.ok(events.some(event=>event.type==='native_session'&&event.sessionId===nativeID));
+    assert.ok(JSON.stringify(g.requests).includes('Private immutable attachment'));
+    assert.equal(await readFile(path,'utf8'),'Private immutable attachment');
+    assert.ok(!path.startsWith(directory+'/'));
+    const saved=await readFile(join(sessionDirectory,'pi-enterprise','durable',nativeID,'woven-session.json'),'utf8');
+    assert.ok(saved.includes(directory));
+  }
 });
 
 test("runPi executes attached native subagent and retains reports", async (t) => {

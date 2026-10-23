@@ -1,0 +1,121 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm, symlink, writeFile, link } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { createServer, request as httpRequest } from "node:http";
+import { createHash } from "node:crypto";
+import { MAX_ATTACHMENT_BYTES, MAX_INPUT_BYTES, validateAttachments, prepareAttachments, attachmentPrompt, attachmentToolText, openCodeFiles } from "../src/attachments.js";
+import { MAX_PROMPT_BYTES, validateContainerRequest, validateInputText } from "../src/validation.js";
+import { sessionBroker } from "../src/session-broker.js";
+
+const file = (name = "note.txt", text = "Immutable note") => ({ name, mimeType: "text/plain", data: Buffer.from(text).toString("base64") });
+
+test("attachment admission rejects untrusted paths, malformed bytes, and desktop count/size overflow", () => {
+  for (const invalid of [null, {}, Array.from({length:9},()=>file()), [{...file(),path:'/etc/passwd'}],
+    [{...file(),data:'not base64'}], [{...file(),data:'AB=='}], [{...file(),name:'bad\nname'}],
+    [{...file(),mimeType:'text/plain\r\nInjected: true'}], [{...file(),data:'A'.repeat(Math.ceil(MAX_ATTACHMENT_BYTES/3)*4+4)}]])
+    assert.throws(()=>validateAttachments(invalid),{code:'invalid_attachment'});
+  const image={name:'image.png',mimeType:'image/png',data:Buffer.alloc(1024*1024,7).toString('base64')};
+  validateAttachments([image]);
+  assert.ok(Buffer.byteLength(JSON.stringify({attachments:[image]}))>1024*1024,'Valid native input can exceed the event/output bound');
+  assert.ok(Buffer.byteLength(JSON.stringify({attachments:[image]}))<MAX_INPUT_BYTES);
+});
+
+test("private attachment snapshots survive retry, repair altered copies, and reject link escapes",async t=>{
+  const home=await mkdtemp(join(tmpdir(),'wme-attachment-home-'));
+  const outside=await mkdtemp(join(tmpdir(),'wme-attachment-outside-'));
+  t.after(()=>Promise.all([rm(home,{recursive:true,force:true}),rm(outside,{recursive:true,force:true})]));
+  const input=[file('../../note.txt')];
+  const first=await prepareAttachments(input,home);
+  assert.ok(first[0].path.startsWith(home+'/attachments/'));
+  assert.equal(await readFile(first[0].path,'utf8'),'Immutable note');
+  await writeFile(first[0].path,'Changed by native tool');
+  assert.equal((await prepareAttachments(input,home))[0].path,first[0].path);
+  assert.equal(await readFile(first[0].path,'utf8'),'Immutable note');
+  const secret=join(outside,'private.txt');await writeFile(secret,'Host fixture');
+  await rm(first[0].path);await symlink(secret,first[0].path);
+  await assert.rejects(prepareAttachments(input,home));
+  assert.equal(await readFile(secret,'utf8'),'Host fixture');
+  await rm(first[0].path);await link(secret,first[0].path);
+  await assert.rejects(prepareAttachments(input,home),{code:'invalid_attachment'});
+  assert.equal(await readFile(secret,'utf8'),'Host fixture');
+});
+
+test("desktop transport distinguishes image bytes, UTF-8 resource, binary link and Pi tool references",async t=>{
+  const home=await mkdtemp(join(tmpdir(),'wme-attachment-contract-'));
+  t.after(()=>rm(home,{recursive:true,force:true}));
+  const files=await prepareAttachments([
+    {name:'photo.png',mimeType:'image/png',data:Buffer.from([137,80,78,71]).toString('base64')},
+    file(),
+    {name:'invalid-utf8.txt',mimeType:'text/plain',data:Buffer.from([255,254,255]).toString('base64')},
+    {name:'report.pdf',mimeType:'application/pdf',data:Buffer.from('%PDF').toString('base64')},
+  ],home);
+  const blocks=attachmentPrompt('Inspect',files) as any[];
+  assert.deepEqual(blocks.map(block=>block.type),['text','image','resource','resource_link','resource_link']);
+  assert.equal(blocks[1].data,files[0].data);
+  assert.equal(blocks[2].resource.text,'Immutable note');
+  assert.equal(blocks[3].uri,files[2].uri);
+  assert.ok(blocks[0].text.includes(files[3].path));
+  const nativeFiles=openCodeFiles(files);
+  assert.equal(nativeFiles[0].uri,'data:image/png;base64,'+files[0].data);
+  assert.equal(nativeFiles[3].name,'report.pdf');
+  const pi=attachmentToolText('Inspect',files);
+  for(const file of files)assert.ok(pi.includes(file.path));
+  assert.ok(!pi.includes(files[0].data),'Pi must not confuse encoded bytes with image support');
+});
+
+test("initial and steering text accept a large note snapshot and enforce UTF-8 byte bounds",()=>{
+  const snapshot='n'.repeat(200_000);
+  validateInputText(snapshot);
+  validateInputText(snapshot,true);
+  validateInputText('',true);
+  validateInputText('a'.repeat(MAX_PROMPT_BYTES),true);
+  for(const value of ['a'.repeat(MAX_PROMPT_BYTES+1),'é'.repeat(MAX_PROMPT_BYTES/2+1)]) {
+    assert.throws(()=>validateInputText(value),{code:'invalid_request'});
+    assert.throws(()=>validateInputText(value,true),{code:'invalid_request'});
+  }
+});
+
+test("50 MiB immutable files cross trusted input, native image mapping and authenticated inference broker",async t=>{
+  const directory=await mkdtemp(join(tmpdir(),'wme-attachment-limit-'));
+  t.after(()=>rm(directory,{recursive:true,force:true}));
+  // This is synthetic protocol transport, not a provider image-validity claim.
+  const attachments=[0,1].map(index=>({name:`image-${index}.png`,mimeType:'image/png',data:Buffer.alloc(MAX_ATTACHMENT_BYTES,index+1).toString('base64')}));
+  const input={runId:'large-files',projectId:'fixture-project',harness:'codex' as const,model:'fixture-model',prompt:'n'.repeat(200_000),access:'write' as const,workingDirectory:'/workspace',gateway:{baseUrl:'http://fixture.invalid/inference',token:'synthetic-limit-test-token'},attachments};
+  const envelope=JSON.stringify({type:'turn',request:input});
+  assert.ok(Buffer.byteLength(envelope)<MAX_INPUT_BYTES);
+  validateContainerRequest(JSON.parse(envelope).request);
+  const files=await prepareAttachments(input.attachments,directory);
+  const body=JSON.stringify({messages:[{role:'user',content:attachmentPrompt(input.prompt,files)}]});
+  const bytes=Buffer.byteLength(body),expected=createHash('sha256').update(body).digest('hex');
+  assert.ok(bytes>50*1024*1024&&bytes<MAX_INPUT_BYTES);
+  let received=0,digest='',calls=0;
+  const upstream=createServer(async(req,res)=>{
+    calls++;
+    assert.equal(req.headers.authorization,'Bearer synthetic-upstream-grant');
+    const hash=createHash('sha256');
+    for await(const chunk of req){received+=chunk.length;hash.update(chunk);}
+    digest=hash.digest('hex');res.end('{"ok":true}');
+  });
+  await new Promise<void>(resolve=>upstream.listen(0,'127.0.0.1',resolve));
+  const broker=await sessionBroker(join(directory,'broker'),'fixture-project',{});
+  broker.setGateway({baseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/inference`,token:'synthetic-upstream-grant'});
+  try {
+    const send=(authorization:string)=>new Promise<number>((resolve,reject)=>{
+      const request=httpRequest({socketPath:join(directory,'broker/gateway.sock'),path:'/inference/v1/responses',method:'POST',headers:{authorization,'content-type':'application/json'}},response=>{response.resume();response.on('end',()=>resolve(response.statusCode!));});
+      request.on('error',reject);request.end(authorization.endsWith(broker.token)?body:'{}');
+    });
+    assert.equal(await send('Bearer wrong-capability'),403);
+    assert.equal(calls,0);
+    assert.equal(await send('Bearer '+broker.token),200);
+    assert.equal(received,bytes);
+    assert.equal(digest,expected);
+    assert.equal(calls,1);
+    assert.throws(()=>validateAttachments([...attachments,file('over.txt','x')]),{code:'invalid_attachment'});
+    t.diagnostic(`Synthetic 50 MiB files: ${bytes} native JSON bytes; peak process RSS ${process.resourceUsage().maxRSS} KiB.`);
+  } finally {
+    broker.close();upstream.closeAllConnections();
+    await new Promise<void>(resolve=>upstream.close(()=>resolve()));
+  }
+});

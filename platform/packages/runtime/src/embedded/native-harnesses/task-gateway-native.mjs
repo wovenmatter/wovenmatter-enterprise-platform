@@ -25,7 +25,7 @@ export function createNativeTaskExecutor({workspaceRoot, instances, fetchRequest
   }
 }
 
-async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive,cliContext}) {
+async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSessionID,signal,publish,bindSession,interactive,cliContext,files=[]}) {
   const permission=config.permission
   if(permission && !['ask','allow','deny'].includes(permission))throw before('The saved OpenCode permission is unavailable.')
   let accepted=false,sessionID=nativeSessionID,call,archive
@@ -84,12 +84,18 @@ async function runOpenCode({run,config,cwd,instances,read,fetchRequest,nativeSes
     if(active[sessionID])throw before('The recurring OpenCode task is already running.')
     if(signal.aborted)throw before('Background execution was turned off.')
     accepted=true
-    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files:[],...(cliContext?{metadata:{wovenTools:cliContext}}:{})})
+    // Enterprise adapter: desktop OpenCodeSessionCoordinator sends the same
+    // authorized file payload on initial prompts and delivery='steer' inputs.
+    const receipt=await call('POST',path+'/prompt',{id:messageID,text:prompt(run),files,...(cliContext?{metadata:{wovenTools:cliContext}}:{})})
     if(receipt.data?.id!==messageID)throw new Error('OpenCode did not acknowledge the task prompt. Check its session before retrying.')
     let observed=false, presentedText
     const presentedActivities=new Map()
     const interactions = new Map()
-    interactive?.bind({async respond(id,response) {
+    interactive?.bind({async submit(input) {
+      if(signal.aborted)throw new Error('The run has stopped.')
+      const receipt=await call('POST',path+'/prompt',{id:input.id,text:input.text,files:input.files,delivery:'steer'})
+      if(receipt.data?.id!==input.id)throw new Error('OpenCode did not acknowledge the input. Check its session before retrying.')
+    },async respond(id,response) {
       if(signal.aborted)throw new Error('The run has stopped.')
       const item=interactions.get(id);if(!item)throw Object.assign(new Error('This interaction is no longer pending.'),{code:'native_interaction_expired'})
       const current=(await call('GET',path+'/'+item.kind)).data??[]

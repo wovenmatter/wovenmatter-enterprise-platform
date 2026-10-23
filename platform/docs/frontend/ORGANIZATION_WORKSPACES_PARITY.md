@@ -1,5 +1,34 @@
 # Organization and workspace port
 
+## Current folder and composer follow-up
+
+Audited current desktop `origin/main` at **`f885d2818f9cc380612bd1f4cf32176d3c99dd5e`**
+(WovenMatter PR #151), fetched through SSH without changing the reference checkout.
+Paths in this table are relative to the WovenMatter repository. Earlier provenance
+below remains the source for the original port and sidebar work.
+
+| Behavior | Current desktop source | Enterprise adaptation and deterministic proof |
+| --- | --- | --- |
+| Folder context menu | `app/App/Views/DashboardSidebar.swift` folder context actions | Existing popup actions open on right-click, ContextMenu or Shift+F10 on the folder row. No visible ellipsis or replacement button. Shared popup dismissal, focus restoration and viewport bounds remain; `folder-context-menu.spec.mjs`. |
+| First composer row and fixed binding | `app/App/Views/DashboardComposer.swift:86–108`, `DashboardConversation.swift:548–580`; `app/App/ApplicationModel.swift:1733–1772,5202–5262,5333–5355` | Authorized workspace folders and All Workspaces are selectable before admission. Draft text/attachments survive selection. Accepted input locks the actual persisted root; sidebar selection cannot relabel or move an open chat. Known pre-admission errors leave the blank chat editable; uncertain delivery keeps its exact receipt until reconciliation/retry. No post-launch cwd migration. `folder-composer.spec.mjs`, `folder-binding.test.ts`. |
+| Controls and popouts | `DashboardComposer.swift:435–622,625–679,738–793,1008–1094,1134–1253` | Plus, CPU model, Brain thinking, KeyRound native permissions, Tools, collapse/expand, disabled Mic, Send/Stop follow desktop ordering and roles. Existing metadata-rich native choices, disabled options and native interactions remain. Welcome retains Enterprise's agent selector; native options appear after a chat has actual native metadata. Mic is explicitly disabled by user request with “Dictation coming later”; no audio capture. `folder-composer.spec.mjs`, native interaction workflows. |
+| Upload and reference attachments | `DashboardComposer.swift:1008–1094`; `app/Sources/WovenMatterCore/MessageAttachments.swift:295–299`; `app/Sources/WovenMatterClient/LocalACPClient.swift:1472–1530` | Real authorized multipart file/photo upload, searchable note/conversation selection and removable chips. Send resolves immutable file versions and note snapshots; conversation references retain current membership checks. Browser uses the file picker rather than native paste/drop integration. Limits: 8 files, 25 MiB each, 50 MiB total, 20 references, 200,000 note characters and 400 KiB combined text/snapshot allowance. Oversized notes are rejected explicitly, never silently truncated. Attachments are Message inputs; Enterprise Comments remain later context. `composer-attachments.spec.mjs`, `conversation-attachments.test.ts`, runtime attachment fixtures. |
+| Session Tools | `shared/Sources/WovenMatterCompanion/WorkspaceToolGroup.swift:3–22`; `app/App/Views/WorkspaceToolControls.swift:64–132`; `app/Sources/WovenMatterDashboardStore/WorkspaceDatabase+AgentTools.swift` | Notes (also artifacts/databases), Conversation history, Usage data (read only), Calendar (events/tasks), Library are real switches enforced on every authenticated broker operation for every engine. Disabling waits for in-flight broker calls to complete and fences subsequent calls. Explicit attachments permit only exact scoped reads while a group is disabled; they never permit writes or broader discovery. These controls do not change authorized filesystem access or native permissions. `conversation-tools.test.ts`, `composer-tools.spec.mjs`. |
+| History text windows | `app/Sources/WovenMatterDashboardStore/WorkspaceDatabaseConnection.swift:250–285`; desktop `WorkspaceHistoryTextWindow` | Bounded message pages expose explicit continuation offsets, including Unicode scalar and embedded-NUL text. Private native state is never returned. `conversation-tools.test.ts`. |
+
+Desktop Session management, prompt Timers, Executor Apps, Browser Use and Computer
+Use have no equivalent Enterprise broker authority and are omitted. Calendar retains
+existing Enterprise scheduled tasks rather than granting native prompt timers. Native
+slash/goal/task-badge integrations require their distinct session capabilities and
+are not invented by the composer controls. No macOS host/device control or external
+integration is introduced. The existing 256px rails, sticky 68px title, single persistent
+hide/reopen control, Adaptive default, bounded fluid center and global header are
+unchanged by this follow-up.
+
+Protocol fixtures and synthetic browser tests do not establish provider entitlement,
+live model attachment limits or model quality. Runtime source parity and isolation
+details are in `platform/runtime/ORGANIZATION_WORKSPACE_PARITY.md`.
+
 The original organization/workspace port uses WovenMatter commit
 `04fe05090e107df92c498a4563b742978c91d933`. The sidebar, icon, Calendar and
 Databases presentation follow-up uses current desktop main at immutable commit

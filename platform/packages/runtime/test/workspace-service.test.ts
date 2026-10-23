@@ -93,6 +93,21 @@ async function fixture(
   return { service, workers, directory, launch };
 }
 
+test("large note snapshots steer after admission while oversized UTF-8 text has no delivery receipt", async t => {
+  const {service,workers}=await fixture(t);
+  await assert.rejects(service.admit({...request('too-large'),prompt:'é'.repeat(262145)}),{code:'invalid_request'});
+  assert.equal(workers.length,0);
+  await service.admit({...request('large-note'),prompt:'n'.repeat(200_000)});
+  const {attachment}=await service.attach('large-note');
+  const input={id:'large-note-input',sequence:1,authorId:'u',authorName:'User',content:'é'.repeat(262145)};
+  await assert.rejects(service.steer('large-note',attachment,input),{code:'invalid_request'});
+  assert.equal(workers[0].inputs.length,0);
+  await service.steer('large-note',attachment,{...input,content:'n'.repeat(200_000)});
+  assert.equal(workers[0].inputs.length,1);
+  assert.equal(workers[0].inputs[0].content.length,200_000);
+  await service.close();
+});
+
 test("workspace owns concurrent sessions, retained turns and cursor replay independent of attachments", async (t) => {
   const { service, workers } = await fixture(t);
   await Promise.all([
@@ -123,6 +138,20 @@ test("workspace owns concurrent sessions, retained turns and cursor replay indep
   assert.equal(workers.length, 2);
   assert.equal(workers[0]!.turns.length, 2);
   assert.equal(workers[0]!.stopped, false);
+  await service.close();
+});
+
+test("attachment bytes are part of durable run identity and cannot change on replay", async t => {
+  const {service,workers}=await fixture(t);
+  const attachment={name:"note.txt",mimeType:"text/plain",data:Buffer.from("Original snapshot").toString("base64")};
+  const input={...request("attached-run"),attachments:[attachment]};
+  await service.admit(input);
+  await service.admit(input);
+  assert.equal(workers[0].turns.length,1);
+  assert.deepEqual(workers[0].turns[0].attachments,[attachment]);
+  await assert.rejects(service.admit({...input,attachments:[{...attachment,data:Buffer.from("Changed snapshot").toString("base64")}]}),{code:"request_conflict"});
+  await assert.rejects(service.admit({...input,attachments:undefined}),{code:"request_conflict"});
+  await workers[0].emit!({type:"completed"});workers[0].completion!.resolve();
   await service.close();
 });
 

@@ -2,6 +2,8 @@ import type { MountEvidence } from "./mount-evidence.ts";
 export type Harness = "pi" | "codex" | "claude_code" | "grok_build" | "opencode";
 export type NativeOptions = { thinking?: string; permission?: string };
 export type NativeResponse = { interactionId: string; cancelled?: boolean; optionID?: string; answers?: Record<string, string[]> };
+/** Authorized immutable bytes, resolved by the API; never a browser or host path. */
+export type RuntimeAttachment = { name: string; mimeType: string; data: string };
 export type Access = "read" | "write";
 export type RuntimeEvent = { sequence?: number } & (
   | { type: "attached"; terminal?: boolean }
@@ -51,6 +53,7 @@ export interface RuntimeRequest {
   harness: Harness;
   model: string;
   prompt: string;
+  attachments?: RuntimeAttachment[];
   access: Access;
   mounts: RuntimeMount[];
   /** Host directory outside user-editable volumes. Native history only, no upstream credentials. */
@@ -94,6 +97,7 @@ export type ContainerRequest = Pick<
   | "harness"
   | "model"
   | "prompt"
+  | "attachments"
   | "access"
   | "gateway"
   | "egressProxyUrl"
@@ -110,6 +114,7 @@ export interface SteeringInput {
   authorId: string;
   authorName: string;
   content: string;
+  attachments?: RuntimeAttachment[];
 }
 export interface ProjectRuntimeSpec {
   /** Absent means a project. Asset IDs use a distinct asset- namespace on the legacy wire. */

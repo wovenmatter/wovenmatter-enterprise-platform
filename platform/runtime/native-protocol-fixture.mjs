@@ -32,11 +32,14 @@ createInterface({input:process.stdin}).on('line',line=>{
     return result(message.id,{configOptions})
   }
   if(message.method==='session/prompt') {
-    prompt=message.id;text=message.params.prompt[0].text
+    const previous = prompt
+    prompt=message.id;text=message.params.prompt[0].text.split('\n')[0]
     if(text==='disconnect')return process.exit(0)
     if(text==='wait'||text==='steer')return
     if(text==='approval')return send({id:'approval',method:'session/request_permission',params:{sessionId,toolCall:{title:'Read fixture'},options:[{optionId:'once',name:'Allow once'}]}})
-    return finish()
+    finish()
+    if(previous!==undefined)result(previous,{stopReason:'end_turn',usage:{totalTokens:37}})
+    return
   }
   if(['_session/steering','_x.ai/interject'].includes(message.method)) {
     if(!prompt)throw new Error('Steering overtook root input')

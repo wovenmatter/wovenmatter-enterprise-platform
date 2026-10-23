@@ -2683,6 +2683,25 @@ details[open] > summary .work-chevron {
   opacity: 0.4;
   cursor: not-allowed;
 }
+/* Desktop keeps the bound folder readable without a drop-down affordance. */
+.composer-folder-locked[aria-disabled="true"] { opacity: 1; cursor: default; }
+.composer-folder-locked > svg:last-child { display: none; }
+.composer-collapse, .composer-microphone {
+  display: inline-grid; place-items: center; flex: none;
+  width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%;
+  color: var(--muted); background: transparent;
+}
+.composer-collapse:hover { background: var(--whisper); color: var(--primary); }
+.composer-collapse-up { transform: rotate(180deg); }
+.composer-area > form.composer-collapsed { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 4px; align-items: end; }
+.composer-collapsed .composer-folder-row, .composer-collapsed .composer-attachments { grid-column: 1 / -1; }
+.composer-collapsed textarea { grid-column: 1; max-height: 60px; min-height: 36px; }
+.composer-collapsed .composer-controls { display: contents; }
+.composer-collapsed .composer-model-controls,
+.composer-collapsed .composer-controls > .composer-picker,
+.composer-collapsed .composer-attachment-control,
+.composer-collapsed .message-kind { display: none; }
+.composer-collapsed .composer-send-actions { grid-column: 2; }
 /* Enterprise authority badge: fixed, complete label, never ellipsized. */
 .session-mode {
   display: inline-flex;
@@ -2736,8 +2755,8 @@ details[open] > summary .work-chevron {
   font-weight: 500;
 }
 .stop-button {
-  background: var(--soft);
-  color: var(--ink);
+  background: var(--primary-fill);
+  color: var(--primary-foreground);
 }
 .stop-button svg {
   fill: currentColor;
@@ -3525,3 +3544,7 @@ html[data-theme="dark"] .agent-grok_build, html[data-theme="dark"] .agent-openco
   .conversation-layout.has-note > .conversation-main { display: none; }
   .workspace-note-panel { min-width: 0; border-left: 0; }
 }
+
+.composer-microphone:disabled { opacity: .4; cursor: default; }
+.message-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.message-attachments > span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
