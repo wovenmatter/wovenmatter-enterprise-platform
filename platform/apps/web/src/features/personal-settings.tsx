@@ -11,6 +11,7 @@ import {
 } from "../api";
 import { safeContentUrl } from "../conversation-state";
 import { Icon } from "../components/controls";
+import { sidebarStyles, useSidebar } from "../shell/sidebar-preferences";
 import {
   AsyncForm,
   BackLink,
@@ -36,6 +37,7 @@ export function PersonalSettings({
   user: User;
   onUserChange: (user: User) => void;
 }) {
+  const sidebar = useSidebar();
   const profile = useResource<{
     user: User;
     organizations: Organization[];
@@ -183,6 +185,17 @@ export function PersonalSettings({
         </Card>
       </AsyncForm>
       {saved ? <Success>{saved}</Success> : null}
+      <Card title="Sidebar layout" detail="Applies immediately for your account in this browser. These device-local preferences are not synchronized to other browsers or devices.">
+        <fieldset className="sidebar-style-choices">
+          <legend className="sr-only">Sidebar layout</legend>
+          {sidebarStyles.map(style => <label key={style.value} className="sidebar-style-choice">
+            <input type="radio" name="sidebar-layout" value={style.value} checked={sidebar.preferences.style === style.value} onChange={() => sidebar.update({ style: style.value })} />
+            <span><strong>{style.title}</strong><small>{style.detail}</small></span>
+          </label>)}
+        </fieldset>
+        {sidebar.preferences.style !== "split" ? <Field label="Sidebar side" hint="You can also move the sidebar using its header control."><select value={sidebar.preferences.side} onChange={event => sidebar.update({ side: event.target.value === "right" ? "right" : "left" })}><option value="left">Left</option><option value="right">Right</option></select></Field> : null}
+        {sidebar.storageError ? <ErrorNotice message="Browser storage is unavailable. This layout works for this session, but cannot be saved for your next visit." /> : null}
+      </Card>
       <Card title="Account">
         <div className="value-row">
           <span>Email</span>

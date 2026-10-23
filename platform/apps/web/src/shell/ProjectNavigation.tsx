@@ -1,3 +1,7 @@
+import { createPortal } from "react-dom";
+import { WorkspaceDetails } from "./WorkspaceDetails";
+import { SidebarControls } from "./SidebarControls";
+import { focusSidebarControl, useSidebar } from "./sidebar-preferences";
 import codexLogo from "../assets/codex.png";
 import claudeLogo from "../assets/claude.svg";
 import grokLogo from "../assets/grok.svg";
@@ -9,11 +13,11 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
   CalendarDays,
-  Clock3,
+  CalendarClock,
   LibraryBig,
   Database,
-  ChartNoAxesCombined,
-  NotebookPen,
+  BarChart3,
+  FileText,
   Files,
   Folder,
   FolderOpen,
@@ -67,8 +71,14 @@ function RailSection({
 }
 /** Separate 24 × 28 new-chat action at the far right of a rail row. */
 function NewChat({ label, to }: { label: string; to: string }) {
+  const sidebar = useSidebar();
   return (
-    <Link className="rail-action" aria-label={label} title={label} to={to}>
+    <Link className="rail-action" aria-label={label} title={label} to={to} onClick={event => {
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      sidebar.rememberChatTrigger(event.currentTarget);
+      if (label.startsWith("New chat in ")) sidebar.selectFolder();
+      sidebar.setDrawer(null);
+    }}>
       <Icon icon={Plus} size={12} />
     </Link>
   );
@@ -77,8 +87,8 @@ function NewChat({ label, to }: { label: string; to: string }) {
 /** DashboardFolderHoverCard at native 24e503f, DashboardSharedViews.swift:989.
  * Counts include only conversations already authorized by the project API.
  */
-function FolderRailLink({ folder, workspace, count, to, selected }: {
-  folder: WorkspaceFolder; workspace: string; count: number; to: string; selected: boolean;
+function FolderRailLink({ folder, workspace, count, to, selected, onSelect }: {
+  folder: WorkspaceFolder; workspace: string; count: number; to: string; selected: boolean; onSelect: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const anchor = useRef<HTMLAnchorElement>(null);
@@ -124,11 +134,12 @@ function FolderRailLink({ folder, workspace, count, to, selected }: {
   return <>
     <Link ref={anchor} className={`nav-link ${selected ? "active" : ""}`} to={to}
       aria-label={folder.name}
+      data-folder-selection="true"
       aria-description={[workspace, summary, `Root folder: ${folder.rootPath}`, ...folder.referencePaths.map((path) => `Additional folder: ${path}`), folder.pinned ? "Pinned" : ""].filter(Boolean).join(", ")}
       aria-describedby={open ? id : undefined}
       onPointerEnter={(event) => { if (event.pointerType === "mouse") show(); }}
       onPointerLeave={(event) => { if (!(event.relatedTarget instanceof Node) || !card.current?.contains(event.relatedTarget)) deferClose(); }}
-      onPointerDown={close} onFocus={show} onBlur={close} onClick={close}
+      onPointerDown={close} onFocus={show} onBlur={close} onClick={event => { close(); if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) onSelect(); }}
       onKeyDown={(event) => { if (event.key === "Escape" && open) { event.preventDefault(); event.stopPropagation(); close(); } }}>
       <Icon icon={Folder} size={13} />
       <span className="rail-title">{folder.name}{folder.removalPending ? " · Removal pending" : ""}</span>
@@ -237,8 +248,9 @@ function WorkspaceRail({
   useWorkspaceChanges(folders.reload);
   useWorkspaceChanges(chats.reload);
   const navigate = useNavigate();
-  const location = useLocation(),
-    query = new URLSearchParams(location.search),
+  const sidebar = useSidebar();
+  const location = useLocation();
+  const query = new URLSearchParams(sidebar.workspaceSearch),
     selected = query.get("folder") ?? "all",
     conversation = query.get("conversation"),
     trash = query.has("trash"),
@@ -251,8 +263,17 @@ function WorkspaceRail({
   const [renameChat, setRenameChat] = useState<Conversation | null>(null);
   const writable = Boolean(project);
   const onWorkspace = location.pathname.endsWith(projectId);
-  const url = (values: Record<string, string>) =>
-    `${base}?${new URLSearchParams(values)}`;
+  const url = (values: Record<string, string>) => {
+    const next = new URLSearchParams(query);
+    next.delete("new"); next.delete("trash");
+    if (values.agent) next.delete("conversation");
+    for (const [key, value] of Object.entries(values)) next.set(key, value);
+    return `${base}?${next}`;
+  };
+  function selectFolder() {
+    sidebar.selectFolder();
+    if (sidebar.preferences.style !== "split") focusSidebarControl(".sidebar-content-slot .sidebar-back");
+  }
   const allChats = chats.data?.items ?? [];
   // Recents covers every project conversation this user is authorized to
   // list, as native Recents is global; the folder selection scopes new chats.
@@ -346,9 +367,9 @@ function WorkspaceRail({
       </div>
     );
   }
-  return (
+  return <>
     <div className="project-navigation workspace-navigation">
-      <div className="workspace-rail-title"><strong>{project?.name ?? "Workspace"}</strong></div>
+      <div className="workspace-rail-title"><strong>{project?.name ?? "Workspace"}</strong><SidebarControls page="navigation" /></div>
       <div className="rail-group">
         <Link className="nav-link" to={`/organizations/${orgId}/workspaces`}>
           <Icon icon={ArrowLeft} size={13} weight="control" />
@@ -357,14 +378,15 @@ function WorkspaceRail({
         <Link
           className="nav-link"
           to={url({ folder: selected, new: "1" })}
+          onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) sidebar.rememberChatTrigger(event.currentTarget); }}
         >
           <Icon icon={SquarePen} size={13} />
           <span>New chat</span>
         </Link>
       </div>
       <nav aria-label="Workspace navigation" className="workspace-tools">
-        <Menu label="Create note or artifact" triggerText="New note" icon={NotebookPen} iconSize={13} className="rail-menu" align="start">
-          <MenuItem onSelect={async () => { try { const record = await send<{id:string}>(`/enterprise/api/projects/${projectId}/workspace-content`, {kind:"note",title:"Untitled note",body:"",folderId:selected === "all" ? null : selected,data:{format:"markdown"}}); navigate(`${base}/notes?item=${record.id}`); workspaceChanged(); } catch(e) { setError(errorMessage(e)); } }}>New note</MenuItem>
+        <Menu label="Create note or artifact" triggerText="New note" icon={FileText} iconSize={13} iconWeight="normal" className="rail-menu" align="start">
+          <MenuItem onSelect={async () => { try { const record = await send<{id:string}>(`/enterprise/api/projects/${projectId}/workspace-content`, {kind:"note",title:"Untitled note",body:"",folderId:selected === "all" ? null : selected,data:{format:"markdown"}}); const next = new URLSearchParams(query); next.set("note", record.id); next.delete("new"); next.delete("trash"); navigate(`${base}?${next}`); sidebar.setDrawer(null); workspaceChanged(); } catch(e) { setError(errorMessage(e)); } }}>New note</MenuItem>
           <MenuItem onSelect={() => navigate(`${base}/artifacts`)}>New artifact…</MenuItem>
           <MenuSeparator />
           <MenuItem onSelect={() => navigate(`${base}/notes`)}>Browse notes</MenuItem>
@@ -372,11 +394,11 @@ function WorkspaceRail({
         </Menu>
         {[
           { path: "calendar", label: "Calendar", icon: CalendarDays },
-          { path: "tasks", label: "Scheduled Tasks", icon: Clock3 },
+          { path: "tasks", label: "Scheduled Tasks", icon: CalendarClock },
           { path: "library", label: "Library", icon: LibraryBig },
           { path: "databases", label: "Databases", icon: Database },
           { path: "files", label: "Workspace Files", icon: Files },
-          { path: "usage", label: "Usage", icon: ChartNoAxesCombined },
+          { path: "usage", label: "Usage", icon: BarChart3 },
           { path: "settings", label: "Settings", icon: Settings },
         ].map(item => <NavLink key={item.path} className="nav-link" to={`${base}/${item.path}`}><Icon icon={item.icon} size={13} /><span>{item.label}</span></NavLink>)}
       </nav>
@@ -384,6 +406,8 @@ function WorkspaceRail({
         <Link
           className={`nav-link ${onWorkspace && selected === "all" && !trash ? "active" : ""}`}
           to={url({ folder: "all" })}
+          data-folder-selection="true"
+          onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) selectFolder(); }}
         >
           <Icon icon={FolderOpen} size={13} />
           <span className="rail-title">All Workspaces</span>
@@ -418,7 +442,7 @@ function WorkspaceRail({
           <div className="rail-row" key={f.id}>
             <FolderRailLink folder={f} workspace={project?.name ?? "Workspace"}
               count={count(f.id)} selected={onWorkspace && selected === f.id && !trash}
-              to={url({ folder: f.id })} />
+              to={url({ folder: f.id })} onSelect={selectFolder} />
             {writable ? (
               <Menu
                 label={`Actions for folder ${f.name}`}
@@ -644,5 +668,6 @@ function WorkspaceRail({
         </Modal>
       ) : null}
     </div>
-  );
+    {project && sidebar.contentTarget ? createPortal(<WorkspaceDetails project={project} chats={allChats} folderName={folders.data?.items.find(folder => folder.id === selected)?.name} query={query} base={base} error={chats.error} />, sidebar.contentTarget) : null}
+  </>;
 }

@@ -78,15 +78,17 @@ export function PageHeader({
   title,
   description,
   actions,
+  icon,
 }: {
   title: string;
   description?: string;
   actions?: ReactNode;
+  icon?: ReactNode;
 }) {
   return (
     <header className="page-header">
       <div>
-        <h1>{title}</h1>
+        {icon ? <div className="page-header-title"><span className="page-header-icon">{icon}</span><h1>{title}</h1></div> : <h1>{title}</h1>}
         {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="actions">{actions}</div> : null}

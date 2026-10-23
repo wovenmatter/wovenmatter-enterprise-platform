@@ -97,7 +97,7 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
       await expect(page.locator('.platform-header')).toHaveAttribute('inert', '');
       await expect(page.locator('main')).toHaveAttribute('inert', '');
       await expect(drawer.locator('a[href*="personal-settings"]')).toHaveCount(0);
-      const recents = drawer.locator('summary').filter({ hasText: /^Recents$/ });
+      const recents = drawer.locator('.sidebar summary').filter({ hasText: /^Recents$/ });
       await recents.click(); // A collapsed final section is still part of keyboard navigation.
       const close = drawer.getByRole('button', { name: 'Close navigation', exact: true });
       await close.focus(); await page.keyboard.press('Shift+Tab');
@@ -130,7 +130,7 @@ test('Agents and Folders are independent sections with working folder navigation
   await expect(rail.getByRole('link', { name: 'Pi Durable', exact: true })).toBeVisible();
   await rail.locator('summary').filter({ hasText: /^Folders$/ }).click();
   await rail.getByRole('link', { name: folder.name, exact: true }).click();
-  await expect(page).toHaveURL(new URL(`${base}/workspaces/${project.id}?folder=${folder.id}`, baseURL).href);
+  await expect(page).toHaveURL(new URL(`${base}/workspaces/${project.id}?folder=${folder.id}&conversation=parity-chat`, baseURL).href);
   await expect(page.getByRole('textbox', { name: 'Message your agent', exact: true })).toBeVisible();
   await rail.getByRole('button', { name: `Actions for folder ${folder.name}`, exact: true }).click();
   await expect(page.getByRole('menuitem', { name: 'Rename', exact: true })).toBeVisible();
@@ -170,7 +170,7 @@ test('right-panel Chats and Notes search retain All Workspaces and folder scope'
   await expect(rail.getByRole('searchbox')).toHaveCount(0);
   await expect(content.getByRole('link', { name: 'Other conversation', exact: true })).toBeVisible();
   await content.getByRole('searchbox', { name: 'Search chats', exact: true }).fill('no match');
-  await expect(content.getByRole('link')).toHaveCount(0);
+  await expect(content.locator('.workspace-detail-list').getByRole('link')).toHaveCount(0);
   await expect(rail.getByRole('link', { name: 'Retained parity conversation', exact: true })).toBeVisible();
   await content.getByRole('searchbox', { name: 'Search chats', exact: true }).fill('retained');
   await expect(content.getByRole('link', { name: 'Retained parity conversation', exact: true })).toBeVisible();
@@ -179,13 +179,13 @@ test('right-panel Chats and Notes search retain All Workspaces and folder scope'
   await expect(content.getByRole('link', { name: 'Other conversation', exact: true })).toHaveCount(0);
   await expect(content.getByRole('link', { name: 'Retained parity conversation', exact: true })).toBeVisible();
   await content.getByRole('tab', { name: 'Notes', exact: true }).click();
-  await expect(content.getByRole('button', { name: 'Folder research', exact: true })).toBeVisible();
-  await expect(content.getByRole('button', { name: 'Other research', exact: true })).toHaveCount(0);
+  await expect(content.getByRole('link', { name: 'Folder research', exact: true })).toBeVisible();
+  await expect(content.getByRole('link', { name: 'Other research', exact: true })).toHaveCount(0);
   await content.getByRole('searchbox', { name: 'Search notes', exact: true }).fill('other');
-  await expect(content.getByRole('button', { name: 'Folder research', exact: true })).toHaveCount(0);
+  await expect(content.getByRole('link', { name: 'Folder research', exact: true })).toHaveCount(0);
   await rail.getByRole('link', { name: 'All Workspaces', exact: true }).click();
-  await expect(content.getByRole('button', { name: 'Other research', exact: true })).toBeVisible();
+  await expect(content.getByRole('link', { name: 'Other research', exact: true })).toBeVisible();
   await content.getByRole('searchbox', { name: 'Search notes', exact: true }).fill('');
-  await expect(content.getByRole('button', { name: 'Folder research', exact: true })).toBeVisible();
+  await expect(content.getByRole('link', { name: 'Folder research', exact: true })).toBeVisible();
   expect(state.errors).toEqual([]); expect(state.external).toEqual([]);
 });

@@ -1,0 +1,88 @@
+/* Desktop 0c1f8f82, DashboardDesign.pages / WorkspaceView.railGroup.
+ * Enterprise retains its 760px navigation drawer breakpoint. At <=1100px,
+ * split content is recoverable in a drawer rather than silently disappearing.
+ */
+.sidebar-shell .shell-body { display: flex; position: relative; }
+.sidebar-shell .main-content { flex: 1; order: 2; }
+.sidebar-shell .sidebar-layout { display: contents; }
+.sidebar-shell .sidebar { position: static; flex: 0 0 var(--rail-width); width: var(--rail-width); order: 1; }
+.sidebar-shell .sidebar-content-slot { display: flex; flex: 0 0 var(--rail-width); width: var(--rail-width); min-width: 0; min-height: 0; order: 3; }
+.sidebar-shell .sidebar-content-slot > .workspace-detail-rail { display: flex; width: 100%; flex: 1; }
+.sidebar-shell .sidebar.rail-hidden,
+.sidebar-shell .sidebar-content-slot.rail-hidden { display: none; }
+.sidebar-shell .sidebar.rail-visible { display: flex; }
+.sidebar-shell[data-sidebar-style="single"][data-sidebar-side="left"] .sidebar-content-slot { order: 1; }
+.sidebar-shell[data-sidebar-style="single"][data-sidebar-side="right"] .sidebar { order: 3; }
+.sidebar-shell[data-sidebar-style="adaptive"][data-sidebar-side="right"] .sidebar { order: 3; }
+.sidebar-shell .sidebar-layout.adaptive-expanded {
+  display: flex;
+  flex: 0 0 calc(2 * var(--rail-width));
+  min-height: 0;
+  min-width: 0;
+  order: 1;
+  border-radius: var(--surface-radius);
+  overflow: hidden;
+  background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace);
+  box-shadow: inset 0 0 0 1px var(--rail-rim), inset 0 0 0 2px var(--rail-inner), 0 0 0 .5px var(--rail-edge);
+}
+.sidebar-shell[data-sidebar-side="right"] .sidebar-layout.adaptive-expanded { order: 3; }
+.sidebar-shell .adaptive-expanded .sidebar,
+.sidebar-shell .adaptive-expanded .workspace-detail-rail { border-radius: 0; box-shadow: none; background: transparent; }
+.sidebar-shell .adaptive-expanded .sidebar-content-slot { border-left: 1px solid var(--line); }
+.sidebar-shell[data-sidebar-side="right"] .adaptive-expanded .sidebar-content-slot { order: 1; border-left: 0; border-right: 1px solid var(--line); }
+.sidebar-shell .workspace-rail-title { justify-content: space-between; gap: 4px; min-height: 68px; padding: 0 4px 0 8px; }
+.sidebar-shell .workspace-rail-title > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-controls { display: inline-flex; flex: none; align-items: center; gap: 0; }
+.sidebar-controls .icon-button { width: 32px; height: 36px; min-width: 32px; padding: 0; }
+.sidebar-controls .sidebar-collapse { width: 36px; }
+.sidebar-shell .workspace-detail-heading { gap: 4px; }
+.sidebar-shell .workspace-detail-heading > div { flex: 1; }
+.sidebar-shell .workspace-detail-heading small { white-space: nowrap; }
+.sidebar-shell .workspace-detail-actions { flex-direction: column; gap: 1px; }
+.sidebar-shell .workspace-detail-actions > .nav-link { font-size: 13px; padding-inline: 8px; }
+.sidebar-shell .sidebar-layout.drawer-open {
+  position: absolute;
+  top: var(--shell-inset);
+  bottom: var(--shell-inset);
+  left: var(--shell-inset);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  width: min(320px, calc(100vw - 2 * var(--shell-inset)));
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--surface-radius);
+  background: var(--rail-reduced);
+  box-shadow: inset 0 0 0 1px var(--rail-rim), 0 8px 32px var(--scrim);
+}
+.sidebar-shell .sidebar-layout.drawer-open[data-side="right"] { left: auto; right: var(--shell-inset); }
+.sidebar-shell .drawer-open .sidebar,
+.sidebar-shell .drawer-open .sidebar-content-slot { position: static; flex: 1; width: 100%; min-height: 0; order: 2; border: 0; }
+.sidebar-shell .drawer-open .sidebar,
+.sidebar-shell .drawer-open .workspace-detail-rail { border-radius: 0; background: transparent; box-shadow: none; }
+.sidebar-shell .drawer-open .sidebar-top { order: 0; display: flex; justify-content: flex-end; min-height: 44px; padding: 0 8px; }
+.sidebar-shell .drawer-open .mobile-close { display: inline-grid; }
+.sidebar-shell .sidebar-backdrop { position: fixed; inset: 0; z-index: 30; display: block; width: 100%; height: 100%; border: 0; border-radius: 0; background: var(--scrim); }
+.sidebar-style-choices { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; padding: 0; border: 0; }
+.sidebar-style-choice { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: var(--control-radius); cursor: pointer; }
+.sidebar-style-choice:has(input:checked) { background: var(--soft); border-color: var(--ring); }
+.sidebar-style-choice input { flex: none; margin: 4px 0 0; accent-color: var(--primary); }
+.sidebar-style-choice strong, .sidebar-style-choice small { display: block; }
+.sidebar-style-choice small { margin-top: 2px; color: var(--muted); }
+@media (max-width: 1100px) {
+  .sidebar-shell[data-sidebar-style="split"] .sidebar-layout:not(.drawer-open) .sidebar-content-slot { display: none; }
+}
+@media (max-width: 903px) {
+  /* Two 256px rails must leave the source's 360px minimum center width. */
+  .sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout:not(.drawer-open) { display: contents; }
+  .sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout:not(.drawer-open) .sidebar-content-slot { display: none; }
+}
+@media (max-width: 760px) {
+  /* Apply the breakpoint before React receives matchMedia's change event. */
+  .sidebar-shell .sidebar-layout:not(.drawer-open),
+  .sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout:not(.drawer-open) { display: none; }
+}
+@media (pointer: coarse) {
+  .sidebar-controls .icon-button { width: 44px; min-width: 44px; height: 44px; }
+  .sidebar-shell .sidebar-reveal, .sidebar-shell .mobile-close { min-width: 44px; min-height: 44px; }
+}

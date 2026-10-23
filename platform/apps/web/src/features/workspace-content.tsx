@@ -2,12 +2,13 @@ import { occursOnDay } from "../calendar-occurrence";
 import { useWorkspace } from "../workspace";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Database, Mic, Type, ChevronLeft, ChevronRight, FileText, History, NotebookPen, Plus, Redo2, Save, Trash2, Undo2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, CalendarClock, CalendarDays, Database, Mic, Type, FileText, History, Plus, Redo2, Save, Trash2, Undo2 } from "lucide-react";
 import { api, date, errorMessage, send, useResource, type List, type Project, type WorkspaceFolder } from "../api";
 import { agents, agentName } from "../agents";
-import { Icon, Menu, MenuItem, SearchField, Switch } from "../components/controls";
+import { ColorPicker, Icon, Menu, MenuItem, SearchField, Switch } from "../components/controls";
 import { AsyncForm, Confirm, Empty, ErrorNotice, Field, Loading, Modal, PageHeader } from "../components/ui";
 import { workspaceChanged, useWorkspaceChanges } from "../workspace-events";
+import "./workspace-calendar.css";
 const RichText = lazy(() => import("../components/RichText").then(m => ({ default: m.RichText })));
 export type ContentRecord = {
   id: string; projectId: string; kind: "note" | "artifact" | "event" | "task" | "library" | "database";
@@ -43,7 +44,7 @@ export function NotesPage({ project, kind = "note" }: { project: Project; kind?:
         <SearchField label={`Search ${label}s`} placeholder={`Search ${label}s…`} value={search} onChange={setSearch} />
         {resource.loading && !resource.data ? <Loading /> : null}
         {resource.data?.items.filter(item => item.title.toLowerCase().includes(search.toLowerCase())).map(item => <div className="document-row" key={item.id}>
-          <button className={`nav-link ${selected?.id === item.id ? "active" : ""}`} onClick={() => setQuery({ item: item.id })}><Icon icon={kind === "note" ? NotebookPen : FileText} size={14} /><span><strong>{item.title}</strong><small>{date(item.updatedAt)}</small></span></button>
+          <button className={`nav-link ${selected?.id === item.id ? "active" : ""}`} onClick={() => setQuery({ item: item.id })}><Icon icon={FileText} size={14} /><span><strong>{item.title}</strong><small>{date(item.updatedAt)}</small></span></button>
           <button className="icon-button" aria-label={`Delete ${item.title}`} onClick={() => setRemoving(item)}><Icon icon={Trash2} size={13} /></button>
         </div>)}
       </aside>
@@ -166,9 +167,45 @@ function InsertDatabase({ projectId, onClose, onInsert }: { projectId: string; o
   return <Modal title="Insert database query" onClose={onClose}><ErrorNotice message={error} /><AsyncForm submitLabel="Insert results" onCancel={onClose} onSubmit={async form => { const result = await send<{ query: { columns: string[]; rows: string[][] } }>(`/enterprise/api/projects/${projectId}/databases`, { action: "query", databaseID: form.get("databaseID"), sql: form.get("sql") }); const escape = (cell: string) => String(cell ?? "").replaceAll("|", "\\|").replaceAll("\n", " "); onInsert([`| ${result.query.columns.map(escape).join(" | ")} |`, `| ${result.query.columns.map(() => "---").join(" | ")} |`, ...result.query.rows.map(row => `| ${row.map(escape).join(" | ")} |`)].join("\n")); }}><Field label="Database"><select name="databaseID" required defaultValue=""><option value="" disabled>Select a database</option>{databases.map(database => <option value={database.id} key={database.id}>{database.name}</option>)}</select></Field><Field label="Query"><textarea name="sql" rows={4} required defaultValue="SELECT name FROM sqlite_master WHERE type = 'table'" /></Field></AsyncForm></Modal>;
 }
 
-const calendarColors = ["#004225", "#4169e1", "#800080", "#9a5a2a", "#0d8f5a", "#ef4444", "#ec4899", "#f97316", "#eab308", "#000000"];
+// Desktop source: DashboardCalendarView.swift / DashboardCalendarColors.swift,
+// WovenMatter 0c1f8f82c2a5862a72cb0ac607d8ccfe95ff1807.
+const calendarPalette = [
+  { value: "#9a5a2a", label: "Cognac", color: "var(--calendar-cognac)" },
+  { value: "#004225", label: "British Racing Green", color: "var(--primary)" },
+  { value: "#84cc16", label: "Green", color: "#84cc16" },
+  { value: "#4169e1", label: "Royal blue", color: "var(--calendar-blue)" },
+  { value: "#7462a6", label: "Purple", color: "var(--calendar-purple)" },
+  { value: "#d23f3f", label: "Red", color: "var(--calendar-red)" },
+  { value: "#d75a95", label: "Pink", color: "var(--calendar-pink)" },
+  { value: "#e67e22", label: "Orange", color: "var(--calendar-orange)" },
+  { value: "#e6b800", label: "Yellow", color: "#e6b800" },
+  { value: "#000000", label: "Black", color: "var(--calendar-black)" },
+];
+const calendarStyles = [
+  { key: "event", label: "Events", color: "#004225" },
+  { key: "task", label: "Scheduled Tasks", color: "#4169e1" },
+  { key: "recurring-event", label: "Reoccurring Events", color: "#7462a6" },
+  { key: "recurring-task", label: "Reoccurring Scheduled Tasks", color: "#9a5a2a" },
+] as const;
 const dayKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+function calendarStyle(item: ContentRecord) {
+  return calendarStyles[(item.data.recurrence ? 2 : 0) + (item.kind === "task" ? 1 : 0)];
+}
+function recurrenceLabel(item: ContentRecord) {
+  const rule = item.data.recurrence as { unit: string; interval: number } | undefined;
+  if (!rule) return "";
+  const interval = rule.interval || 1;
+  return `Every ${interval > 1 ? `${interval} ` : ""}${rule.unit}${interval > 1 ? "s" : ""}`;
+}
+function readCalendarColors(key: string): Record<string, string> {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? "{}");
+    if (!value || typeof value !== "object") return {};
+    return Object.fromEntries(calendarStyles.flatMap(style => calendarPalette.some(option => option.value === value[style.key]) ? [[style.key, value[style.key]]] : []));
+  } catch { return {}; }
+}
 export function CalendarPage({ project, tasksOnly = false }: { project: Project; tasksOnly?: boolean }) {
+  const { user, org } = useWorkspace();
   const resource = useContent(project.id);
   const [month, setMonth] = useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [selectedDay, setSelectedDay] = useState(() => dayKey(new Date()));
@@ -176,28 +213,99 @@ export function CalendarPage({ project, tasksOnly = false }: { project: Project;
   const [removing, setRemoving] = useState<ContentRecord>();
   const [error, setError] = useState("");
   const [enabledOverrides, setEnabledOverrides] = useState<Record<string, boolean>>({});
-  const items = resource.data?.items.filter(item => tasksOnly ? item.kind === "task" : item.kind === "event" || item.kind === "task" && item.data.showsOnCalendar !== false) ?? [];
+  const colorKey = `wme:calendar-colors:v1:${user.id}:${org.id}`;
+  const [palette, setPalette] = useState(() => ({ key: colorKey, colors: readCalendarColors(colorKey) }));
+  // Scope local presentation preferences to the signed-in organization; an SPA
+  // organization change must not reuse another organization's category colors.
+  const colors = palette.key === colorKey ? palette.colors : readCalendarColors(colorKey);
+  const items = (resource.data?.items.filter(item => tasksOnly ? item.kind === "task" : item.kind === "event" || item.kind === "task" && item.data.showsOnCalendar !== false) ?? [])
+    .sort((a, b) => Number(Boolean(b.data.allDay)) - Number(Boolean(a.data.allDay)) || String(a.data.startsAt).localeCompare(String(b.data.startsAt)));
   const selected = tasksOnly ? items : items.filter(item => occursOnDay(item.data, selectedDay));
   const first = new Date(month); first.setDate(1 - first.getDay());
   const cells = Array.from({ length: 42 }, (_, index) => { const cell = new Date(first); cell.setDate(first.getDate() + index); return cell; });
+  const today = dayKey(new Date());
+  function itemColor(item: ContentRecord) {
+    const style = calendarStyle(item);
+    // Keep Enterprise's explicit record colors until a category preference is
+    // chosen. Legacy default colors follow the desktop's recurrence categories.
+    const legacyDefault = item.kind === "task" ? "#4169e1" : "#004225";
+    const recordColor = typeof item.data.color === "string" && /^#[0-9a-f]{6}$/i.test(item.data.color) ? item.data.color.toLowerCase() : undefined;
+    const color = colors[style.key] ?? (recordColor && recordColor !== legacyDefault ? recordColor : style.color);
+    return calendarPalette.find(option => option.value === color)?.color ?? color;
+  }
+  function chooseColor(category: string, color: string) {
+    const next = { ...colors, [category]: color };
+    setPalette({ key: colorKey, colors: next });
+    try { localStorage.setItem(colorKey, JSON.stringify(next)); }
+    catch { setError("Your browser could not save calendar colors. The selection applies for this visit."); }
+  }
+  function selectDay(day: Date) {
+    setSelectedDay(dayKey(day));
+    if (day.getMonth() !== month.getMonth() || day.getFullYear() !== month.getFullYear()) setMonth(new Date(day.getFullYear(), day.getMonth(), 1));
+  }
+  function moveMonth(offset: number) {
+    const next = new Date(month.getFullYear(), month.getMonth() + offset, 1);
+    setMonth(next); setSelectedDay(dayKey(next));
+  }
   async function toggle(record: ContentRecord, enabled: boolean) {
     setEnabledOverrides(previous => ({ ...previous, [record.id]: enabled }));
     try { await send(`${contentBase(project.id)}/${record.id}`, { expectedRevision: record.revision, data: { ...record.data, enabled } }, "PATCH"); resource.reload(); }
     catch (e) { setEnabledOverrides(previous => ({ ...previous, [record.id]: record.data.enabled !== false })); setError(errorMessage(e)); }
   }
-  return <section className="desktop-content-page calendar-page">
-    <PageHeader title={tasksOnly ? "Scheduled Tasks" : "Calendar"} actions={<button className="primary" onClick={() => setEditing(tasksOnly ? "task" : "event")}><Icon icon={Plus} size={14} />{tasksOnly ? "New task" : "New event"}</button>} />
+  return <section className={`desktop-content-page calendar-page${tasksOnly ? " scheduled-tasks-page" : ""}`}>
+    <header className="page-header calendar-header">
+      <div className="calendar-heading"><span className="calendar-heading-icon"><Icon icon={tasksOnly ? CalendarClock : CalendarDays} size={18} weight="control" /></span><h1>{tasksOnly ? "Scheduled Tasks" : "Calendar"}</h1></div>
+      <div className="actions"><button className="primary" onClick={() => setEditing(tasksOnly ? "task" : "event")}>{tasksOnly ? "New task" : "Add event"}</button></div>
+    </header>
     <ErrorNotice message={resource.error || error} onRetry={resource.reload} />
-    <div className={tasksOnly ? "" : "calendar-layout"}>
-      {!tasksOnly ? <div className="calendar-month"><div className="calendar-month-heading"><h2>{month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2><div className="row-actions"><button className="icon-button" aria-label="Previous month" onClick={() => setMonth(value => new Date(value.getFullYear(), value.getMonth() - 1, 1))}><Icon icon={ChevronLeft} size={16} /></button><button className="text-button" onClick={() => { const today = new Date(); setMonth(new Date(today.getFullYear(), today.getMonth(), 1)); setSelectedDay(dayKey(today)); }}>Today</button><button className="icon-button" aria-label="Next month" onClick={() => setMonth(value => new Date(value.getFullYear(), value.getMonth() + 1, 1))}><Icon icon={ChevronRight} size={16} /></button></div></div>
-        <div className="calendar-grid" role="grid" aria-label="Calendar month">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => <div className="calendar-weekday" key={day}>{day}</div>)}{cells.map(cell => { const key = dayKey(cell); const events = items.filter(item => occursOnDay(item.data, key)); return <button role="gridcell" aria-selected={key === selectedDay} aria-label={`${cell.toLocaleDateString(undefined, { dateStyle: "full" })}, ${events.length} events`} className={`calendar-day ${cell.getMonth() !== month.getMonth() ? "outside" : ""} ${key === selectedDay ? "selected" : ""} ${key === dayKey(new Date()) ? "today" : ""}`} key={key} onClick={() => setSelectedDay(key)}><span>{cell.getDate()}</span><div className="calendar-dots">{events.slice(0, 4).map(item => <i key={item.id} style={{ backgroundColor: String(item.data.color ?? (item.kind === "task" ? "#4169e1" : "#004225")) }} />)}</div></button>; })}</div>
+    <div className={tasksOnly ? "scheduled-tasks-content" : "calendar-layout"}>
+      {!tasksOnly ? <div className="calendar-month">
+        <div className="calendar-month-heading"><h2>{month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h2><div className="row-actions">
+          <button className="text-button" onClick={() => selectDay(new Date())}>Today</button>
+          <button className="icon-button" aria-label="Previous month" onClick={() => moveMonth(-1)}><Icon icon={ArrowLeft} size={14} weight="control" /></button>
+          <button className="icon-button" aria-label="Next month" onClick={() => moveMonth(1)}><Icon icon={ArrowRight} size={14} weight="control" /></button>
+        </div></div>
+        <div className="calendar-grid" role="grid" aria-label="Calendar month">
+          <div className="calendar-week" role="row">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(day => <div role="columnheader" className="calendar-weekday" key={day}>{day}</div>)}</div>
+          {Array.from({ length: 6 }, (_, week) => <div role="row" className="calendar-week" key={week}>{cells.slice(week * 7, week * 7 + 7).map(cell => {
+            const key = dayKey(cell), events = items.filter(item => occursOnDay(item.data, key));
+            const label = cell.toLocaleDateString(undefined, { dateStyle: "full" });
+            return <div role="gridcell" aria-selected={key === selectedDay} aria-label={`${label}, ${events.length} events`}
+              className={`calendar-day ${cell.getMonth() !== month.getMonth() ? "outside" : ""} ${key === selectedDay ? "selected" : ""} ${key === today ? "today" : ""}`}
+              key={key} onClick={() => selectDay(cell)}>
+              <button className="calendar-date" aria-label={label} aria-current={key === today ? "date" : undefined} data-calendar-date={key}
+                onKeyDown={event => {
+                  const offset = ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 } as Record<string, number>)[event.key];
+                  if (offset === undefined) return;
+                  event.preventDefault(); const next = new Date(cell); next.setDate(next.getDate() + offset); selectDay(next);
+                  requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-calendar-date="${dayKey(next)}"]`)?.focus());
+                }}>{cell.getDate()}</button>
+              {events.slice(0, 3).map(item => <button className="calendar-occurrence" key={item.id} title={`${item.title}${recurrenceLabel(item) ? ` · ${recurrenceLabel(item)}` : ""}`}
+                aria-label={`${item.title}, ${calendarStyle(item).label}`} onClick={event => { event.stopPropagation(); setEditing(item); }}>
+                <i aria-hidden="true" style={{ backgroundColor: itemColor(item) }} /><span>{item.title}</span>
+              </button>)}
+              {events.length > 3 ? <button className="calendar-more" aria-label={`Show all ${events.length} events on ${label}`}>+{events.length - 3} more</button> : null}
+            </div>;
+          })}</div>)}
+        </div>
       </div> : null}
-      <div className="calendar-agenda">{!tasksOnly ? <h2>{new Date(`${selectedDay}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h2> : null}
+      <div className="calendar-agenda">
+        {!tasksOnly ? <div className="calendar-agenda-heading"><h2>{new Date(`${selectedDay}T12:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</h2><div className="row-actions"><button className="text-button" onClick={() => setEditing("event")}>Add event</button><button className="text-button" onClick={() => setEditing("task")}>Add task</button></div></div> : null}
         {resource.loading && !resource.data ? <Loading /> : null}
-        {selected.map(item => <div key={item.id}><article className="agenda-row"><span className="event-color" style={{ backgroundColor: String(item.data.color ?? (item.kind === "task" ? "#4169e1" : "#004225")) }} /><button className="agenda-title" onClick={() => setEditing(item)}><strong>{item.title}</strong><small>{item.data.allDay ? "All day" : date(String(item.data.startsAt))}{item.data.recurrence ? ` · Every ${(item.data.recurrence as { interval: number }).interval || 1} ${(item.data.recurrence as { unit: string }).unit}` : ""}</small>{item.kind === "task" ? <small>{agentName(String(item.data.harness))} · {String(item.data.sessionMode ?? "new")} chat</small> : null}</button>{item.kind === "task" ? <Switch checked={enabledOverrides[item.id] ?? item.data.enabled !== false} onChange={event => void toggle(item, event.target.checked)}>Enable {item.title}</Switch> : null}<button className="icon-button" aria-label={`Delete ${item.title}`} onClick={() => setRemoving(item)}><Icon icon={Trash2} size={13} /></button></article>{item.kind === "task" ? <TaskHistory projectId={project.id} recordId={item.id} /> : null}</div>)}
-        {!selected.length && resource.data ? <Empty title={tasksOnly ? "No scheduled tasks" : "Nothing scheduled"}>{tasksOnly ? "Schedule an agent to work at a specific time or on a recurring schedule." : "Add an event or a scheduled task."}</Empty> : null}
-        {!tasksOnly ? <><div className="row-actions"><button className="secondary" onClick={() => setEditing("event")}>Add event</button><button className="secondary" onClick={() => setEditing("task")}>Add task</button></div><div className="calendar-legend">{[["#004225", "Events"], ["#4169e1", "Scheduled tasks"], ["#800080", "Recurring events"], ["#9a5a2a", "Recurring tasks"]].map(([color, label]) => <span key={label}><i style={{ backgroundColor: color }} />{label}</span>)}</div></> : null}
+        {selected.map(item => <div key={item.id}><article className="agenda-row">
+          <button className="agenda-title" aria-label={`${item.title}, ${calendarStyle(item).label}, ${item.data.allDay ? "All day" : date(String(item.data.startsAt))}${recurrenceLabel(item) ? `, ${recurrenceLabel(item)}` : ""}`} onClick={() => setEditing(item)}>
+            <i className="event-color" aria-hidden="true" style={{ backgroundColor: itemColor(item) }} />
+            <span className="agenda-time">{item.data.allDay ? "All day" : tasksOnly ? date(String(item.data.startsAt)) : new Date(String(item.data.startsAt)).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
+            <span className="agenda-description"><strong>{item.title}</strong><small>{calendarStyle(item).label}{item.kind === "task" ? ` · ${agentName(String(item.data.harness))} · ${String(item.data.sessionMode ?? "new")} chat` : ""}</small></span>
+            {item.data.recurrence ? <span className="agenda-recurrence" style={{ color: itemColor(item) }}>{recurrenceLabel(item)}</span> : null}
+            <Icon icon={ArrowRight} size={12} weight="control" />
+          </button>
+          {item.kind === "task" ? <Switch checked={enabledOverrides[item.id] ?? item.data.enabled !== false} onChange={event => void toggle(item, event.target.checked)}>Enable {item.title}</Switch> : null}
+          <button className="icon-button" aria-label={`Delete ${item.title}`} onClick={() => setRemoving(item)}><Icon icon={Trash2} size={13} /></button>
+        </article>{item.kind === "task" ? <TaskHistory projectId={project.id} recordId={item.id} /> : null}</div>)}
+        {!selected.length && resource.data ? <p className="calendar-empty">{tasksOnly ? "No scheduled tasks. Schedule an agent to work at a specific time or on a recurring schedule." : "No events."}</p> : null}
       </div>
+      {!tasksOnly ? <div className="calendar-legend"><h3>Legend</h3><div className="calendar-legend-items">{calendarStyles.map(style => <ColorPicker key={style.key} label={style.label} value={colors[style.key] ?? style.color} options={calendarPalette} onChange={color => chooseColor(style.key, color)} />)}</div></div> : null}
     </div>
     {editing ? <ScheduleEditor project={project} record={typeof editing === "string" ? undefined : editing} kind={typeof editing === "string" ? editing : editing.kind as "event" | "task"} day={selectedDay} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); resource.reload(); workspaceChanged(); }} /> : null}
     {removing ? <Confirm title={`Delete ${removing.kind}?`} onClose={() => setRemoving(undefined)} onConfirm={async () => { await api(`${contentBase(project.id)}/${removing.id}?revision=${removing.revision}`, { method: "DELETE" }); setRemoving(undefined); resource.reload(); }}>Delete “{removing.title}” and its future recurrences.</Confirm> : null}
@@ -220,7 +328,7 @@ function ScheduleEditor({ project, record, kind, day, onClose, onSaved }: { proj
   }}><Field label="Title"><input name="title" defaultValue={record?.title} required autoFocus maxLength={200} /></Field>
     <div className="form-columns"><Field label="Starts"><input name="startsAt" type="datetime-local" defaultValue={localTime(record?.data.startsAt, `${day}T09:00`)} required /></Field>{kind === "event" ? <Field label="Ends"><input name="endsAt" type="datetime-local" defaultValue={localTime(record?.data.endsAt)} /></Field> : null}</div>
     {kind === "event" ? <Switch name="allDay" defaultChecked={Boolean(record?.data.allDay)}>All day</Switch> : null}
-    <div className="form-columns"><Field label="Repeat"><select name="recurrence" defaultValue={recurrence?.unit ?? ""}><option value="">Does not repeat</option><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></Field><Field label="Every"><input name="interval" type="number" min={1} max={365} defaultValue={recurrence?.interval ?? 1} /></Field><Field label="Color"><select name="color" defaultValue={String(record?.data.color ?? (kind === "task" ? "#4169e1" : "#004225"))}>{calendarColors.map((color, index) => <option value={color} key={color}>{["British Racing Green", "Royal blue", "Purple", "Cognac", "Green", "Red", "Pink", "Orange", "Yellow", "Black"][index]}</option>)}</select></Field></div>
+    <div className="form-columns"><Field label="Repeat"><select name="recurrence" defaultValue={recurrence?.unit ?? ""}><option value="">Does not repeat</option><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select></Field><Field label="Every"><input name="interval" type="number" min={1} max={365} defaultValue={recurrence?.interval ?? 1} /></Field><Field label="Color"><select name="color" defaultValue={String(record?.data.color ?? (kind === "task" ? "#4169e1" : "#004225"))}>{Boolean(record?.data.color) && !calendarPalette.some(option => option.value === record?.data.color) ? <option value={String(record?.data.color)}>Saved color</option> : null}{calendarPalette.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}</select></Field></div>
     {kind === "task" ? <>
       <Field label="Prompt"><textarea name="prompt" defaultValue={String(record?.data.prompt ?? "")} rows={4} required /></Field>
       <div className="form-columns"><Field label="Agent"><select name="harness" defaultValue={String(record?.data.harness ?? "pi")}>{agents.map(agent => <option value={agent.id} key={agent.id}>{agent.name}</option>)}</select></Field><Field label="Model" hint="Leave empty to use the workspace default."><input name="model" defaultValue={String(record?.data.model ?? "")} /></Field></div>

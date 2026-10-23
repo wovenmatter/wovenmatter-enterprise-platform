@@ -721,6 +721,7 @@ test("durable conversation streams are shared automatically with workspace colle
   } finally { await memberContext.close(); }
   await page.reload();
   await page
+    .getByRole("complementary", { name: "Workspace content", exact: true })
     .getByRole("link", {
       name: /Browser conversation/,
     })
@@ -973,7 +974,7 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
       name: "Open navigation",
     })
     .click();
-  const closeNav = page.locator(".sidebar").getByRole("button", {
+  const closeNav = page.getByRole("dialog", { name: "Navigation", exact: true }).getByRole("button", {
     name: "Close navigation",
   });
   await expect(closeNav).toBeFocused();
@@ -2332,7 +2333,7 @@ test("native streaming retains chronological work, task progress, full copy and 
     "The record is complete.\n\nAll retained output remains available after reopening this conversation.",
   );
   await page.reload();
-  await page.getByRole("link", { name: /Native streaming review/ }).click();
+  await page.getByRole("complementary", { name: "Workspace content", exact: true }).getByRole("link", { name: /Native streaming review/ }).click();
   await expect(page.locator(".native-final")).toContainText(
     "All retained output remains available",
   );
@@ -2578,9 +2579,8 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
   await expect(draft).toHaveValue("Keep this unsent project draft");
   await page.reload();
   await expect(draft).toHaveValue("Keep this unsent project draft");
-  await expect(page).toHaveURL(
-    `${f.origin}${base}?folder=all&conversation=${first.id}`,
-  );
+  await expect(page).toHaveURL(url => url.origin === f.origin && url.pathname === base
+    && url.searchParams.get("folder") === "all" && url.searchParams.get("conversation") === first.id);
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Read-only research", exact: true })

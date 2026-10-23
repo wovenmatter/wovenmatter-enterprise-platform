@@ -250,6 +250,7 @@ export function Menu({
   children,
   icon = Ellipsis,
   iconSize = 16,
+  iconWeight = "control",
   className = "",
   align = "end",
   triggerText,
@@ -259,6 +260,7 @@ export function Menu({
   children: ReactNode;
   icon?: LucideIcon;
   iconSize?: number;
+  iconWeight?: IconWeight;
   className?: string;
   align?: "start" | "end";
 }) {
@@ -278,7 +280,7 @@ export function Menu({
         onClick={() => (popup.open ? popup.close(false) : popup.show("first"))}
         onKeyDown={popup.triggerKeys}
       >
-        <Icon icon={icon} size={iconSize} weight="control" />
+        <Icon icon={icon} size={iconSize} weight={iconWeight} />
         {triggerText ? <span>{triggerText}</span> : null}
       </button>
       {popup.open ? (
@@ -358,6 +360,45 @@ export function MenuLink({
 }
 export function MenuSeparator() {
   return <div role="separator" className="menu-separator" />;
+}
+
+/** Calendar category palette, using the same focus/positioning as other pickers. */
+export function ColorPicker({ label, value, options, onChange }: {
+  label: string;
+  value: string;
+  options: { value: string; label: string; color: string }[];
+  onChange: (value: string) => void;
+}) {
+  const popup = usePopup("start");
+  const id = useId();
+  const current = options.find(option => option.value === value) ?? options[0];
+  function choose(value: string) {
+    onChange(value);
+    popup.close(true);
+  }
+  return <>
+    <button ref={popup.trigger} type="button" className="calendar-color-trigger"
+      aria-label={`${label} color: ${current.label}`} title={`Change the color for ${label.toLowerCase()}`}
+      aria-haspopup="listbox" aria-expanded={popup.open} aria-controls={popup.open ? id : undefined}
+      onClick={() => popup.open ? popup.close(false) : popup.show("selected")} onKeyDown={popup.triggerKeys}>
+      <i aria-hidden="true" style={{ backgroundColor: current.color }} />
+      <span>{label}</span><Icon icon={ChevronDown} size={10} weight="control" />
+    </button>
+    {popup.open ? <div ref={popup.popup} popover="manual" tabIndex={-1} className="popup calendar-color-picker" style={popup.style}
+      onKeyDown={event => popup.keys(event, () => {
+        const value = document.activeElement?.getAttribute("data-value");
+        if (value && options.some(option => option.value === value)) choose(value);
+      })}>
+      <div className="calendar-color-heading" id={`${id}-heading`}>{label}</div>
+      <div role="listbox" id={id} aria-labelledby={`${id}-heading`} className="calendar-color-options">
+        {options.map(option => <div key={option.value} role="option" tabIndex={-1} aria-selected={value === option.value}
+          data-value={option.value} className="calendar-color-option" onClick={() => choose(option.value)}>
+          <i aria-hidden="true" style={{ backgroundColor: option.color }} /><span>{option.label}</span>
+          {value === option.value ? <Icon icon={Check} size={12} /> : null}
+        </div>)}
+      </div>
+    </div> : null}
+  </>;
 }
 
 export type PickerOption = {

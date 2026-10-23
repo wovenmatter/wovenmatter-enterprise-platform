@@ -1,5 +1,5 @@
 import { NativeControls } from "./native-controls";
-import { WorkspaceDetails, WorkspaceNotePanel } from "../shell/WorkspaceDetails";
+import { WorkspaceNotePanel } from "../shell/WorkspaceDetails";
 import { agents, agentName, acceptsModel } from "../agents";
 import {
   ConversationRunWork,
@@ -220,7 +220,6 @@ export function ConversationsPage({ project }: { project: Project }) {
         {!conversationId ? <ErrorNotice message={list.error} /> : null}
       </div>
       {query.get("note") ? <WorkspaceNotePanel projectId={project.id} noteId={query.get("note")!} onClose={() => { const next = new URLSearchParams(query); next.delete("note"); setQuery(next); }} /> : null}
-      <WorkspaceDetails project={project} chats={list.data?.items ?? []} folderName={selectedFolder?.name} />
       {creating ? (
         <Modal title="New conversation" compact onClose={closeCreate}>
           {!folders.data || (!agentDefaults.data && agentDefaults.loading) ? (
@@ -1244,7 +1243,7 @@ export function Thread({
                 scroll.current.scrollTop = scroll.current.scrollHeight;
             }}
           >
-            <Icon icon={ArrowDown} size={12} weight="control" />
+            <Icon icon={ArrowDown} size={12} weight="send" />
             Latest reply
           </button>
         ) : null}

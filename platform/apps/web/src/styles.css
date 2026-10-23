@@ -1301,6 +1301,8 @@ details:not([open]) > summary .disclosure-chevron {
   gap: 16px;
   margin: 0 0 20px;
 }
+.page-header-title { display: flex; align-items: center; gap: 12px; }
+.page-header-icon { display: grid; place-items: center; flex: none; width: 36px; height: 36px; border-radius: var(--control-radius); background: var(--whisper); }
 .page-header p {
   max-width: 680px;
   margin: 8px 0 0;
@@ -1933,6 +1935,7 @@ html[data-theme="dark"] .modal {
   white-space: nowrap;
 }
 .conversation-layout {
+  container-type: inline-size;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -3344,8 +3347,8 @@ details[open] > summary .work-chevron {
 
 /* Desktop workspace structure, ported from WovenMatter 04fe0509. */
 .platform-shell .shell-body { display: flex; padding: 0; gap: 0; }
-.platform-header { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 20px 32px; gap: 24px; border-bottom: 1px solid var(--line); }
-.platform-brand-row { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.platform-header { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 2px 32px; gap: 4px 24px; border-bottom: 1px solid var(--line); }
+.platform-brand-row { display: flex; align-items: center; min-width: 0; gap: 4px; }
 .platform-header > .notice { flex-basis: 100%; margin: 0; }
 .platform-header nav { display: flex; align-items: center; flex-wrap: wrap; gap: 24px; }
 .platform-header nav a { overflow-wrap: anywhere; }
@@ -3441,9 +3444,21 @@ html[data-theme="dark"] .workspace-detail-rail .segmented > .active {
 .library-item-title { font-weight: 600; }
 .library-item-title:hover { color: var(--link); }
 .library-url { max-width: 600px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.database-layout { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 24px; }
-.database-toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
-.database-toolbar h2 { flex: 1; margin: 0; }
+/* DashboardDatabasesView: fill the available content pane; never reserve an
+   empty list column or center against the viewport behind the workspace rails. */
+.database-page { display: flex; flex-direction: column; width: 100%; min-width: 0; container-type: inline-size; }
+.database-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; flex: 1; min-width: 0; min-height: 0; }
+.database-layout.is-empty { grid-template-columns: minmax(0, 1fr); }
+.database-layout > .empty { min-width: 0; }
+.database-workbench { min-width: 0; }
+.database-workbench > .row-actions { flex-wrap: wrap; }
+.database-workbench .query-result { max-width: 100%; overflow: auto; }
+.database-layout .document-list .nav-link { height: auto; min-height: 48px; }
+.database-layout .document-list .nav-link > span { min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.database-layout .document-list small { display: block; }
+.database-page .empty > .icon { margin-bottom: 8px; }
+.database-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; }
+.database-toolbar h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; margin: 0; }
 .sql-editor { font-family: var(--mono); font-size: 12px; }
 .query-result { margin-top: 20px; }
 .query-result small { padding: 12px; }
@@ -3460,14 +3475,16 @@ html[data-theme="dark"] .workspace-detail-rail .segmented > .active {
 @media (max-width: 1100px) { .workspace-detail-rail { display: none; } }
 @media (max-width: 1000px) { .calendar-layout { grid-template-columns: 1fr; } .calendar-agenda { max-width: 600px; } .document-layout { grid-template-columns: 160px minmax(0, 1fr); gap: 12px; } .agent-settings-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .platform-header { align-items: flex-start; flex-direction: column; padding: 16px; gap: 14px; }
-  .platform-header nav { gap: 12px 20px; }
+  .platform-header { align-items: flex-start; flex-direction: column; padding: 2px 16px; gap: 4px; }
+  .platform-header nav { gap: 4px 20px; }
   .platform-shell .main-content { overflow: auto; padding: 24px 16px; }
   .workspace-detail-rail { display: none; }
   .workspace-note-panel { min-width: 0; border: none; }
   .conversation-layout.has-note > .conversation-main { display: none; }
   .desktop-content-page { padding: 20px 16px; }
-  .document-layout, .database-layout { display: flex; flex-direction: column; height: auto; min-height: 70vh; }
+  .document-layout { display: flex; flex-direction: column; height: auto; min-height: 70vh; }
+  .database-layout { display: flex; flex-direction: column; height: auto; gap: 16px; }
+  .database-layout.is-empty > .empty { flex: 1; }
   .document-list { max-height: 170px; flex: none; }
   .document-editor { min-height: 450px; }
   .document-toolbar .row-actions { flex-wrap: wrap; }
@@ -3495,3 +3512,17 @@ html[data-theme="dark"] .agent-grok_build, html[data-theme="dark"] .agent-openco
 .account-membership { gap: 16px; flex-wrap: wrap; }
 .account-membership > strong { flex: 1; min-width: 120px; }
 .account-membership .field { margin: 0; }
+
+/* Adapt to the actual center pane, including Adaptive's adjacent rails. */
+@container (max-width: 600px) {
+  .database-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; gap: 16px; }
+  .database-layout.is-empty { grid-template-rows: 1fr; }
+  .database-layout .document-list { max-height: 170px; }
+  .database-toolbar h2 { flex-basis: 100%; }
+}
+
+/* An open note uses the center pane's width, independent of rail placement. */
+@container (max-width: 700px) {
+  .conversation-layout.has-note > .conversation-main { display: none; }
+  .workspace-note-panel { min-width: 0; border-left: 0; }
+}
