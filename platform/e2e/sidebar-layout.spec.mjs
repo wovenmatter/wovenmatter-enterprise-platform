@@ -37,19 +37,19 @@ test('explicit split, independent collapse/reveal, reload and keyboard focus', a
   await expect(nav(page)).toBeVisible(); await expect(contents(page)).toBeVisible();
   expect(await x(nav(page))).toBeLessThan(await x(page.locator('#main')));
   expect(await x(contents(page))).toBeGreaterThan(await x(page.locator('#main')));
-  await nav(page).getByRole('button', { name: 'Hide navigation sidebar' }).focus(); await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Hide navigation sidebar' }).focus(); await page.keyboard.press('Enter');
   await expect(nav(page)).toBeHidden();
   const revealNav = page.getByRole('button', { name: 'Show navigation sidebar' });
   await expect(revealNav).toBeFocused();
-  await contents(page).getByRole('button', { name: 'Hide workspace sidebar' }).click();
+  await page.getByRole('button', { name: 'Hide workspace sidebar' }).click();
   await expect(contents(page)).toBeHidden();
   await expect(page.getByRole('button', { name: 'Show workspace sidebar' })).toBeFocused();
   await page.reload(); await expect(nav(page)).toBeHidden(); await expect(contents(page)).toBeHidden();
   await page.getByRole('button', { name: 'Show navigation sidebar' }).click();
-  await expect(nav(page).getByRole('button', { name: 'Hide navigation sidebar' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Hide navigation sidebar' })).toBeFocused();
   await expect(contents(page)).toBeHidden();
   await page.getByRole('button', { name: 'Show workspace sidebar' }).click();
-  await expect(contents(page).getByRole('button', { name: 'Hide workspace sidebar' })).toBeFocused();
+  await expect(page.getByRole('button', { name: 'Hide workspace sidebar' })).toBeFocused();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath('split-restored.png') });
   expect(errors).toEqual([]); assertClean(state);
@@ -151,7 +151,7 @@ for (const style of ['split', 'single', 'adaptive']) {
     await expect(drawer).toBeVisible();
     const header = await page.locator('.platform-header').boundingBox();
     expect((await drawer.boundingBox()).y).toBeGreaterThanOrEqual(header.y + header.height);
-    const close = drawer.getByRole('button', { name: 'Close navigation', exact: true });
+    const close = drawer.getByRole('button', { name: 'Hide navigation sidebar', exact: true });
     await expect(close).toBeFocused(); await page.keyboard.press('Shift+Tab');
     expect(await drawer.evaluate(node => node.contains(document.activeElement))).toBe(true);
     await page.keyboard.press('Tab'); await expect(close).toBeFocused();
@@ -175,10 +175,10 @@ for (const style of ['split', 'single', 'adaptive']) {
     await page.setViewportSize({ width: 855, height: 900 });
     await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
     if (style === 'split') {
-      await expect(nav(page)).toBeHidden();
+      await expect(nav(page)).toBeVisible();
       await page.getByRole('button', { name: 'Show workspace sidebar' }).click();
-      await expect(page.getByRole('dialog', { name: 'Workspace sidebar', exact: true })).toBeVisible();
-      await page.keyboard.press('Escape');
+      await expect(contents(page)).toBeVisible();
+      await expect(page.getByRole('dialog')).toHaveCount(0);
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`${style}-intermediate-855.png`) });
@@ -269,16 +269,9 @@ for (const side of ['left', 'right']) {
       await page.setViewportSize({ width, height: 900 });
       for (const route of ['', '/calendar', '/databases']) {
         await page.goto(`${root}${route}?folder=${folder.id}&conversation=parity-chat`);
-        if (width < 904) {
-          await expect(nav(page)).toBeHidden();
-          await expect(contents(page)).toBeHidden();
-          await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).click();
-          await expect(page.getByRole('dialog', { name: 'Workspace sidebar', exact: true })).toBeVisible();
-          await expect(contents(page)).toBeVisible();
-          await page.screenshot({ path: testInfo.outputPath(`adaptive-${side}-${width}-content-drawer.png`) });
-          await page.keyboard.press('Escape');
-          await expect(page.getByRole('dialog', { name: 'Workspace sidebar', exact: true })).toHaveCount(0);
-        } else await expect(contents(page)).toBeVisible();
+        await expect(contents(page)).toBeVisible();
+        await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
+        expect(await page.locator('#main').evaluate(n=>!n.inert)).toBe(true);
         const main = page.locator('#main');
         if (route) await expect(main.getByRole('heading', { name: route === '/calendar' ? 'Calendar' : 'Databases', exact: true })).toBeVisible();
         else await expect(page.getByLabel('Message your agent')).toBeVisible();
@@ -333,9 +326,9 @@ test('Single folder plus returns cancelled chooser focus to the visible content 
   assertClean(state);
 });
 
-test('Adaptive compact folder drawer restores focus to its in-surface reveal', async ({ page, baseURL }) => {
+test('Adaptive phone folder overlay restores focus to the same toggle', async ({ page, baseURL }) => {
   const state = await setup(page, baseURL, prefs('adaptive'));
-  await page.setViewportSize({ width: 855, height: 900 }); await page.goto(root);
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto(root);
   const opener = page.getByRole('button', { name: 'Show navigation sidebar' });
   await opener.click();
   const link = nav(page).getByRole('link', { name: folder.name, exact: true });

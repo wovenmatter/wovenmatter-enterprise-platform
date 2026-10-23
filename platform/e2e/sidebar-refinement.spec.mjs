@@ -3,13 +3,17 @@ import { writeFile } from 'node:fs/promises';
 import { parityFixture, base, project, folder, workspace, org } from './ui-parity.fixture.mjs';
 
 // Browser plugin not available. All requests are isolated by parityFixture.
-// Flow: workspace -> preference/rail controls -> native geometry, real motion,
+// Flow: workspace -> preference/rail controls -> bounded geometry, real motion,
 // retained editor/search nodes and focus, including an interrupted transition.
 test.use({ storageState: { cookies: [], origins: [] } });
 const root = `${base}/workspaces/${project.id}`;
 const key = 'wme:sidebar:v1:parity-owner';
 const preference = (style, side) => ({ version: 1, style, side, navigationVisible: true, contentVisible: true, singleVisible: true });
-const settle = page => page.evaluate(() => Promise.all([...document.querySelectorAll('.sidebar-layout,.sidebar,.sidebar-content-slot,#main')].flatMap(n => n.getAnimations()).map(a => a.finished.catch(() => {}))));
+const settle = page => page.evaluate(async () => {
+  // Resize subscriptions commit on the next frame before transitions exist.
+  await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame);
+  await Promise.all([...document.querySelectorAll('.sidebar-layout,.sidebar,.sidebar-content-slot,#main,.sidebar-toggle')].flatMap(n => n.getAnimations()).map(a => a.finished.catch(() => {})));
+});
 async function setup(page, baseURL, saved) {
   const state = await parityFixture(page, { baseURL });
   state.errors = []; page.on('pageerror', e => state.errors.push(e.message));
@@ -23,7 +27,7 @@ const clean = state => { for (const field of ['errors', 'external', 'unknown', '
 async function rect(page, selector) { await settle(page); return page.locator(selector).boundingBox(); }
 async function sample(page, action, testInfo, name) {
   const frames = await page.evaluate(async action => {
-    const selectors = ['#main', '.sidebar-layout', '.sidebar', '.sidebar-content-slot'];
+    const selectors = ['#main', '.sidebar-layout', '.sidebar', '.sidebar-content-slot', '.sidebar-toggle'];
     const frames = [], start = performance.now();
     const read = () => ({ t: performance.now() - start, scrollLeft: document.querySelector('.shell-body').scrollLeft, titleY: document.querySelector('#main h2')?.getBoundingClientRect().y, boxes: selectors.map(s => { const n = document.querySelector(s), b = n.getBoundingClientRect(); return { x:b.x, y:b.y, width:b.width, opacity: Number(getComputedStyle(n).opacity) }; }) });
     frames.push(read()); document.querySelector(action).click();
@@ -43,53 +47,73 @@ function moved(frames, index, axis = 'x') {
 }
 
 for (const style of ['adaptive', 'single', 'split']) for (const side of ['left', 'right']) {
-  test(`${style} ${side}: exact 903/904 boundary and 1024/1100 retain requested panels`, async ({ page, baseURL }, info) => {
+  test(`${style} ${side}: bounded 256px rails at medium, two-rail and phone widths`, async ({ page, baseURL }, info) => {
     const state = await setup(page, baseURL, preference(style, side));
-    for (const width of [904, 1024, 1100, 903, 390]) {
-      await page.setViewportSize({ width, height: 900 }); await page.goto(workspace); await expect(page.getByLabel('Message your agent')).toBeVisible(); await settle(page);
+    for (const width of [849, 855, 904, 1320, 390]) {
+      await page.setViewportSize({ width, height: width === 849 ? 763 : 769 }); await page.goto(workspace);
+      await expect(page.getByLabel('Message your agent')).toBeVisible(); await settle(page);
       const main = await rect(page, '#main');
-      expect(await page.locator('.platform-header [data-sidebar-reveal], .platform-header .mobile-menu').count()).toBe(0);
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-      if (width >= 904) {
-        await expect(page.locator('.sidebar')).toBeVisible({ visible: style !== 'single' });
-        await expect(page.locator('.workspace-detail-rail')).toBeVisible();
-        expect(main.width).toBeGreaterThanOrEqual(360);
-        const content = await rect(page, '.sidebar-content-slot'); expect(content.width).toBe(256);
-        if (style === 'split' || side === 'right') expect(content.x).toBeGreaterThan(main.x + main.width - 1);
-        else expect(content.x + content.width).toBeLessThanOrEqual(main.x);
-        if (style === 'adaptive') {
-          const nav = await rect(page, '.sidebar');
-          expect(Math.abs(nav.x-content.x)).toBe(256);
-          expect(nav.x < content.x).toBe(side === 'left');
+      expect(await page.locator('.platform-header [data-sidebar-reveal], .platform-header .mobile-menu, .sidebar-top, .mobile-close').count()).toBe(0);
+      expect(await page.locator('.sidebar-toggle').count()).toBe(style === 'split' ? 2 : 1);
+      expect(main.x).toBeGreaterThanOrEqual(0); expect(main.x + main.width).toBeLessThanOrEqual(width);
+      expect(main.width).toBeGreaterThanOrEqual(360);
+      expect(await page.locator('#main').evaluate(n => !n.inert && getComputedStyle(n).opacity === '1')).toBe(true);
+      if (width >= 640) {
+        await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
+        await expect(page.locator('.sidebar-content-slot')).toBeVisible({ visible: style !== 'split' || width >= 904 });
+        if (style === 'split' && width < 904) {
+          await page.getByRole('button', { name:'Show workspace sidebar' }).click(); await settle(page);
+          await expect(page.locator('.sidebar')).toBeHidden(); await expect(page.locator('.sidebar-content-slot')).toBeVisible();
+          await page.getByRole('button', { name:'Show navigation sidebar' }).click(); await settle(page);
+          await expect(page.locator('.sidebar')).toBeVisible();
+        }
+        for (const rail of await page.locator('.rail-visible').all()) expect((await rail.boundingBox()).width).toBe(256);
+        if (width >= 904 && style !== 'single') await expect(page.locator('.sidebar')).toBeVisible();
+        if (style !== 'split') await expect(page.locator('[data-sidebar-reveal]')).toHaveCount(0);
+        for (const selector of ['.thread-header', '.composer-area', '.send-button']) {
+          const b = await rect(page, selector); expect(b.x).toBeGreaterThanOrEqual(0); expect(b.x+b.width).toBeLessThanOrEqual(width);
         }
       } else {
         await expect(page.locator('.sidebar')).toBeHidden(); await expect(page.locator('.workspace-detail-rail')).toBeHidden();
-        expect(main.width).toBe(width);
-        const opener = page.getByRole('button', { name: style === 'split' ? 'Show workspace sidebar' : 'Show navigation sidebar', exact:true });
-        await opener.click(); await settle(page);
-        const group = await rect(page, style === 'split' ? '.sidebar-content-slot' : '.sidebar-layout'), shifted = await rect(page, '#main');
-        const nativeWidth = Math.min(width*.82,320), pages = style === 'adaptive' && width === 903 ? 2 : 1;
-        expect(group.width).toBeCloseTo(nativeWidth*pages, 1);
-        expect(Math.abs(shifted.x-main.x)).toBeCloseTo(nativeWidth*pages, 1);
-        expect(group.x).toBeGreaterThanOrEqual(-.1); expect(group.x+group.width).toBeLessThanOrEqual(width+.1);
-        await expect(page.locator('.workspace-detail-rail')).toBeVisible();
-        if (style === 'adaptive' && width === 903) await expect(page.locator('.sidebar')).toBeVisible();
-        if (width === 390 && style !== 'split') {
-          await page.getByRole('button', { name:'Back to workspace navigation' }).click();
-          await expect(page.locator('.sidebar')).toBeVisible();
-          await page.locator('.sidebar').getByRole('link', { name:folder.name, exact:true }).click();
-          await expect(page.locator('.workspace-detail-rail')).toBeVisible();
-        }
-        await settle(page);
-        await page.screenshot({ path:info.outputPath(`${style}-${side}-${width}-drawer.png`) });
-        await page.locator('.mobile-close').click(); await settle(page);
-        await expect(opener).toBeFocused();
+        await page.getByRole('button', { name:style === 'split' ? 'Show workspace sidebar' : 'Show navigation sidebar' }).click(); await settle(page);
+        expect(await rect(page, '#main')).toEqual(main);
+        expect((await rect(page, '.sidebar-content-slot')).width).toBe(256);
+        await expect(page.locator('[data-sidebar-hide]')).toHaveCount(1);
+        await page.screenshot({ path:info.outputPath(`${style}-${side}-${width}-overlay.png`) });
+        await page.locator('[data-sidebar-hide]').click(); await settle(page);
+        await expect(page.locator(`[data-sidebar-reveal="${style === 'split' ? 'content' : 'single'}"]`)).toBeFocused();
       }
       await page.screenshot({ path:info.outputPath(`${style}-${side}-${width}.png`) });
     }
     clean(state);
   });
 }
+
+test.describe('primary empty workspace reproducer', () => {
+  test.use({deviceScaleFactor:2});
+test('849 DPR2 empty workspace keeps one title-level toggle, complete welcome and composer', async ({ page, baseURL }, info) => {
+  const state = await setup(page, baseURL);
+  await page.route('**/projects/parity-project/conversations', route => route.fulfill({ json:{items:[]} }));
+  await page.setViewportSize({width:849,height:763}); await page.goto(root);
+  await expect(page.getByText('What would you like to work on?')).toBeVisible(); await settle(page);
+  const toggle = page.locator('.sidebar-toggle'), before = await toggle.boundingBox();
+  const titleY = await page.locator('.thread-header h2').evaluate(n=>n.getBoundingClientRect().y);
+  expect((await rect(page,'.sidebar')).width).toBe(256);
+  await page.evaluate(()=>window.originalToggle=document.querySelector('.sidebar-toggle'));
+  await page.screenshot({path:info.outputPath('empty-849-open.png')});
+  await toggle.click(); await settle(page);
+  const after = await toggle.boundingBox(); expect(after.y).toBe(before.y); expect(after.x).toBeLessThan(before.x);
+  expect(await toggle.evaluate(n=>n===window.originalToggle)).toBe(true);
+  expect(await page.locator('.thread-header h2').evaluate(n=>n.getBoundingClientRect().y)).toBe(titleY);
+  await expect(toggle).toHaveAccessibleName('Show navigation sidebar');
+  await page.screenshot({path:info.outputPath('empty-849-collapsed.png')});
+  for (const selector of ['.workspace-welcome .empty', '.composer-area', '.send-button']) {
+    const b=await rect(page,selector); expect(b.x).toBeGreaterThanOrEqual(0); expect(b.x+b.width).toBeLessThanOrEqual(849);
+  }
+  clean(state);
+});
+
+});
 
 test('fresh, missing and invalid preferences display Adaptive; valid explicit choices survive reload', async ({ page, baseURL }) => {
   const state = await setup(page, baseURL);
@@ -106,7 +130,7 @@ test('fresh, missing and invalid preferences display Adaptive; valid explicit ch
   clean(state);
 });
 
-for (const side of ['left','right']) test(`${side}: collapsed reveal stays inside every center surface at native toolbar level`, async ({ page,baseURL },info) => {
+for (const side of ['left','right']) test(`${side}: collapsed control shares each page title band without a vertical jump`, async ({ page,baseURL },info) => {
   const state=await setup(page,baseURL,{...preference('single',side),singleVisible:false});
   for (const route of ['', '/calendar', '/databases', '/settings']) {
     await page.goto(`${root}${route}?conversation=parity-chat`);
@@ -114,11 +138,11 @@ for (const side of ['left','right']) test(`${side}: collapsed reveal stays insid
     await settle(page);
     const main=await rect(page,'#main'), button=await rect(page,'[data-sidebar-reveal="single"]');
     expect(button.width).toBe(36); expect(button.height).toBe(36);
-    expect(button.y-main.y).toBe(12);
+    expect(button.y-main.y).toBe(16);
     expect(side==='left'?button.x-main.x:main.x+main.width-button.x-button.width).toBe(12);
     expect(await page.locator('.platform-header').evaluate(n=>n.getBoundingClientRect().height)).toBe(41);
-    const headings=await page.locator('#main h1,#main h2').evaluateAll(nodes=>nodes.filter(n=>n.checkVisibility()).map(n=>n.getBoundingClientRect().y));
-    expect(headings.every(y=>y>=button.y+button.height)).toBe(true);
+    const title=await page.locator('#main h1,#main h2').first().boundingBox();
+    expect(title.x+title.width<=button.x || title.x>=button.x+button.width || title.y>=button.y+button.height).toBe(true);
     await page.screenshot({path:info.outputPath(`collapsed-${side}-${route.slice(1)||'conversation'}.png`)});
     await page.locator('[data-sidebar-reveal="single"]').click(); await settle(page);
     await page.locator('[data-sidebar-hide="navigation"]').click();
@@ -137,18 +161,19 @@ for (const side of ['left','right']) test(`${side}: sampled hide/reveal, move, e
   moved(await sample(page,'.sidebar-back',info,'back'),0,'width');
   const hide = await sample(page,'[data-sidebar-hide="navigation"]',info,'hide');
   moved(hide,0,'width');
-  expect(hide.filter(f=>f.titleY>hide[0].titleY+2&&f.titleY<hide.at(-1).titleY-2).length).toBeGreaterThanOrEqual(3);
+  expect(hide.every(f=>Math.abs(f.titleY-hide[0].titleY)<.1)).toBe(true);
+  moved(hide,4); expect(hide.every(f=>f.boxes[4].y===hide[0].boxes[4].y)).toBe(true);
   await page.screenshot({path:info.outputPath('collapsed-moved-desktop.png')});
   moved(await sample(page,'[data-sidebar-reveal="single"]',info,'reveal'),0,'width');
   await page.locator('[data-folder-selection]').first().click(); await settle(page);
   await expect(page.getByRole('searchbox',{name:'Search chats'})).toHaveValue('Retained');
   await expect(draft).toHaveValue('Unsent motion fixture');
-  await page.setViewportSize({width:903,height:900}); await expect(page.locator('.app-shell')).toHaveAttribute('data-compact','true'); await settle(page);
-  moved(await sample(page,'[data-sidebar-reveal="single"]',info,'compact-open'),0);
-  moved(await sample(page,'.mobile-close',info,'compact-close'),0);
+  await page.setViewportSize({width:849,height:763}); await expect(page.locator('.app-shell')).toHaveAttribute('data-compact','false'); await settle(page);
+  expect((await rect(page,'#main')).width).toBe(569);
   await page.setViewportSize({width:390,height:844}); await expect(page.locator('.app-shell')).toHaveAttribute('data-compact','true'); await settle(page);
-  moved(await sample(page,'[data-sidebar-reveal="single"]',info,'phone-open'),0);
-  moved(await sample(page,'.mobile-close',info,'phone-close'),0);
+  const phone=await sample(page,'[data-sidebar-reveal="single"]',info,'phone-open');
+  moved(phone,1); expect(phone.every(f=>f.boxes[0].x===8&&f.boxes[0].width===374)).toBe(true);
+  await sample(page,'[data-sidebar-hide]',info,'phone-close');
   expect(await page.evaluate(()=>window.sidebarNodes.every(n=>n.isConnected)&&window.sidebarNodes[2]===document.querySelector('.composer-area textarea'))).toBe(true);
   await expect(draft).toHaveValue('Unsent motion fixture'); clean(state);
 });
@@ -179,27 +204,41 @@ test('rapid interruptions continue from rendered geometry; reduced motion makes 
   expect(await page.locator('.sidebar-layout').evaluate(n=>n.getAnimations().length)).toBe(0);
   await page.setViewportSize({width:390,height:844}); await expect(page.locator('.app-shell')).toHaveAttribute('data-compact','true'); await settle(page);
   const compact=await sample(page,'[data-sidebar-reveal="single"]',info,'reduced-compact');
-  expect(compact.slice(1).every(f=>Math.abs(f.boxes[0].x-319.8)<.1)).toBe(true);
+  expect(compact.slice(1).every(f=>Math.abs(f.boxes[0].x-8)<.1)).toBe(true);
   clean(state);
 });
 
 test('Split controls stay on both center edges; compact content enters and exits only the right edge',async({page,baseURL},info)=>{
   const state=await setup(page,baseURL,{...preference('split','left'),navigationVisible:false,contentVisible:false});
   await page.goto(workspace); await expect(page.getByLabel('Message your agent')).toBeVisible();
-  const controls=page.locator('#main [data-sidebar-reveal]'); await expect(controls).toHaveCount(2);
+  const controls=page.locator('[data-sidebar-reveal]'); await expect(controls).toHaveCount(2);
   const main=await rect(page,'#main'), left=await rect(page,'[data-sidebar-reveal="navigation"]'), right=await rect(page,'[data-sidebar-reveal="content"]');
   expect(left.x-main.x).toBe(12); expect(main.x+main.width-right.x-right.width).toBe(12);
   await page.screenshot({path:info.outputPath('split-both-hidden.png')});
   await page.reload(); await expect(controls).toHaveCount(2);
-  for (const width of [903,390]) {
+  for (const width of [390]) {
     await page.setViewportSize({width,height:900}); await expect(page.locator('.app-shell')).toHaveAttribute('data-compact','true'); await settle(page);
     const frames=await sample(page,'[data-sidebar-reveal="content"]',info,`split-right-${width}-open`);
-    moved(frames,3); expect(frames.every(f=>f.boxes[3].x>=width-Math.min(width*.82,320)-.1)).toBe(true);
+    moved(frames,3); expect(frames.every(f=>f.boxes[3].x>=width-264-.1)).toBe(true);
     expect(frames.every(f=>Math.abs(f.boxes[3].y-frames[0].boxes[3].y)<.1)).toBe(true);
-    const close=await sample(page,'.mobile-close',info,`split-right-${width}-close`);
-    moved(close,3); expect(close.every(f=>f.boxes[3].x>=width-Math.min(width*.82,320)-.1)).toBe(true);
+    const close=await sample(page,'[data-sidebar-hide]',info,`split-right-${width}-close`);
+    moved(close,3); expect(close.every(f=>f.boxes[3].x>=width-264-.1)).toBe(true);
     expect(close.every(f=>Math.abs(f.boxes[3].y-close[0].boxes[3].y)<.1)).toBe(true);
     await expect(page.locator('[data-sidebar-reveal="content"]')).toBeFocused();
+  }
+  clean(state);
+});
+
+test('resizing a focused rail into a paged layout keeps keyboard focus on its toggle', async ({page,baseURL}) => {
+  const state=await setup(page,baseURL);
+  for (const style of ['adaptive','split']) {
+    await page.setViewportSize({width:1320,height:769});
+    await page.goto(workspace);
+    await page.evaluate(({key,saved})=>localStorage.setItem(key,JSON.stringify(saved)), {key,saved:preference(style,'right')});
+    await page.reload();
+    await (style==='split'?page.getByRole('searchbox',{name:'Search chats'}):page.locator('.sidebar').getByRole('link',{name:'Calendar',exact:true})).focus();
+    await page.setViewportSize({width:855,height:769});
+    await expect(page.locator(`[data-toggle="${style==='split'?'content':'navigation'}"]`)).toBeFocused();
   }
   clean(state);
 });
@@ -221,7 +260,7 @@ test('unsaved note, textarea selection/focus and scroll survive moving, collapse
   await page.locator('[data-sidebar-reveal="single"]').click();
   await page.getByRole('button',{name:'Back to workspace navigation'}).click();
   await page.locator('.sidebar').getByRole('link',{name:folder.name,exact:true}).click();
-  await page.locator('.mobile-close').click(); await settle(page);
+  await page.locator('[data-sidebar-hide]').click(); await settle(page);
   await expect(editor).toHaveValue('Unsent synthetic note\n'.repeat(60));
   expect(await editor.evaluate(n=>n===window.noteNode&&n.selectionStart===6&&n.selectionEnd===16)).toBe(true);
   await page.screenshot({path:info.outputPath('retained-mobile-note.png')}); clean(state);

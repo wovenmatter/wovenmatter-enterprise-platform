@@ -3121,7 +3121,7 @@ details[open] > summary .work-chevron {
     height: 220px;
   }
 }
-/* Organization-only mobile navigation; workspace rails use the native 904 boundary. */
+/* Organization-only mobile navigation; workspace rails use available center space. */
 @media (max-width: 760px) {
   .shell-body {
     grid-template-columns: minmax(0, 1fr);

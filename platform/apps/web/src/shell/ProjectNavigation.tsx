@@ -369,7 +369,7 @@ function WorkspaceRail({
   }
   return <>
     <div className="project-navigation workspace-navigation">
-      <div className="workspace-rail-title"><strong>{project?.name ?? "Workspace"}</strong><SidebarControls page="navigation" /></div>
+      <div className="workspace-rail-title"><SidebarControls page="navigation" placement="leading" /><strong>{project?.name ?? "Workspace"}</strong><SidebarControls page="navigation" /></div>
       <div className="rail-group">
         <Link className="nav-link" to={`/organizations/${orgId}/workspaces`}>
           <Icon icon={ArrowLeft} size={13} weight="control" />

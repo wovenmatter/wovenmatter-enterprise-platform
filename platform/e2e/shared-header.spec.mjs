@@ -90,7 +90,7 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
     expect(geometry.main.top).toBeGreaterThanOrEqual(geometry.header.bottom);
     expect(geometry.composer.bottom).toBeLessThanOrEqual(844);
     expect(geometry.composer.top).toBeGreaterThan(geometry.header.bottom);
-    if (width < 904) {
+    if (width < 640) {
       await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).click();
       if (await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).isVisible()) await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).click();
       const drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
@@ -100,7 +100,7 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
       await expect(drawer.locator('a[href*="personal-settings"]')).toHaveCount(0);
       const recents = drawer.locator('.sidebar summary').filter({ hasText: /^Recents$/ });
       await recents.click(); // A collapsed final section is still part of keyboard navigation.
-      const close = drawer.getByRole('button', { name: 'Close navigation', exact: true });
+      const close = drawer.getByRole('button', { name: 'Hide navigation sidebar', exact: true });
       await close.focus(); await page.keyboard.press('Shift+Tab');
       await expect(recents).toBeFocused();
       await page.keyboard.press('Tab'); await expect(close).toBeFocused();

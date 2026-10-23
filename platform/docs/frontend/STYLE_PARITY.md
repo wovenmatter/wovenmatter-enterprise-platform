@@ -75,7 +75,7 @@ geometry, tokens, hierarchy and interaction states are the parity target.
 | ID | Difference | Reason |
 | --- | --- | --- |
 | A01 | One rail with organization → project → folder ownership and one Pi Durable agent. | Enterprise authorization model; no native multi-agent runtime. |
-| A02 | Workspace modes use the native 904px compact boundary, 256px rails, 8px inset/gaps and 360px minimum desktop center. Organization-only navigation retains its mobile menu. Compact Adaptive pages are adjacent unless their combined native drawer width exceeds the viewport, when the stable pages switch with Back. | Native desktop has a 760px minimum window; web supports 390px. See the current source anchors and requested Adaptive default/move-glyph differences in `ORGANIZATION_WORKSPACES_PARITY.md`. |
+| A02 | Workspace rails remain 256px with 8px insets/gaps. At904px Split retains both rails and a360px center;640–903px shows one inline page with visible access to the other. Below 640px a contained overlay leaves the center bounded. One stable title-level hide/reopen control per group moves horizontally; no extra toolbar row or workspace X. | User-requested browser adaptation supersedes native compact 320px rail sizing, center translation and dimming. See `ORGANIZATION_WORKSPACES_PARITY.md` for thresholds, source anchors and saved-preference behavior. |
 | A03 | Fixed Full access / Read-only authority badge, never a writable permission picker. | Session authority is immutable server-side. |
 | A04 | Central organization accounts with numeric priority and observed usage. | Credentials are organization-owned; only presentation maps to native groups. |
 | A05 | Library keeps files, grants, shares, versions and published assets. | Enterprise product scope. |

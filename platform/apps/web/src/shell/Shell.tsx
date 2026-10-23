@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import {
   Link,
   Navigate,
@@ -8,7 +8,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { Menu, PanelLeft, PanelRight, X } from "lucide-react";
+import { Menu, PanelLeftClose, PanelRightClose, PanelLeftOpen, PanelRightOpen, X } from "lucide-react";
 import {
   send,
   useResource,
@@ -30,7 +30,7 @@ import { AdministrationPage } from "../features/administration";
 import { PersonalSettings } from "../features/personal-settings";
 import { OrganizationNav } from "./Navigation";
 import { OrganizationShell } from "./OrganizationShell";
-import { SidebarProvider, focusSidebarControl, useSidebar } from "./sidebar-preferences";
+import { SidebarProvider, useSidebar } from "./sidebar-preferences";
 import "./sidebar.css";
 
 const AccountsPage = lazy(() => import("../features/platform-admin").then(m => ({ default: m.AccountsPage })));
@@ -53,41 +53,60 @@ function ShellContent({
     "/enterprise/api/organizations",
   );
   const [creating, setCreating] = useState(false);
-  const { preferences, update, narrow, compact, drawerWidth, pagedAdaptive, workspaceBase, contentsSelected, setContentTarget, drawer, setDrawer, drawerOpener } = useSidebar();
+  const { preferences, update, narrow, compact, pagedAdaptive, workspaceBase, contentsSelected, setContentTarget, drawer, setDrawer, drawerOpener } = useSidebar();
   const split = !workspaceBase || preferences.style === "split";
   const isCompact = workspaceBase ? compact : narrow;
   const adaptive = Boolean(workspaceBase && preferences.style === "adaptive");
   const singleContent = !split && contentsSelected;
-  const expanded = adaptive && contentsSelected && !(isCompact && pagedAdaptive);
-  const navigationVisible = workspaceBase ? split ? preferences.navigationVisible : preferences.singleVisible && (adaptive || !singleContent) : true;
+  const expanded = adaptive && contentsSelected && !pagedAdaptive;
+  const [splitPage, setSplitPage] = useState<"navigation" | "content">("navigation");
+  const pagedSplit = Boolean(workspaceBase && split && pagedAdaptive);
+  const navigationVisible = workspaceBase ? split ? preferences.navigationVisible : preferences.singleVisible && (!singleContent || expanded) : true;
   const contentVisible = Boolean(workspaceBase && (split ? preferences.contentVisible : preferences.singleVisible && singleContent));
   const mobileOpen = isCompact && drawer !== null;
-  const showNavigation = isCompact ? mobileOpen && (expanded || drawer === "navigation") : navigationVisible;
-  const showContent = isCompact ? mobileOpen && (expanded || drawer === "content") : contentVisible;
+  const showNavigation = isCompact ? mobileOpen && drawer === "navigation" : navigationVisible && (!pagedSplit || splitPage === "navigation" || !contentVisible);
+  const showContent = isCompact ? mobileOpen && drawer === "content" : contentVisible && (!pagedSplit || splitPage === "content" || !navigationVisible);
   const lastDrawer = useRef<"navigation" | "content">("navigation");
   if (drawer) lastDrawer.current = drawer;
   const side = split ? (drawer ?? lastDrawer.current) === "content" ? "right" : "left" : preferences.side;
-  const pageWidth = isCompact ? drawerWidth : 256;
+  const pageWidth = 256;
   const groupWidth = pageWidth * (expanded ? 2 : 1);
-  const groupLeft = split && !isCompact ? "8px" : side === "left" ? isCompact ? "0px" : "8px" : `calc(100% - ${groupWidth + (isCompact ? 0 : 8)}px)`;
+  const groupLeft = split || side === "left" ? "8px" : `calc(100% - ${groupWidth + 8}px)`;
   const groupShown = isCompact ? mobileOpen : split || preferences.singleVisible;
-  const leftSpace = isCompact ? 0 : split ? navigationVisible ? 264 : 0 : preferences.side === "left" && preferences.singleVisible ? groupWidth + 8 : 0;
-  const rightSpace = isCompact ? 0 : split ? contentVisible ? 264 : 0 : preferences.side === "right" && preferences.singleVisible ? groupWidth + 8 : 0;
-  const revealNavigation = Boolean(workspaceBase && (isCompact || (split ? !navigationVisible : !preferences.singleVisible)));
-  const revealContent = Boolean(workspaceBase && split && (isCompact || !contentVisible));
+  const leftSpace = isCompact ? 0 : split ? showNavigation ? 264 : 0 : preferences.side === "left" && preferences.singleVisible ? groupWidth + 8 : 0;
+  const rightSpace = isCompact ? 0 : split ? showContent ? 264 : 0 : preferences.side === "right" && preferences.singleVisible ? groupWidth + 8 : 0;
+  const groupOpen = showNavigation || showContent;
+  const activePage = showContent ? "content" : "navigation";
+  // The same focusable control travels horizontally between the title and
+  // the outside edge. It never duplicates a reveal button inside the center.
+  const toggleLeft = (open: boolean, edge: "left" | "right", width = 256) => edge === "left"
+    ? `${open ? width - 44 : 20}px`
+    : `calc(100% - ${open ? width - 8 : 56}px)`;
   const layoutStyle = {
     "--sidebar-page-width": `${pageWidth}px`,
-    "--sidebar-group-width": split && !isCompact ? "calc(100% - 16px)" : `${groupWidth}px`,
+    "--sidebar-group-width": split ? "calc(100% - 16px)" : `${groupWidth}px`,
     "--sidebar-group-left": groupLeft,
     "--sidebar-group-opacity": groupShown ? 1 : 0,
-    "--sidebar-group-offset": groupShown ? "0px" : side === "left" ? `-${groupWidth + 8}px` : `${groupWidth + 8}px`,
+    "--sidebar-group-offset": groupShown || split ? "0px" : side === "left" ? `-${groupWidth + 8}px` : `${groupWidth + 8}px`,
     "--sidebar-nav-left": expanded && side === "right" ? `${pageWidth}px` : "0px",
-    "--sidebar-content-left": split && !isCompact ? "calc(100% - 256px)" : expanded && side === "left" ? `${pageWidth}px` : "0px",
-    "--sidebar-center-left": `${(isCompact ? 0 : 8) + leftSpace}px`,
-    "--sidebar-center-width": `calc(100% - ${(isCompact ? 0 : 16) + leftSpace + rightSpace}px)`,
-    "--sidebar-center-offset": mobileOpen ? `${side === "left" ? groupWidth : -groupWidth}px` : "0px",
+    "--sidebar-content-left": split ? "calc(100% - 256px)" : expanded && side === "left" ? `${pageWidth}px` : "0px",
+    "--sidebar-center-left": `${8 + leftSpace}px`,
+    "--sidebar-center-width": `calc(100% - ${16 + leftSpace + rightSpace}px)`,
+    "--sidebar-toggle-left": toggleLeft(split ? showNavigation : groupOpen, split ? "left" : side, split ? 256 : groupWidth),
+    "--sidebar-toggle-right": toggleLeft(showContent, "right"),
+    "--sidebar-header-left": workspaceBase && !(split ? showNavigation : groupOpen || side === "right") ? "52px" : "0px",
+    "--sidebar-header-right": workspaceBase && (split ? !showContent : !groupOpen && side === "right") ? "52px" : "0px",
   } as CSSProperties;
   const drawerRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    // A resize can page away the focused rail without a click. Move focus before
+    // the browser drops it from the newly inert subtree to the document body.
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement) || !active.closest(".rail-hidden")) return;
+    const page = split && active.closest(".sidebar-content-slot") ? "content" : "navigation";
+    const target = drawerRef.current?.querySelector<HTMLElement>(mobileOpen ? "[data-sidebar-hide]" : `[data-toggle="${page}"]`);
+    target?.focus({ preventScroll: true });
+  }, [showNavigation, showContent, mobileOpen, split]);
   const [error, setError] = useState("");
   const menuButton = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
@@ -108,7 +127,7 @@ function ShellContent({
   }, [isCompact, setDrawer]);
   useEffect(() => {
     if (!mobileOpen) return;
-    drawerRef.current?.querySelector<HTMLButtonElement>(".mobile-close")?.focus({ preventScroll: true });
+    drawerRef.current?.querySelector<HTMLButtonElement>(workspaceBase ? "[data-sidebar-hide]" : ".mobile-close")?.focus({ preventScroll: true });
     return () => {
       requestAnimationFrame(() => {
         if (document.querySelector("dialog[open]")) return;
@@ -120,13 +139,30 @@ function ShellContent({
       });
     };
   }, [mobileOpen]);
-  function reveal(page: "navigation" | "content") {
+  function toggle(page: "navigation" | "content", open: boolean) {
     if (isCompact) {
-      if (!split) update({ singleVisible: true });
-      openDrawer(page); return;
+      if (open) setDrawer(null);
+      else openDrawer(page);
+      return;
     }
-    update(split ? page === "navigation" ? { navigationVisible: true } : { contentVisible: true } : { singleVisible: true });
-    focusSidebarControl(`[data-sidebar-hide="${page}"]`);
+    if (split) {
+      update(page === "navigation" ? { navigationVisible: !open } : { contentVisible: !open });
+      setSplitPage(page);
+    } else update({ singleVisible: !open });
+  }
+  function sidebarToggle(page: "navigation" | "content") {
+    const open = split ? page === "navigation" ? showNavigation : showContent : groupOpen;
+    const edge = split ? page === "navigation" ? "left" : "right" : side;
+    const target = split ? page : singleContent ? "content" : "navigation";
+    const name = split && page === "content" ? "workspace" : "navigation";
+    return <button type="button" className="icon-button sidebar-toggle" data-toggle={page}
+      data-sidebar-hide={open ? split ? page : activePage : undefined}
+      data-sidebar-reveal={!open ? split ? page : "single" : undefined}
+      inert={mobileOpen && !open}
+      aria-label={`${open ? "Hide" : "Show"} ${name} sidebar`} title={`${open ? "Hide" : "Show"} sidebar`}
+      onClick={() => toggle(target, open)}>
+      <Icon icon={edge === "left" ? open ? PanelLeftClose : PanelLeftOpen : open ? PanelRightClose : PanelRightOpen} size={18} />
+    </button>;
   }
   return (
     <div className={`app-shell ${!orgRoute ? "platform-shell" : "sidebar-shell"}`} data-sidebar-style={workspaceBase ? preferences.style : "organization"} data-sidebar-side={preferences.side} data-compact={isCompact} data-drawer-open={mobileOpen}>
@@ -175,7 +211,7 @@ function ShellContent({
           role={mobileOpen ? "dialog" : undefined}
           aria-modal={mobileOpen || undefined}
           aria-label={mobileOpen ? drawer === "content" ? "Workspace sidebar" : "Navigation" : undefined}
-          className={`sidebar-layout ${mobileOpen ? "drawer-open" : ""} ${expanded ? "adaptive-expanded" : ""}`}
+          className={`sidebar-container ${mobileOpen ? "drawer-open" : ""}`}
           data-drawer={drawer ?? undefined}
           data-side={side}
           onClick={event => {
@@ -194,7 +230,9 @@ function ShellContent({
             }
           }}
         >
-          <div className="sidebar-top" hidden={!mobileOpen}>
+          {workspaceBase ? <>{sidebarToggle("navigation")}{split ? sidebarToggle("content") : null}</> : null}
+          <div className={`sidebar-layout ${expanded ? "adaptive-expanded" : ""}`} data-side={side}>
+          {!workspaceBase ? <div className="sidebar-top" hidden={!mobileOpen}>
             <button
               className="icon-button mobile-close"
               aria-label="Close navigation"
@@ -202,7 +240,7 @@ function ShellContent({
             >
               <Icon icon={X} size={16} weight="control" />
             </button>
-          </div>
+          </div> : null}
           <aside className={`sidebar ${showNavigation ? "rail-visible" : "rail-hidden"}`} aria-label="Organization sidebar" inert={!showNavigation}>
           <Routes>
             <Route
@@ -217,17 +255,13 @@ function ShellContent({
           </Routes>
           </aside>
           <div ref={setContentTarget} className={`sidebar-content-slot ${showContent ? "rail-visible" : "rail-hidden"}`} inert={!showContent} />
+          </div>
         </div> : null}
         <main
           id="main"
           className={`main-content ${/\/organizations\/[^/]+\/workspaces\/[^/]+/.test(location.pathname) ? "project-workspace" : ""}`}
           inert={mobileOpen}
-          data-reveal-space={revealNavigation || revealContent}
         >
-          {workspaceBase ? <div className="workspace-reveal-controls">
-            {revealNavigation ? <button type="button" className="icon-button sidebar-reveal" data-side={split ? "left" : preferences.side} data-sidebar-reveal={split ? "navigation" : "single"} aria-label="Show navigation sidebar" title="Show navigation sidebar" onClick={() => reveal(!split && singleContent ? "content" : "navigation")}><Icon icon={!split && preferences.side === "right" ? PanelRight : PanelLeft} size={18} /></button> : null}
-            {revealContent ? <button type="button" className="icon-button sidebar-reveal" data-side="right" data-sidebar-reveal="content" aria-label="Show workspace sidebar" title="Show workspace sidebar" onClick={() => reveal("content")}><Icon icon={PanelRight} size={18} /></button> : null}
-          </div> : null}
           {organizations.loading ? (
             <Loading />
           ) : organizations.error ? (

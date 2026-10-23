@@ -45,7 +45,6 @@ type SidebarContextValue = {
   storageError: boolean;
   narrow: boolean;
   compact: boolean;
-  drawerWidth: number;
   pagedAdaptive: boolean;
   workspaceBase: string | undefined;
   workspaceSearch: string;
@@ -80,11 +79,10 @@ export function SidebarProvider({ userId, children }: { userId: string; children
   const contentsSelected = selection.workspace === workspaceBase ? selection.contents : new URLSearchParams(location.search).has("folder");
   const width = useSyncExternalStore(subscribeWidth, () => window.innerWidth);
   const narrow = width <= 760; // Organization-only navigation retains its menu.
-  const compact = width < 904;
-  const drawerWidth = Math.min(width * .82, 320);
-  // Native Adaptive has two adjacent drawer pages. Only page them when their
-  // combined native width would exceed this browser viewport (e.g. 390px).
-  const pagedAdaptive = compact && 2 * drawerWidth > width;
+  // One 256px rail + 360px center + 24px shell insets/gap.
+  const compact = width < 640;
+  // Two Split rails need 512px + 360px center + 32px insets/gaps.
+  const pagedAdaptive = width < 904;
   const creatingChat = location.pathname === workspaceBase && new URLSearchParams(location.search).get("new") === "1";
   const wasCreatingChat = useRef(creatingChat);
   useEffect(() => {
@@ -96,7 +94,7 @@ export function SidebarProvider({ userId, children }: { userId: string; children
         if (new URLSearchParams(location.search).get("conversation") !== trigger.conversation) document.querySelector<HTMLElement>('.composer-area textarea')?.focus({ preventScroll: true });
         else if (trigger.element.checkVisibility() && !trigger.element.closest("[inert]")) trigger.element.focus({ preventScroll: true });
         else {
-          const fallback = Array.from(document.querySelectorAll<HTMLElement>('.workspace-detail-actions a, .workspace-reveal-controls button, .mobile-menu')).find(element => element.checkVisibility() && !element.closest("[inert]"));
+          const fallback = [...document.querySelectorAll<HTMLElement>('.workspace-detail-actions a'), ...document.querySelectorAll<HTMLElement>('.sidebar-toggle, .mobile-menu')].find(element => element.checkVisibility() && !element.closest("[inert]"));
           fallback?.focus({ preventScroll: true });
         }
       });
@@ -111,7 +109,7 @@ export function SidebarProvider({ userId, children }: { userId: string; children
     if (changes.style) setDrawer(null);
   }
   return <SidebarContext.Provider value={{
-    preferences, update, storageError, narrow, compact, drawerWidth, pagedAdaptive, workspaceBase,
+    preferences, update, storageError, narrow, compact, pagedAdaptive, workspaceBase,
     workspaceSearch: workspaceBase ? queries.current[workspaceBase] ?? "" : "",
     contentState,
     updateContentState: changes => {
