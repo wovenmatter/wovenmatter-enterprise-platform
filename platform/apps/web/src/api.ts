@@ -150,6 +150,7 @@ export type Model = {
   name: string;
   provider: string;
   thinkingLevels?: string[];
+  defaultThinkingLevel?: string;
 };
 export type Run = {
   id: string;

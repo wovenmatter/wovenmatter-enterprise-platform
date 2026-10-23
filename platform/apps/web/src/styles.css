@@ -2628,15 +2628,16 @@ details[open] > summary .work-chevron {
 .composer-controls {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 2px 4px;
+  flex-wrap: nowrap;
+  gap: 4px;
   margin-top: 6px;
 }
 .composer-model-controls {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 2px;
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 4px;
   min-width: 0;
 }
 /* Composer selector triggers: 36 high, 12 medium, quiet foreground. */
@@ -2665,6 +2666,21 @@ details[open] > summary .work-chevron {
 }
 .composer-picker > svg {
   flex: none;
+}
+.composer-picker-icon { display: inline-grid; place-items: center; flex: none; width: 16px; height: 16px; }
+.composer-picker-icon > img { display: block; width: 16px; height: 16px; object-fit: contain; }
+.composer-controls > *, .composer-controls .composer-picker { flex-shrink: 0; }
+.composer-area form[data-composer-layout="compact"] .composer-controls .composer-picker:not(.composer-tools-trigger) {
+  justify-content: center; width: 36px; min-width: 36px; max-width: 36px; height: 36px; min-height: 36px; padding: 0; gap: 0;
+}
+.composer-area form[data-composer-layout="compact"] .composer-controls .composer-picker:not(.composer-tools-trigger) .composer-picker-value {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+.composer-area form[data-composer-layout="compact"] .composer-controls .composer-picker:not(.composer-tools-trigger) > svg:last-child { display: none; }
+.composer-area form[data-composer-overflow="expanded"] .composer-controls { flex-wrap: wrap; }
+@media (pointer: fine) {
+  .composer-area .composer-controls .composer-picker { min-height: 36px; }
+  .composer-area .send-button, .composer-area .stop-button { width: 36px; height: 36px; min-height: 36px; }
 }
 .composer-picker-value {
   min-width: 0;

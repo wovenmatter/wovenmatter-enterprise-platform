@@ -92,7 +92,13 @@ export function usePopup<T extends HTMLElement = HTMLButtonElement>(
   const entry = useRef({ close: () => setOpen(false) });
   const close = useCallback((restoreFocus: boolean) => {
     setOpen(false);
-    if (restoreFocus) trigger.current?.focus({ preventScroll: true });
+    if (restoreFocus) {
+      const anchor = trigger.current;
+      const target = anchor?.getClientRects().length
+        ? anchor
+        : anchor?.closest("form")?.querySelector<HTMLButtonElement>(".composer-collapse");
+      target?.focus({ preventScroll: true });
+    }
   }, [trigger]);
   const show = useCallback((focus: Focus, point?: { x: number; y: number }) => {
     initialFocus.current = focus;
@@ -112,9 +118,15 @@ export function usePopup<T extends HTMLElement = HTMLButtonElement>(
     let frame = 0;
     const update = () => {
       const anchor = trigger.current?.getBoundingClientRect();
+      if (anchor && (!anchor.width || !anchor.height)) {
+        // Hiding a popup's ancestor can move focus to body before the resize
+        // observer runs. The visible composer expander is its recovery target.
+        close(node.contains(document.activeElement) || document.activeElement === document.body);
+        return false;
+      }
       if (!anchor || anchor.bottom < 0 || anchor.top > window.innerHeight) {
         close(false);
-        return;
+        return false;
       }
       const position = place(pointerOffset
         ? new DOMRect(anchor.left + pointerOffset.x, anchor.top + pointerOffset.y, 0, 0)
@@ -124,8 +136,12 @@ export function usePopup<T extends HTMLElement = HTMLButtonElement>(
       node.style.left = `${position.left}px`;
       node.style.visibility = "visible";
       setStyle(position);
+      return true;
     };
-    update();
+    if (!update()) {
+      if (activePopup === entry.current) activePopup = null;
+      return;
+    }
     const items = focusable(node);
     const selected =
       initialFocus.current === "selected"
@@ -184,6 +200,7 @@ export function usePopup<T extends HTMLElement = HTMLButtonElement>(
       frame = requestAnimationFrame(update);
     });
     size.observe(node);
+    if (trigger.current) size.observe(trigger.current);
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
@@ -470,6 +487,51 @@ export type PickerOption = {
   description?: string;
   disabled?: boolean;
 };
+/** Fit whole rows like DashboardComposer's regular/compact/collapsed controls. */
+export function useComposerLayout() {
+  const formRef = useRef<HTMLFormElement>(null);
+  const [override, setOverride] = useState<boolean | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  const collapsed = override ?? narrow;
+  useLayoutEffect(() => {
+    const form = formRef.current;
+    const row = form?.querySelector<HTMLElement>(".composer-controls");
+    if (!form || !row) return;
+    let frame = 0;
+    let previousWidth = form.clientWidth;
+    function measure() {
+      if (!form || !row) return;
+      const wasCollapsed = form.classList.contains("composer-collapsed");
+      // Measure both complete rows before paint, including current labels and
+      // Enterprise's message-mode selector, without cloning interactive nodes.
+      form.classList.remove("composer-collapsed");
+      delete form.dataset.composerOverflow;
+      form.dataset.composerLayout = "regular";
+      const compact = row.scrollWidth > row.clientWidth + 1;
+      if (compact) form.dataset.composerLayout = "compact";
+      const tooNarrow = row.scrollWidth > row.clientWidth + 1;
+      if (wasCollapsed) form.classList.add("composer-collapsed");
+      setNarrow(tooNarrow);
+      // Native permits explicitly expanding narrow controls. Keep every item
+      // reachable in that case; the trailing action group stays together.
+      if (override === false && tooNarrow) form.dataset.composerOverflow = "expanded";
+      if (override === false && Math.abs(form.clientWidth - previousWidth) > 1) setOverride(null);
+      previousWidth = form.clientWidth;
+    }
+    function schedule() {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    }
+    measure();
+    const size = new ResizeObserver(schedule);
+    size.observe(form);
+    const content = new MutationObserver(schedule);
+    content.observe(row, { childList: true, characterData: true, subtree: true });
+    return () => { cancelAnimationFrame(frame); size.disconnect(); content.disconnect(); };
+  }, [override]);
+  return { formRef, collapsed, setCollapsed: setOverride };
+}
+
 /**
  * WovenMatter composer selector: a full-height trigger with the current
  * choice, and a titled popout listing full labels with a checked selection.
@@ -478,6 +540,7 @@ export function Picker({
   label,
   heading,
   icon,
+  leadingIcon,
   value,
   options,
   placeholder,
@@ -493,6 +556,7 @@ export function Picker({
   title?: string;
   className?: string;
   icon: LucideIcon;
+  leadingIcon?: ReactNode;
   value: string;
   options: PickerOption[];
   placeholder: string;
@@ -539,7 +603,7 @@ export function Picker({
         <span className="sr-only" id={`${id}-label`}>
           {label}
         </span>
-        <Icon icon={icon} size={14} weight="control" />
+        {leadingIcon ? <span className="composer-picker-icon" aria-hidden="true">{leadingIcon}</span> : <Icon icon={icon} size={16} weight="control" />}
         <span className="composer-picker-value" id={`${id}-value`}>
           {current?.label ?? placeholder}
         </span>

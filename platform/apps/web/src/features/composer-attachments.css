@@ -5,7 +5,7 @@
 .composer-attachment-chip > svg { flex-shrink: 0; }
 .composer-attachment-chip .icon-button { flex-shrink: 0; width: 24px; height: 28px; }
 .composer-attachment-control { position: relative; display: flex; align-items: center; }
-.composer-attachment-trigger { width: 30px; height: 30px; color: var(--muted); }
+.composer-attachment-trigger { width: 36px; height: 36px; color: var(--muted); }
 .menu[aria-label="Add files or photos"] { width: 224px; padding: 8px; }
 .menu[aria-label="Add files or photos"] .menu-item { min-height: 40px; gap: 12px; }
 .composer-upload-status { position: absolute; bottom: calc(100% + 8px); left: 0; width: max-content; max-width: 240px; padding: 6px 8px; border-radius: 8px; background: var(--surface); font-size: 12px; }

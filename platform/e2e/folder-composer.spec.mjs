@@ -54,6 +54,8 @@ for (const width of [1280, 390]) test(`folder first send and persisted binding a
   await choose(page, folder.name); await expect(input).toHaveValue('Unsent folder fixture');
   const box = await picker(page).boundingBox(), text = await input.boundingBox(); expect(box.y + box.height).toBeLessThanOrEqual(text.y);
   await picker(page).click(); await expect(page.getByRole('option')).toHaveText(['All Workspaces', folder.name, second.name]); await page.keyboard.press('Escape');
+  const expand = page.getByRole('button', { name: 'Expand composer', exact: true });
+  if (await expand.isVisible()) await expand.click();
   await page.getByRole('button', { name: 'Collapse composer', exact: true }).click(); await expect(page.getByRole('button', { name: /^Model / })).toBeHidden(); await expect(input).toHaveValue('Unsent folder fixture');
   await page.getByRole('button', { name: 'Expand composer', exact: true }).click();
   await page.getByRole('button', { name: 'Send message', exact: true }).click();

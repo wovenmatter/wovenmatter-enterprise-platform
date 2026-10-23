@@ -43,6 +43,11 @@ async function setup(page, baseURL, welcome = false) {
   await expect(page).toHaveURL(new URL(welcome ? root : workspace, baseURL).href);
   await expect(page).toHaveTitle(/WovenMatter/);
   await expect(page.getByLabel('Message your agent')).toBeVisible();
+  if (page.viewportSize().width < 500) {
+    // The desktop-compatible narrow row starts collapsed; users can explicitly
+    // expand it to reach the complete tool controls.
+    await page.getByRole('button', { name: 'Expand composer', exact: true }).click();
+  }
   await expect(trigger(page)).toBeVisible();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   return state;

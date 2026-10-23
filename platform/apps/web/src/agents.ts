@@ -1,3 +1,10 @@
+import piLogo from "./assets/pi-durable.svg";
+import codexLogo from "./assets/codex.png";
+import claudeLogo from "./assets/claude.svg";
+import grokLogo from "./assets/grok.svg";
+import opencodeLogo from "./assets/opencode.svg";
+const logos: Record<string, string> = { pi: piLogo, codex: codexLogo, claude_code: claudeLogo, grok_build: grokLogo, opencode: opencodeLogo };
+export function agentLogo(id: string) { return logos[id] ?? piLogo; }
 /** Runtime identifiers and presentation names from WovenMatter 04fe0509. */
 export const agents = [
   { id: "pi", name: "Pi Durable", mark: "π", detail: "Durable sessions with code tools and subagents." },

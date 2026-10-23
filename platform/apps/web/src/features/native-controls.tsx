@@ -22,7 +22,7 @@ export function useNativeControls({ conversation, models, disabled, onSaving, on
   }
   if (!conversation || conversation.harness === "pi") return { controls: null, feedback: null };
   return {
-    controls: <div className="composer-model-controls native-selectors">
+    controls: <div className="composer-model-controls native-selectors" role="group" aria-label="Native session settings">
       <Picker label="Native model" heading="Model" icon={Cpu} value={conversation.model || settings?.model || ""} placeholder="Agent default model" disabled={disabled || busy || settings?.canConfigure === false} options={modelOptions} onChange={model => void update({model})} />
       {settings?.thinkingLevels.length ? <Picker label="Native thinking level" heading="Thinking Level" icon={Brain} value={native.data?.configured.thinking ?? settings.thinking} placeholder="Thinking" disabled={disabled || busy || !settings.canConfigure} options={settings.thinkingLevels.map(option => ({ value: option.id, label: option.label }))} onChange={thinking => void update({ native: { thinking } })} /> : null}
       {settings?.permissions.length ? <Picker label="Native permissions" heading="Permissions" icon={KeyRound} value={native.data?.configured.permission ?? settings.permission} placeholder="Permissions" disabled={disabled || busy || !settings.canConfigure} options={settings.permissions.map(option => ({ value: option.id, label: option.label }))} onChange={permission => void update({ native: { permission } })} /> : null}
