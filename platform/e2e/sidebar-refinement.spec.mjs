@@ -99,8 +99,18 @@ test('849 DPR2 empty workspace keeps one title-level toggle, complete welcome an
   const toggle = page.locator('.sidebar-toggle'), before = await toggle.boundingBox();
   const titleY = await page.locator('.thread-header h2').evaluate(n=>n.getBoundingClientRect().y);
   expect((await rect(page,'.sidebar')).width).toBe(256);
+  const move = await page.locator('.sidebar .sidebar-move').boundingBox();
+  expect(move.x+move.width).toBeLessThanOrEqual(before.x);
   await page.evaluate(()=>window.originalToggle=document.querySelector('.sidebar-toggle'));
   await page.screenshot({path:info.outputPath('empty-849-open.png')});
+  const railTitle = page.locator('.workspace-rail-title'), railTitleY = (await railTitle.boundingBox()).y;
+  const scrollTop = await page.locator('.workspace-navigation').evaluate(n => { n.scrollTop=100; return n.scrollTop; });
+  expect(scrollTop).toBeGreaterThan(0);
+  expect((await railTitle.boundingBox()).y).toBe(railTitleY);
+  expect(await toggle.boundingBox()).toEqual(before);
+  // Scrolling rows must remain behind the fixed title/control band.
+  expect(await railTitle.evaluate(n => document.elementFromPoint(n.getBoundingClientRect().x+80,n.getBoundingClientRect().y+34)?.closest('.workspace-rail-title')===n)).toBe(true);
+  await page.screenshot({path:info.outputPath('empty-849-scrolled.png')});
   await toggle.click(); await settle(page);
   const after = await toggle.boundingBox(); expect(after.y).toBe(before.y); expect(after.x).toBeLessThan(before.x);
   expect(await toggle.evaluate(n=>n===window.originalToggle)).toBe(true);
@@ -110,6 +120,9 @@ test('849 DPR2 empty workspace keeps one title-level toggle, complete welcome an
   for (const selector of ['.workspace-welcome .empty', '.composer-area', '.send-button']) {
     const b=await rect(page,selector); expect(b.x).toBeGreaterThanOrEqual(0); expect(b.x+b.width).toBeLessThanOrEqual(849);
   }
+  await toggle.click(); await settle(page);
+  expect(await page.locator('.workspace-navigation').evaluate(n=>n.scrollTop)).toBe(scrollTop);
+  expect((await railTitle.boundingBox()).y).toBe(railTitleY);
   clean(state);
 });
 
@@ -182,21 +195,25 @@ test('rapid interruptions continue from rendered geometry; reduced motion makes 
   const state=await setup(page,baseURL,preference('adaptive','left')); await page.goto(workspace); await expect(page.getByLabel('Message your agent')).toBeVisible(); await settle(page);
   await page.getByRole('searchbox',{name:'Search chats'}).fill('Retained');
   const rapid=await page.evaluate(async()=>{
-    const frames=[], start=performance.now(), rail=document.querySelector('.sidebar-layout');
+    const frames=[], rail=document.querySelector('.sidebar-layout');
     for(let i=0;i<5;i++) {
-      const before=rail.getBoundingClientRect().x, beforeAt=performance.now(); document.querySelector('.sidebar-move').click();
-      await new Promise(requestAnimationFrame); const after=rail.getBoundingClientRect().x;
-      frames.push({t:performance.now()-start,dt:performance.now()-beforeAt,before,after,endpoint:i%2===0?innerWidth-520:8,span:innerWidth-528});
-      await new Promise(r=>setTimeout(r,55));
+      const before=rail.getBoundingClientRect().x;
+      document.querySelector('.sidebar-move').click(); await Promise.resolve();
+      // Freeze the transition clock, so continuity does not depend on CI frame
+      // scheduling. Reverse at a known intermediate point on every iteration.
+      const animations=rail.getAnimations();
+      for(const animation of animations) { animation.pause(); animation.currentTime=0; }
+      const after=rail.getBoundingClientRect().x;
+      for(const animation of animations) animation.currentTime=Number(animation.effect.getTiming().duration)*.4;
+      frames.push({before,after,intermediate:rail.getBoundingClientRect().x,animations:animations.length,retained:rail===document.querySelector('.sidebar-layout')});
     }
+    for(const animation of rail.getAnimations()) animation.finish();
     return frames;
   });
   await writeFile(info.outputPath('rapid-frames.json'),JSON.stringify(rapid,null,2));
-  // A 300ms cubic-bezier(.2,.8,.2,1) has maximum initial slope4.
-  // Bound displacement by elapsed frame time, and reject a direct endpoint snap.
-  expect(rapid.every(f=>Math.abs(f.after-f.before)<=f.span*4*f.dt/300+3)).toBe(true);
-  expect(rapid.filter(f=>f.dt<60).every(f=>Math.abs(f.after-f.endpoint)>2)).toBe(true);
+  expect(rapid.every(f=>f.animations>0&&f.retained&&Math.abs(f.after-f.before)<.1&&Math.abs(f.intermediate-f.before)>2)).toBe(true);
   await settle(page); await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-side','right');
+  expect((await rect(page,'.sidebar-layout')).x).toBe(page.viewportSize().width-520);
   await expect(page.getByRole('searchbox',{name:'Search chats'})).toHaveValue('Retained');
   await page.emulateMedia({reducedMotion:'reduce'});
   const frames=await sample(page,'.sidebar-move',info,'reduced-motion');

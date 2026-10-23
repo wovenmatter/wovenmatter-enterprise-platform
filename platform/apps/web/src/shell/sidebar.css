@@ -59,7 +59,8 @@
 .sidebar-shell .project-workspace .project-pane-header { min-height: 68px; height: 68px; padding-left: calc(16px + var(--sidebar-header-left)); padding-right: calc(8px + var(--sidebar-header-right)); transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1); }
 .sidebar-shell .project-workspace .desktop-content-page > .page-header,
 .sidebar-shell .project-workspace .subpage > .page-header { padding-left: var(--sidebar-header-left); padding-right: var(--sidebar-header-right); transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1); }
-.sidebar-shell .workspace-rail-title { justify-content: space-between; gap: 4px; min-height: 68px; padding: 0 4px 0 8px; }
+.sidebar-shell .workspace-navigation { scroll-padding-top: 68px; }
+.sidebar-shell .workspace-rail-title { position: sticky; top: 0; z-index: 1; justify-content: space-between; gap: 4px; min-height: 68px; padding: 0 8px; background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace); }
 .sidebar-shell .workspace-rail-title > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-controls { display: inline-flex; flex: none; align-items: center; gap: 0; }
 .sidebar-controls .icon-button { width: 32px; height: 36px; min-width: 32px; padding: 0; }
