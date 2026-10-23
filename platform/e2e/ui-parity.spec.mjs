@@ -24,6 +24,10 @@ test('menus and pickers focus visible choices, navigate, dismiss', async ({ page
   await page.keyboard.press('ArrowDown'); await expect(page.getByRole('menu')).toBeVisible();
   await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(menu).toBeFocused();
   const model = picker(page, 'Conversation model');
+  // The rail can load before the conversation and its model catalog. Keyboard
+  // focus is intentionally allowed on aria-disabled pickers during that load.
+  await expect(model).toBeEnabled();
+  await expect(model).toHaveAccessibleName('Conversation model Synthetic selected model');
   await model.focus(); await page.keyboard.press('Enter');
   await expect(page.getByRole('option', { selected: true })).toBeFocused();
   await page.keyboard.press('ArrowDown'); await expect(page.getByRole('option', { name: 'Other synthetic model' })).toBeFocused();
