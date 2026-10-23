@@ -30,7 +30,7 @@ import { AdministrationPage } from "../features/administration";
 import { PersonalSettings } from "../features/personal-settings";
 import { OrganizationNav } from "./Navigation";
 import { OrganizationShell } from "./OrganizationShell";
-import { SidebarProvider, useSidebar } from "./sidebar-preferences";
+import { hasPendingSidebarFocusFrom, SidebarProvider, useSidebar } from "./sidebar-preferences";
 import "./sidebar.css";
 
 const AccountsPage = lazy(() => import("../features/platform-admin").then(m => ({ default: m.AccountsPage })));
@@ -103,6 +103,9 @@ function ShellContent({
     // the browser drops it from the newly inert subtree to the document body.
     const active = document.activeElement;
     if (!(active instanceof HTMLElement) || !active.closest(".rail-hidden")) return;
+    // Folder navigation already has a handoff from this control to a visible
+    // destination. Keep this fallback for resize-only focus recovery.
+    if (hasPendingSidebarFocusFrom(active)) return;
     const page = split && active.closest(".sidebar-content-slot") ? "content" : "navigation";
     const target = drawerRef.current?.querySelector<HTMLElement>(mobileOpen ? "[data-sidebar-hide]" : `[data-toggle="${page}"]`);
     target?.focus({ preventScroll: true });

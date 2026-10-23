@@ -137,11 +137,16 @@ export function useSidebar() {
   return value;
 }
 
-let pendingSidebarFocus: number | undefined;
+let pendingSidebarFocus: { frame: number; origin: Element | null; selector: string } | undefined;
+export function hasPendingSidebarFocusFrom(origin: Element) {
+  if (pendingSidebarFocus?.origin !== origin) return false;
+  const target = document.querySelector<HTMLElement>(pendingSidebarFocus.selector);
+  return Boolean(target?.checkVisibility() && !target.closest("[inert]"));
+}
 export function focusSidebarControl(selector: string) {
   const origin = document.activeElement;
-  if (pendingSidebarFocus !== undefined) cancelAnimationFrame(pendingSidebarFocus);
-  pendingSidebarFocus = requestAnimationFrame(() => {
+  if (pendingSidebarFocus) cancelAnimationFrame(pendingSidebarFocus.frame);
+  const frame = requestAnimationFrame(() => {
     pendingSidebarFocus = undefined;
     const current = document.activeElement;
     // Navigation may hide its trigger, but must not override a subsequent
@@ -149,4 +154,5 @@ export function focusSidebarControl(selector: string) {
     if (current && current !== origin && current !== document.body && current.isConnected) return;
     document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   });
+  pendingSidebarFocus = { frame, origin, selector };
 }
