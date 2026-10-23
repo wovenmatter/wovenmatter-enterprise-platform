@@ -1,15 +1,47 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, symlink, writeFile, link } from "node:fs/promises";
+import fs, { mkdtemp, readFile, rm, symlink, writeFile, link, stat } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createServer, request as httpRequest } from "node:http";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import { createHash } from "node:crypto";
 import { MAX_ATTACHMENT_BYTES, MAX_INPUT_BYTES, validateAttachments, prepareAttachments, attachmentPrompt, attachmentToolText, openCodeFiles } from "../src/attachments.js";
 import { MAX_PROMPT_BYTES, validateContainerRequest, validateInputText } from "../src/validation.js";
 import { sessionBroker } from "../src/session-broker.js";
 
 const file = (name = "note.txt", text = "Immutable note") => ({ name, mimeType: "text/plain", data: Buffer.from(text).toString("base64") });
+
+async function withBrokerFixture(directory: string, upstream: Server,
+  use: (broker: Awaited<ReturnType<typeof sessionBroker>>) => Promise<void>,
+  startBroker = sessionBroker) {
+  let broker: Awaited<ReturnType<typeof sessionBroker>> | undefined;
+  // Cleanup covers both listener and privileged broker startup failures.
+  try {
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', resolve);
+    });
+    broker = await startBroker(directory, 'fixture-project', {});
+    await use(broker);
+  } finally {
+    broker?.close();
+    upstream.closeAllConnections();
+    if (upstream.listening) await new Promise<void>(resolve => upstream.close(() => resolve()));
+  }
+}
+
+test("broker startup failure closes the upstream fixture before rejecting", async t => {
+  const upstream = createServer();
+  t.after(() => { upstream.closeAllConnections(); if (upstream.listening) upstream.close(); });
+  await assert.rejects(withBrokerFixture('/unused-fixture', upstream, async () => {
+    assert.fail('Failed startup must not invoke the transport fixture');
+  }, async () => {
+    assert.equal(upstream.listening, true);
+    throw new Error('Synthetic ownership setup failure');
+  }), /Synthetic ownership setup failure/);
+  assert.equal(upstream.listening, false);
+});
 
 test("attachment admission rejects untrusted paths, malformed bytes, and desktop count/size overflow", () => {
   for (const invalid of [null, {}, Array.from({length:9},()=>file()), [{...file(),path:'/etc/passwd'}],
@@ -98,10 +130,25 @@ test("50 MiB immutable files cross trusted input, native image mapping and authe
     for await(const chunk of req){received+=chunk.length;hash.update(chunk);}
     digest=hash.digest('hex');res.end('{"ok":true}');
   });
-  await new Promise<void>(resolve=>upstream.listen(0,'127.0.0.1',resolve));
-  const broker=await sessionBroker(join(directory,'broker'),'fixture-project',{});
-  broker.setGateway({baseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/inference`,token:'synthetic-upstream-grant'});
+  const brokerDirectory=join(directory,'broker'), socketPath=join(brokerDirectory,'gateway.sock');
+  const uid=process.getuid!(), gid=process.getgid!(), chown=fs.chown;
+  // The trusted broker runs as root in production. Unprivileged CI exercises
+  // real transport/auth/limits with its own ownership; root runs keep the real
+  // uid0/gid10001 ownership setup. This mock does not prove OS ownership.
+  const ownership=uid===0?undefined:t.mock.method(fs,'chown',async(...args:Parameters<typeof fs.chown>)=>{
+    assert.ok(args[0]===brokerDirectory||args[0]===socketPath,'Only this fixture ownership may be adapted');
+    assert.deepEqual(args.slice(1),[0,10001]);
+    await chown(args[0],uid,gid);
+  });
+  if(ownership)syncBuiltinESMExports();
   try {
+    await withBrokerFixture(brokerDirectory,upstream,async broker=>{
+    if(ownership)assert.equal(ownership.mock.callCount(),2);
+    for(const [path,mode]of [[brokerDirectory,0o750],[socketPath,0o660]]as const){
+      const actual=await stat(path);
+      assert.equal(actual.uid,uid);assert.equal(actual.gid,uid===0?10001:gid);assert.equal(actual.mode&0o777,mode);
+    }
+    broker.setGateway({baseUrl:`http://127.0.0.1:${(upstream.address() as any).port}/inference`,token:'synthetic-upstream-grant'});
     const send=(authorization:string)=>new Promise<number>((resolve,reject)=>{
       const request=httpRequest({socketPath:join(directory,'broker/gateway.sock'),path:'/inference/v1/responses',method:'POST',headers:{authorization,'content-type':'application/json'}},response=>{response.resume();response.on('end',()=>resolve(response.statusCode!));});
       request.on('error',reject);request.end(authorization.endsWith(broker.token)?body:'{}');
@@ -114,8 +161,9 @@ test("50 MiB immutable files cross trusted input, native image mapping and authe
     assert.equal(calls,1);
     assert.throws(()=>validateAttachments([...attachments,file('over.txt','x')]),{code:'invalid_attachment'});
     t.diagnostic(`Synthetic 50 MiB files: ${bytes} native JSON bytes; peak process RSS ${process.resourceUsage().maxRSS} KiB.`);
+    });
   } finally {
-    broker.close();upstream.closeAllConnections();
-    await new Promise<void>(resolve=>upstream.close(()=>resolve()));
+    ownership?.mock.restore();
+    if(ownership)syncBuiltinESMExports();
   }
 });

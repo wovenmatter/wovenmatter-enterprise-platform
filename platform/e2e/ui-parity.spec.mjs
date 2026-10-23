@@ -313,6 +313,9 @@ test('long model identifiers remain readable and keyboard scrolling reaches the 
   for (let index = 0; index < 40; index++) state.models.push({ id: `long-${index}`, name: `Long model ${index} with full version and provider attribution`, provider: 'custom', thinkingLevels: [] });
   for (const viewport of [{ width: 1536, height: 1024 }, { width: 855, height: 769 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport); await page.goto(workspace);
+    await expect(page.getByLabel('Message your agent')).toBeVisible();
+    const expand = page.getByRole('button', { name: 'Expand composer', exact: true });
+    if (await expand.isVisible()) await expand.click();
     await picker(page, 'Conversation model').focus(); await page.keyboard.press('Enter');
     const option = page.getByRole('option', { name: longName, exact: true });
     await expect(option).toHaveText(longName);
@@ -459,6 +462,9 @@ for (const method of ['selected', 'ArrowUp']) {
     state.models = [...manyModels(), ...state.models];
     for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 1280, height: 240 }]) {
       await page.setViewportSize(viewport); await page.goto(workspace);
+      await expect(page.getByLabel('Message your agent')).toBeVisible();
+      const expand = page.getByRole('button', { name: 'Expand composer', exact: true });
+      if (await expand.isVisible()) await expand.click();
       const trigger = picker(page, 'Conversation model'); await trigger.focus();
       const editor = await page.getByLabel('Message your agent').boundingBox();
       await page.keyboard.press(method === 'selected' ? 'Enter' : method);
