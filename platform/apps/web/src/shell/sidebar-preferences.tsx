@@ -137,6 +137,16 @@ export function useSidebar() {
   return value;
 }
 
+let pendingSidebarFocus: number | undefined;
 export function focusSidebarControl(selector: string) {
-  requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true }));
+  const origin = document.activeElement;
+  if (pendingSidebarFocus !== undefined) cancelAnimationFrame(pendingSidebarFocus);
+  pendingSidebarFocus = requestAnimationFrame(() => {
+    pendingSidebarFocus = undefined;
+    const current = document.activeElement;
+    // Navigation may hide its trigger, but must not override a subsequent
+    // keyboard, pointer, or assistive-technology focus move.
+    if (current && current !== origin && current !== document.body && current.isConnected) return;
+    document.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
+  });
 }
