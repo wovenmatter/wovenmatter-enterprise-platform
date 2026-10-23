@@ -97,6 +97,7 @@ test('single replaces navigation, moves side, retains folder query and search th
 });
 
 test('adaptive opens adjacent contents only on selection, reorders stable nodes, and back preserves search', async ({ page, baseURL }, testInfo) => {
+  await page.clock.install({ time: new Date('2026-10-23T12:00:00Z') });
   const state = await setup(page, baseURL, prefs('adaptive'));
   await page.goto(root);
   await expect(nav(page)).toBeVisible(); await expect(contents(page)).toBeHidden();
@@ -115,9 +116,22 @@ test('adaptive opens adjacent contents only on selection, reorders stable nodes,
   expect(await x(contents(page))).toBeGreaterThan(await x(page.locator('#main')));
   await contents(page).getByRole('button', { name: 'Back to workspace navigation' }).click();
   await expect(contents(page)).toBeHidden();
+  await page.clock.pauseAt(new Date('2026-10-23T12:01:00Z'));
   await nav(page).getByRole('link', { name: 'All Workspaces', exact: true }).click();
+  // Folder selection focuses Back on its next frame. Complete that handoff
+  // before starting tab navigation, independent of the browser's frame rate.
+  await page.clock.runFor(32);
+  await page.evaluate(() => {
+    for (const node of document.querySelectorAll('.sidebar-layout,.sidebar,.sidebar-content-slot,#main')) {
+      for (const animation of node.getAnimations()) {
+        if (Number.isFinite(animation.effect.getComputedTiming().endTime)) animation.finish();
+      }
+    }
+  });
+  await expect(contents(page).getByRole('button', { name: 'Back to workspace navigation' })).toBeFocused();
   await expect(contents(page).getByRole('searchbox', { name: 'Search chats' })).toHaveValue('Retained');
   await contents(page).getByRole('tab', { name: 'Chats', exact: true }).focus(); await page.keyboard.press('ArrowRight');
+  await page.clock.runFor(32);
   await expect(contents(page).getByRole('tab', { name: 'Notes', exact: true })).toBeFocused();
   await expect(contents(page).getByRole('searchbox', { name: 'Search notes' })).toHaveValue('Retained');
   await page.screenshot({ path: testInfo.outputPath('adaptive-right.png') });
