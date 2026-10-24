@@ -3517,7 +3517,7 @@ html[data-theme="dark"] .workspace-detail-rail .segmented > .active {
 @media (max-width: 1000px) { .calendar-layout { grid-template-columns: 1fr; } .calendar-agenda { max-width: 600px; } .document-layout { grid-template-columns: 160px minmax(0, 1fr); gap: 12px; } .agent-settings-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
   .platform-header { align-items: flex-start; flex-direction: column; padding: 2px 16px; gap: 4px; }
-  .platform-header nav { gap: 4px 20px; }
+  .platform-header nav { gap: 4px 12px; }
   .platform-shell .main-content { overflow: auto; padding: 24px 16px; }
   .workspace-detail-rail { display: none; }
   .workspace-note-panel { min-width: 0; border: none; }

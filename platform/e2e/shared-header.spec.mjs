@@ -101,6 +101,10 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
     expect(geometry.main.top).toBeGreaterThanOrEqual(geometry.header.bottom);
     expect(geometry.composer.bottom).toBeLessThanOrEqual(844);
     expect(geometry.composer.top).toBeGreaterThan(geometry.header.bottom);
+    if (width === 390) {
+      const centers = await page.locator('.platform-header nav > *').evaluateAll(nodes => nodes.map(n => { const r = n.getBoundingClientRect(); return r.top + r.height / 2; }));
+      expect(Math.max(...centers) - Math.min(...centers)).toBeLessThan(2);
+    }
     if (width < 640) {
       await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).click();
       if (await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).isVisible()) await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).click();
