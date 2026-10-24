@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { send, useResource, type List, type Organization, type User } from "../api";
 import { Icon, SearchField, Switch } from "../components/controls";
-import { AsyncForm, Card, Confirm, Empty, ErrorNotice, Field, Loading, Modal, PageHeader, Status, Success } from "../components/ui";
+import { AsyncForm, BackLink, Card, Confirm, Empty, ErrorNotice, Field, Loading, Modal, PageHeader, Status, Success } from "../components/ui";
 
 type Account = User & { createdAt: string; memberships: { orgId: string; organizationName: string; role: string }[] };
 export function AccountsPage() {
@@ -21,6 +21,7 @@ export function AccountsPage() {
     catch (e) { setError((e as Error).message); }
   }
   return <section className="platform-page">
+    <BackLink to="/" label="Back to Admin" />
     <PageHeader title="Accounts" description="Manage accounts across the platform." actions={<button className="primary" onClick={() => setAdding(true)}><Icon icon={Plus} size={14} />Create account</button>} />
     <SearchField label="Search accounts" value={query} onChange={setQuery} placeholder="Search accounts…" />
     <ErrorNotice message={error || accounts.error} onRetry={accounts.reload} />
@@ -86,7 +87,7 @@ function AccountMemberships({ account, organizations, organizationsError, onClos
 }
 export function PlatformSettings() {
   const settings = useResource<{ owner: { name?: string; email?: string }; organizations: number; accounts: number; hosts: Array<{ id: string; name: string; status?: string }> | number }>("/enterprise/api/platform/settings");
-  return <section className="platform-page settings-page"><PageHeader title="Platform settings" description="Platform ownership and workspace infrastructure." /><ErrorNotice message={settings.error} onRetry={settings.reload} />{settings.loading ? <Loading /> : null}{settings.data ? <>
+  return <section className="platform-page settings-page"><BackLink to="/" label="Back to Admin" /><PageHeader title="Platform settings" description="Platform ownership and workspace infrastructure." /><ErrorNotice message={settings.error} onRetry={settings.reload} />{settings.loading ? <Loading /> : null}{settings.data ? <>
     <Card title="Platform owner"><strong>{settings.data.owner.name}</strong><p>{settings.data.owner.email}</p></Card>
     <Card title="Platform"><div className="setting-row"><span>Organizations</span><strong>{settings.data.organizations}</strong></div><div className="setting-row"><span>Accounts</span><strong>{settings.data.accounts}</strong></div></Card>
     <Card title="Workspace hosts">{Array.isArray(settings.data.hosts) ? settings.data.hosts.map(host => <div className="setting-row" key={host.id}><strong>{host.name}</strong>{host.status ? <Status value={host.status} /> : null}</div>) : <p>{settings.data.hosts} configured hosts</p>}</Card>

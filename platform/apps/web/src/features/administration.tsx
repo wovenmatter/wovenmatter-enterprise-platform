@@ -1,10 +1,21 @@
 import { Link, Navigate } from "react-router-dom";
-import { Folder, Plus } from "lucide-react";
+import { Folder, Plus, Settings, Users } from "lucide-react";
 import { date, type Organization, type User } from "../api";
-import { Empty, PageHeader } from "../components/ui";
+import { BackLink, DestinationRow, Empty, PageHeader } from "../components/ui";
 import { Icon } from "../components/controls";
 
-export function AdministrationPage({
+export function AdminLanding() {
+  return <section className="settings-page">
+    <PageHeader title="Admin" description="Manage the platform." />
+    <nav aria-label="Administration" className="card">
+      <DestinationRow to="/organizations" icon={Folder} title="Organizations" />
+      <DestinationRow to="/accounts" icon={Users} title="Accounts" />
+      <DestinationRow to="/platform-settings" icon={Settings} title="Platform settings" />
+    </nav>
+  </section>;
+}
+
+export function OrganizationsPage({
   user,
   organizations,
   onCreate,
@@ -17,6 +28,7 @@ export function AdministrationPage({
     return <Navigate to={`/organizations/${organizations[0]!.id}/workspaces`} replace />;
   return (
     <section>
+      {user.role === "owner" ? <BackLink to="/" label="Back to Admin" /> : null}
       <PageHeader
         title={user.role === "owner" ? "Organizations" : "Your organizations"}
         description={

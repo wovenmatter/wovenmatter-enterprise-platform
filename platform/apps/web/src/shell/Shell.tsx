@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import {
-  Link,
   Navigate,
   Route,
   Routes,
@@ -8,7 +7,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { ChevronDown, Menu as MenuIcon, X } from "lucide-react";
+import { Menu as MenuIcon, X } from "lucide-react";
 import {
   send,
   useResource,
@@ -17,8 +16,8 @@ import {
   type Project,
   type User,
 } from "../api";
-import { Brand } from "../components/Brand";
-import { Icon, Menu, MenuItem } from "../components/controls";
+import { PlatformHeader } from "./PlatformHeader";
+import { Icon } from "../components/controls";
 import {
   AsyncForm,
   ErrorNotice,
@@ -26,7 +25,7 @@ import {
   Loading,
   Modal,
 } from "../components/ui";
-import { AdministrationPage } from "../features/administration";
+import { AdminLanding, OrganizationsPage } from "../features/administration";
 import { PersonalSettings } from "../features/personal-settings";
 import { OrganizationNav } from "./Navigation";
 import { OrganizationShell } from "./OrganizationShell";
@@ -110,23 +109,10 @@ function ShellContent({
     const target = drawerRef.current?.querySelector<HTMLElement>(mobileOpen ? "[data-sidebar-hide]" : `[data-toggle="${page}"]`);
     target?.focus({ preventScroll: true });
   }, [showNavigation, showContent, mobileOpen, split]);
-  const [error, setError] = useState("");
   const menuButton = useRef<HTMLButtonElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
   const orgRoute = location.pathname.match(/^\/organizations\/([^/]+)/)?.[1];
-  const memberOrganization = organizations.data?.items.length === 1
-    ? organizations.data.items[0]
-    : undefined;
-  const returnOrg = location.pathname === "/personal-settings"
-    ? new URLSearchParams(location.search).get("returnTo")?.match(/^\/organizations\/([^/?#]+)(?:\/|[?#]|$)/)?.[1]
-    : undefined;
-  const activeOrganization = organizations.data?.items.find(org => org.id === (orgRoute ?? returnOrg))
-    ?? (!orgRoute && !returnOrg ? memberOrganization : undefined);
-  const adminContext = user.role === "owner" && ["/", "/accounts", "/platform-settings"].includes(location.pathname.replace(/\/$/, "") || "/");
-  const accountReturn = orgRoute
-    ? `?returnTo=${encodeURIComponent(`${location.pathname}${location.search}${location.hash}`)}`
-    : location.pathname === "/personal-settings" ? location.search : "";
   function openDrawer(page: "navigation" | "content") {
     drawerOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : menuButton.current;
     setDrawer(page);
@@ -178,41 +164,7 @@ function ShellContent({
       <a className="skip-link" href="#main">
         Skip to content
       </a>
-      <header className="platform-header" inert={mobileOpen}>
-        <div className="platform-brand-row">
-          {orgRoute && !workspaceBase ? <button
-            ref={menuButton}
-            className="icon-button mobile-menu"
-            aria-label="Open navigation"
-            onClick={() => openDrawer(singleContent ? "content" : "navigation")}
-          >
-            <Icon icon={MenuIcon} size={18} weight="control" />
-          </button> : null}
-          <Brand />
-        </div>
-        <nav aria-label="Platform navigation">
-          {adminContext ? <>
-            <Link to="/">Organizations</Link>
-            <Link to="/accounts">Accounts</Link>
-            <Link to="/platform-settings">Platform settings</Link>
-          </> : <>
-            {activeOrganization ? <div className="organization-topbar-links">
-              <Link to={`/organizations/${activeOrganization.id}/workspaces`}>Your organization</Link>
-              {user.role !== "owner" && (organizations.data?.items.length ?? 0) > 1 ?
-                <Menu label="Switch organization" icon={ChevronDown} iconSize={12} className="organization-switch" align="start">
-                  {organizations.data?.items.filter(org => org.id !== activeOrganization.id).map(org => <MenuItem key={org.id} onSelect={() => navigate(`/organizations/${org.id}/workspaces`)}>{org.name}</MenuItem>)}
-                </Menu> : null}
-            </div> : user.role !== "owner" ? <Link to="/">Your organizations</Link> : null}
-            {user.role === "owner" ? <Link to="/">Admin</Link> : null}
-          </>}
-          <Link to={`/personal-settings${accountReturn}`}>Personal settings</Link>
-          <button className="text-button" onClick={() => {
-            setError("");
-            logout().catch(e => setError(e.message));
-          }}>Sign out</button>
-        </nav>
-        <ErrorNotice message={error} />
-      </header>
+      <PlatformHeader user={user} organizations={organizations.data?.items} logout={logout} inert={mobileOpen} />
       <div className="shell-body" style={orgRoute ? layoutStyle : undefined}>
         {mobileOpen ? (
           <button
@@ -278,6 +230,12 @@ function ShellContent({
           className={`main-content ${/\/organizations\/[^/]+\/workspaces\/[^/]+/.test(location.pathname) ? "project-workspace" : ""}`}
           inert={mobileOpen}
         >
+          {orgRoute && !workspaceBase ? <button
+            ref={menuButton}
+            className="icon-button mobile-menu"
+            aria-label="Open navigation"
+            onClick={() => openDrawer("navigation")}
+          ><Icon icon={MenuIcon} size={18} weight="control" /></button> : null}
           {organizations.loading ? (
             <Loading />
           ) : organizations.error ? (
@@ -287,16 +245,12 @@ function ShellContent({
               <Routes>
                 <Route path="/accounts" element={user.role === "owner" ? <AccountsPage /> : <Navigate to="/" replace />} />
                 <Route path="/platform-settings" element={user.role === "owner" ? <PlatformSettings /> : <Navigate to="/" replace />} />
-                <Route
-                  path="/"
-                  element={
-                    <AdministrationPage
-                      user={user}
-                      organizations={organizations.data?.items ?? []}
-                      onCreate={() => setCreating(true)}
-                    />
-                  }
-                />
+                <Route path="/" element={user.role === "owner" ? <AdminLanding /> :
+                  <OrganizationsPage user={user} organizations={organizations.data?.items ?? []} onCreate={() => setCreating(true)} />
+                } />
+                <Route path="/organizations" element={
+                  <OrganizationsPage user={user} organizations={organizations.data?.items ?? []} onCreate={() => setCreating(true)} />
+                } />
                 <Route
                   path="/personal-settings"
                   element={

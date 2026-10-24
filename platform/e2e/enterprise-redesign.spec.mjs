@@ -48,9 +48,9 @@ async function setup(page, baseURL, { theme = 'green', role = 'owner', count = 1
 
 for (const theme of ['green','cognac','dark']) test(`${theme}: platform, organization and adaptive workspace match desktop structure`, async ({page,baseURL}) => {
   const state=await setup(page,baseURL,{theme});await mkdir(evidence,{recursive:true});
-  await page.goto('/enterprise/');await expect(page.getByRole('heading',{name:'Organizations',exact:true})).toBeVisible();await expect(page.locator('.sidebar')).toHaveCount(0);await expect(page.getByRole('link',{name:'Accounts',exact:true})).toBeVisible();
+  await page.goto('/enterprise/');await expect(page.getByRole('heading',{name:'Admin',exact:true})).toBeVisible();await expect(page.locator('.sidebar')).toHaveCount(0);await expect(page.getByRole('link',{name:'Accounts',exact:true})).toBeVisible();
   await page.screenshot({path:`${evidence}/${theme}-platform.png`});
-  await page.getByRole('link',{name:org.name,exact:true}).click();await expect(page).toHaveURL(new RegExp('/workspaces$'));await expect(page.getByRole('navigation',{name:'Organization navigation'})).toBeVisible();await expect(page.getByRole('link',{name:'Organization Files',exact:true})).toBeVisible();
+  await page.locator('main').getByRole('link',{name:'Organizations',exact:true}).click();await page.getByRole('link',{name:org.name,exact:true}).click();await expect(page).toHaveURL(new RegExp('/workspaces$'));await expect(page.getByRole('navigation',{name:'Organization navigation'})).toBeVisible();await expect(page.getByRole('link',{name:'Organization Files',exact:true})).toBeVisible();
   await page.screenshot({path:`${evidence}/${theme}-organization.png`});
   await page.goto(workspace);await expect(page.getByRole('heading',{name:'Retained parity conversation',exact:true})).toBeVisible();
   for(const name of ['Pi Durable','Codex','Claude Code','Grok Build','OpenCode']) await expect(page.locator('.sidebar').getByRole('link',{name,exact:true})).toBeVisible();

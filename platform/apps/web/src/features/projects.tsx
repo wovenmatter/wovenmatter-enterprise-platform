@@ -54,7 +54,7 @@ const WorkspaceLibraryPage = lazy(() => import("./workspace-library").then(m => 
 const DatabasesPage = lazy(() => import("./workspace-databases").then(m => ({ default: m.DatabasesPage })));
 const WorkspaceSettings = lazy(() => import("./workspace-settings").then(m => ({ default: m.WorkspaceSettings })));
 const ConnectionsPage = lazy(() => import("./connections").then(m => ({ default: m.ConnectionsPage })));
-export function ProjectsPage() {
+export function ProjectsPage({ canSwitchOrganization = false }: { canSwitchOrganization?: boolean }) {
   const { org, isAdmin, orgBase } = useWorkspace();
   const projects = useResource<List<Project>>(
     `/enterprise/api/organizations/${org.id}/projects`,
@@ -68,14 +68,13 @@ export function ProjectsPage() {
     <section>
       <PageHeader
         title="Workspaces"
-        actions={
-          isAdmin ? (
-            <button className="primary" onClick={() => setCreating(true)}>
-              <Icon icon={Plus} size={14} weight="control" />
-              New workspace
-            </button>
-          ) : null
-        }
+        actions={<>
+          {canSwitchOrganization ? <Link to="/organizations">Switch organization</Link> : null}
+          {isAdmin ? <button className="primary" onClick={() => setCreating(true)}>
+            <Icon icon={Plus} size={14} weight="control" />
+            New workspace
+          </button> : null}
+        </>}
       />
       <ErrorNotice message={projects.error} onRetry={projects.reload} />
       {projects.loading && !projects.data ? (

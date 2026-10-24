@@ -186,7 +186,7 @@ test('fresh, missing and invalid preferences display Adaptive; valid explicit ch
     await page.reload();
     let expected = 'adaptive'; try { const value = JSON.parse(saved); if (value?.version===1 && ['single','split','adaptive'].includes(value.style)) expected=value.style; } catch {}
     await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style',expected);
-    await page.getByRole('link',{name:'Personal settings',exact:true}).click();
+    await page.locator(".platform-header").getByRole('link',{name:"Settings",exact:true}).click();
     await expect(page.getByRole('radio',{name:new RegExp(`^${expected[0].toUpperCase()+expected.slice(1)} Sidebar`)})).toBeChecked();
     await page.getByRole('link',{name:'Back to organization',exact:true}).click();
   }

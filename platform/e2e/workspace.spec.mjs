@@ -124,6 +124,8 @@ test("zero-org owner overview and personal settings remain usable", async ({
   page,
 }) => {
   await page.goto("/enterprise");
+  await expect(page.getByRole("heading", { name: "Admin", exact: true })).toBeVisible();
+  await page.locator("main").getByRole("link", { name: "Organizations", exact: true }).click();
   await expect(
     page.getByRole("heading", {
       name: "Organizations",
@@ -141,8 +143,8 @@ test("zero-org owner overview and personal settings remain usable", async ({
     fullPage: true,
   });
   await page
-    .getByRole("link", {
-      name: "Personal settings",
+    .locator(".platform-header").getByRole("link", {
+      name: "Settings",
       exact: true,
     })
     .click();
@@ -239,6 +241,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
   await expect(page.locator(".sidebar")).toHaveCount(0);
   await expect(page.locator(".platform-header")).toBeVisible();
   await page.getByRole("link", { name: "Admin", exact: true }).click();
+  await page.locator("main").getByRole("link", { name: "Organizations", exact: true }).click();
   await page
     .getByRole("button", {
       name: "Create organization",
@@ -274,6 +277,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
       exact: true,
     })
     .click();
+  await page.locator("main").getByRole("link", { name: "Organizations", exact: true }).click();
   await expect(
     page.getByRole("link", {
       name: "Browser-created organization",
@@ -301,6 +305,8 @@ test("project creation, ordinary files, organization sharing and revocation", as
   page.on("pageerror", (e) => errors.push(e.message));
   const f = await ensureFixture(page);
   await page.goto("/enterprise");
+  await expect(page.getByRole("heading", { name: "Admin", exact: true })).toBeVisible();
+  await page.locator("main").getByRole("link", { name: "Organizations", exact: true }).click();
   await expect(
     page.getByRole("heading", {
       name: "Organizations",
@@ -325,6 +331,8 @@ test("project creation, ordinary files, organization sharing and revocation", as
       exact: true,
     })
     .click();
+  await expect(page.getByRole("heading", { name: "Admin", exact: true })).toBeVisible();
+  await page.locator("main").getByRole("link", { name: "Organizations", exact: true }).click();
   await expect(
     page.getByRole("heading", {
       name: "Organizations",
@@ -1005,7 +1013,7 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
     }),
   ).toBeVisible();
   await page
-    .getByRole("link", {
+    .locator(".sidebar").getByRole("link", {
       name: "Settings",
       exact: true,
     })
@@ -1033,6 +1041,7 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
   });
   await page.goto("/enterprise");
   await expect(page.locator(".sidebar")).toHaveCount(0);
+  await page.locator("main").getByRole("link", { name: "Organizations", exact: true }).click();
   await page
     .getByRole("button", {
       name: "Create organization",
@@ -1171,7 +1180,7 @@ test("organization settings hub, nested pages, admin reset action and personal r
       adminPage.getByText("Password reset email queued."),
     ).toBeVisible();
     await adminPage
-      .getByRole("link", {
+      .locator(".sidebar").getByRole("link", {
         name: "Settings",
         exact: true,
       })
@@ -1189,8 +1198,8 @@ test("organization settings hub, nested pages, admin reset action and personal r
       }),
     ).toBeVisible();
     await adminPage
-      .getByRole("link", {
-        name: "Personal settings",
+      .locator(".platform-header").getByRole("link", {
+        name: "Settings",
       })
       .click();
     await expect(
@@ -1328,7 +1337,7 @@ test("owner project deep links choose the correct organization", async ({
   );
   await expect(
     page.getByRole("link", {
-      name: "Your organization",
+      name: "Organization",
       exact: true,
     }),
   ).toBeVisible();
@@ -1713,7 +1722,7 @@ test("activation and reset stay under enterprise; one account switches organizat
       }),
     ).toBeVisible();
     await expect(
-      member.getByRole("link", {
+      member.locator(".sidebar").getByRole("link", {
         name: "Settings",
         exact: true,
       }),
@@ -1753,7 +1762,7 @@ test("activation and reset stay under enterprise; one account switches organizat
       .click();
     await expect(
       member.getByRole("link", {
-        name: "Your organizations",
+        name: "Switch organization",
       }),
     ).toBeVisible();
     await member
@@ -2849,7 +2858,7 @@ test("appearance belongs to the user's Personal settings across workspaces witho
     await expect(page.getByLabel('Default agent', { exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('Theme', { exact: true })).toHaveCount(0);
-    await page.locator('.platform-header').getByRole('link', { name: 'Personal settings', exact: true }).click();
+    await page.locator('.platform-header').getByRole('link', { name: 'Settings', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toHaveCount(1);
     const mutations = [];
     page.on('request', request => { if (['POST', 'PATCH', 'DELETE'].includes(request.method())) mutations.push(new URL(request.url()).pathname); });
@@ -2866,7 +2875,7 @@ test("appearance belongs to the user's Personal settings across workspaces witho
     expect(mutations).toEqual(['/enterprise/api/me']);
     const teammateAfter = (await (await teammate.request.get(`${f.origin}/enterprise/api/me`)).json()).user;
     expect(teammateAfter.theme).toBe(teammateBefore.theme);
-    await page.locator('.platform-header').getByRole('link', { name: 'Personal settings', exact: true }).click();
+    await page.locator('.platform-header').getByRole('link', { name: 'Settings', exact: true }).click();
     await page.getByRole('radio', { name: `${original.theme[0].toUpperCase()}${original.theme.slice(1)} theme`, exact: true }).check();
     await page.getByRole('button', { name: 'Save profile', exact: true }).click();
     await expect(page.getByText('Profile updated.', { exact: true })).toBeVisible();

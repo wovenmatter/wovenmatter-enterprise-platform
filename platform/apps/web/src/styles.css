@@ -3111,16 +3111,16 @@ details[open] > summary .work-chevron {
   padding: 24px;
   background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace);
 }
+.auth-shell .auth-page { flex: 1; min-height: 0; overflow: auto; justify-content: flex-start; }
 .auth-panel {
+  flex: none;
+  margin-block: auto;
   width: min(420px, 100%);
   padding: 32px;
   border: 1px solid var(--line);
   border-radius: var(--card-radius);
   background: var(--surface);
   box-shadow: 0 8px 32px rgb(10 31 22 / 0.06);
-}
-.auth-panel .brand {
-  margin-bottom: 32px;
 }
 .auth-panel h1 {
   margin-bottom: 6px;
@@ -3391,12 +3391,10 @@ details[open] > summary .work-chevron {
 .platform-header { flex: none; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; padding: 2px 32px; gap: 4px 24px; border-bottom: 1px solid var(--line); }
 .platform-brand-row { display: flex; align-items: center; min-width: 0; gap: 4px; }
 .platform-header > .notice { flex-basis: 100%; margin: 0; }
-.platform-header nav { display: flex; align-items: center; flex-wrap: wrap; gap: 24px; }
+.platform-header nav { display: flex; min-height: 36px; align-items: center; flex-wrap: wrap; gap: 24px; }
 .platform-header nav a { overflow-wrap: anywhere; }
 .platform-header nav a { font-size: 12px; }
 .platform-header nav a:hover { color: var(--accent); }
-.organization-topbar-links { display: flex; align-items: center; gap: 2px; }
-.platform-header .organization-switch { width: 24px; height: 24px; }
 .platform-shell .main-content { flex: 1; padding: 40px 32px; }
 .platform-page > .search-field { max-width: 360px; margin-bottom: 16px; }
 .organization-navigation { padding: 0 12px; }
@@ -3518,6 +3516,7 @@ html[data-theme="dark"] .workspace-detail-rail .segmented > .active {
 @media (max-width: 760px) {
   .platform-header { align-items: flex-start; flex-direction: column; padding: 2px 16px; gap: 4px; }
   .platform-header nav { gap: 4px 12px; }
+  .platform-brand-row { min-height: 40px; }
   .platform-shell .main-content { overflow: auto; padding: 24px 16px; }
   .workspace-detail-rail { display: none; }
   .workspace-note-panel { min-width: 0; border: none; }

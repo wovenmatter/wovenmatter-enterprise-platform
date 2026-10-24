@@ -16,7 +16,7 @@ async function setup(page, baseURL, preference) {
   return state;
 }
 async function chooseLayout(page, title, side) {
-  await page.getByRole('link', { name: 'Personal settings', exact: true }).click();
+  await page.locator(".platform-header").getByRole('link', { name: "Settings", exact: true }).click();
   await page.getByRole('radio', { name: new RegExp(`^${title}`) }).check();
   if (side) await page.getByRole('combobox', { name: 'Sidebar side' }).selectOption(side);
   await expect(page.getByText(/These device-local preferences are not synchronized/)).toBeVisible();
@@ -250,7 +250,7 @@ test('unavailable browser storage keeps the session usable and discloses non-per
   const state = await setup(page, baseURL);
   await page.addInitScript(() => { Storage.prototype.setItem = () => { throw new DOMException('Synthetic blocked browser storage', 'SecurityError'); }; });
   await page.goto(workspace);
-  await page.getByRole('link', { name: 'Personal settings', exact: true }).click();
+  await page.locator(".platform-header").getByRole('link', { name: "Settings", exact: true }).click();
   await page.getByRole('radio', { name: /^Single Sidebar/ }).check();
   await expect(page.getByRole('alert')).toContainText('Browser storage is unavailable');
   await page.getByRole('link', { name: 'Back to organization', exact: true }).click();
@@ -267,6 +267,7 @@ test('sidebar preferences follow the account across organizations and workspaces
   await page.route('**/api/projects/second-project', route => route.fulfill({ json: secondProject }));
   await page.goto(root); await chooseLayout(page, 'Single Sidebar', 'right');
   await page.getByRole('link', { name: 'Admin', exact: true }).click();
+  await page.locator('main').getByRole('link', { name: 'Organizations', exact: true }).click();
   await page.locator('a[href="/enterprise/organizations/second-org/workspaces"]').click();
   await page.getByRole('link', { name: secondProject.name, exact: true }).click();
   await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'single');

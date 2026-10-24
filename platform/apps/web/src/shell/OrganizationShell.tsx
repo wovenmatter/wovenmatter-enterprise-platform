@@ -68,7 +68,7 @@ export function OrganizationShell({
       }}
     >
       <Routes>
-        <Route path="workspaces" element={<ProjectsPage />} />
+        <Route path="workspaces" element={<ProjectsPage canSwitchOrganization={organizations.length > 1} />} />
         <Route path="settings/deleted-projects" element={<Navigate to={`${orgBase}/settings/deleted-workspaces`} replace />} />
         <Route path="projects/*" element={<OrganizationLegacyRedirect />} />
         <Route path="workspaces/:projectId/*" element={<ProjectPage />} />

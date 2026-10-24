@@ -111,9 +111,3 @@
 .sidebar-shell[data-compact="true"][data-sidebar-style="split"] .sidebar-content-slot.rail-hidden { transform: translateX(264px); }
 .sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout,
 .sidebar-shell[data-sidebar-style="single"] .sidebar-layout { border-radius: var(--surface-radius); overflow: hidden; }
-
-@media (max-width: 760px) {
-  /* Preserve the shared header's previous menu-row height without putting
-   * workspace rail controls back into that header. */
-  .sidebar-shell:not([data-sidebar-style="organization"]) .platform-brand-row { min-height: 40px; }
-}
