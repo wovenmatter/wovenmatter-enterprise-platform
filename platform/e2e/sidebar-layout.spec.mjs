@@ -266,7 +266,7 @@ test('sidebar preferences follow the account across organizations and workspaces
   await page.route('**/organizations/second-org/projects', route => route.fulfill({ json: { items: [secondProject] } }));
   await page.route('**/api/projects/second-project', route => route.fulfill({ json: secondProject }));
   await page.goto(root); await chooseLayout(page, 'Single Sidebar', 'right');
-  await page.getByRole('link', { name: 'Organizations', exact: true }).click();
+  await page.getByRole('link', { name: 'Admin', exact: true }).click();
   await page.locator('a[href="/enterprise/organizations/second-org/workspaces"]').click();
   await page.getByRole('link', { name: secondProject.name, exact: true }).click();
   await expect(page.locator('.app-shell')).toHaveAttribute('data-sidebar-style', 'single');

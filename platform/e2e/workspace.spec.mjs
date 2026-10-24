@@ -238,7 +238,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
   });
   await expect(page.locator(".sidebar")).toHaveCount(0);
   await expect(page.locator(".platform-header")).toBeVisible();
-  await page.getByRole("link", { name: "Organizations", exact: true }).click();
+  await page.getByRole("link", { name: "Admin", exact: true }).click();
   await page
     .getByRole("button", {
       name: "Create organization",
