@@ -25,6 +25,27 @@ async function setup(page, baseURL, saved) {
 }
 const clean = state => { for (const field of ['errors', 'external', 'unknown', 'writes']) expect(state[field]).toEqual([]); };
 async function rect(page, selector) { await settle(page); return page.locator(selector).boundingBox(); }
+async function conversationSpace(page, info, name) {
+  await expect(page.locator('.conversation-main > .thread-header')).toHaveCount(0);
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
+  const transcript = page.locator('.transcript');
+  await transcript.evaluate(n => { n.scrollTop = 0; });
+  const main = await rect(page, '.conversation-main'), content = await transcript.boundingBox();
+  expect(content.y).toBe(main.y);
+  const first = await page.locator('.transcript > .message').first().boundingBox();
+  expect(first.y - main.y).toBe(page.viewportSize().width <= 760 ? 20 : 24);
+  for (const toggle of await page.locator('[data-sidebar-reveal]').all()) {
+    const b = await toggle.boundingBox();
+    expect(first.x >= b.x + b.width || first.x + first.width <= b.x || first.y >= b.y + b.height).toBe(true);
+    expect(await toggle.evaluate(n => { const b=n.getBoundingClientRect(); return n.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)); })).toBe(true);
+  }
+  const actions = page.getByRole('button', { name: 'Conversation actions', exact: true });
+  await expect(actions).toHaveCount(1);
+  const row = await page.locator('.composer-folder-row').boundingBox(), button = await actions.boundingBox();
+  expect(button.y).toBeGreaterThanOrEqual(row.y); expect(button.y+button.height).toBeLessThanOrEqual(row.y+row.height);
+  expect(button.x+button.width).toBeLessThanOrEqual(row.x+row.width);
+  await writeFile(info.outputPath(`${name}-content-geometry.json`), JSON.stringify({ main, transcript: content, firstMessage: first, actions: button, folderRow: row, idleStatusHeight: await page.locator('.composer-status').evaluate(n => n.getBoundingClientRect().height) }, null, 2));
+}
 async function sample(page, action, testInfo, name) {
   const frames = await page.evaluate(async action => {
     const selectors = ['#main', '.sidebar-layout', '.sidebar', '.sidebar-content-slot', '.sidebar-toggle'];
@@ -79,7 +100,7 @@ for (const style of ['adaptive', 'single', 'split']) for (const side of ['left',
         for (const rail of await page.locator('.rail-visible').all()) expect((await rail.boundingBox()).width).toBe(256);
         if (width >= 904 && style !== 'single') await expect(page.locator('.sidebar')).toBeVisible();
         if (style !== 'split') await expect(page.locator('[data-sidebar-reveal]')).toHaveCount(0);
-        for (const selector of ['.thread-header', '.composer-area', '.send-button']) {
+        for (const selector of ['.transcript', '.composer-area', '.send-button']) {
           const b = await rect(page, selector); expect(b.x).toBeGreaterThanOrEqual(0); expect(b.x+b.width).toBeLessThanOrEqual(width);
         }
       } else {
@@ -92,6 +113,7 @@ for (const style of ['adaptive', 'single', 'split']) for (const side of ['left',
         await page.locator('[data-sidebar-hide]').click(); await settle(page);
         await expect(page.locator(`[data-sidebar-reveal="${style === 'split' ? 'content' : 'single'}"]`)).toBeFocused();
       }
+      await conversationSpace(page, info, `${style}-${side}-${width}`);
       await page.screenshot({ path:info.outputPath(`${style}-${side}-${width}.png`) });
     }
     clean(state);
@@ -100,13 +122,16 @@ for (const style of ['adaptive', 'single', 'split']) for (const side of ['left',
 
 test.describe('primary empty workspace reproducer', () => {
   test.use({deviceScaleFactor:2});
-test('849 DPR2 empty workspace keeps one title-level toggle, complete welcome and composer', async ({ page, baseURL }, info) => {
+test('849 DPR2 empty workspace keeps the same toggle without a conversation title band', async ({ page, baseURL }, info) => {
   const state = await setup(page, baseURL);
   await page.route('**/projects/parity-project/conversations', route => route.fulfill({ json:{items:[]} }));
   await page.setViewportSize({width:849,height:763}); await page.goto(root);
   await expect(page.getByText('What would you like to work on?')).toBeVisible(); await settle(page);
   const toggle = page.locator('.sidebar-toggle'), before = await toggle.boundingBox();
-  const titleY = await page.locator('.thread-header h2').evaluate(n=>n.getBoundingClientRect().y);
+  const welcomeY = (await rect(page, '.workspace-welcome > .empty')).y;
+  expect(welcomeY).toBe((await rect(page, '.conversation-main')).y);
+  await expect(page.locator('.workspace-welcome .thread-header')).toHaveCount(0);
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
   expect((await rect(page,'.sidebar')).width).toBe(256);
   const move = await page.locator('.sidebar .sidebar-move').boundingBox();
   expect(move.x+move.width).toBeLessThanOrEqual(before.x);
@@ -123,7 +148,7 @@ test('849 DPR2 empty workspace keeps one title-level toggle, complete welcome an
   await toggle.click(); await settle(page);
   const after = await toggle.boundingBox(); expect(after.y).toBe(before.y); expect(after.x).toBeLessThan(before.x);
   expect(await toggle.evaluate(n=>n===window.originalToggle)).toBe(true);
-  expect(await page.locator('.thread-header h2').evaluate(n=>n.getBoundingClientRect().y)).toBe(titleY);
+  expect((await rect(page, '.workspace-welcome > .empty')).y).toBe(welcomeY);
   await expect(toggle).toHaveAccessibleName('Show navigation sidebar');
   await page.screenshot({path:info.outputPath('empty-849-collapsed.png')});
   for (const selector of ['.workspace-welcome .empty', '.composer-area', '.send-button']) {
@@ -132,6 +157,10 @@ test('849 DPR2 empty workspace keeps one title-level toggle, complete welcome an
   await toggle.click(); await settle(page);
   expect(await page.locator('.workspace-navigation').evaluate(n=>n.scrollTop)).toBe(scrollTop);
   expect((await railTitle.boundingBox()).y).toBe(railTitleY);
+  await page.setViewportSize({ width: 390, height: 844 }); await settle(page);
+  expect((await rect(page, '.workspace-welcome > .empty')).y).toBe((await rect(page, '.conversation-main')).y);
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
+  await page.screenshot({ path: info.outputPath('empty-390.png') });
   clean(state);
 });
 
@@ -163,8 +192,9 @@ for (const side of ['left','right']) test(`${side}: collapsed control shares eac
     expect(button.y-main.y).toBe(16);
     expect(side==='left'?button.x-main.x:main.x+main.width-button.x-button.width).toBe(12);
     expect(await page.locator('.platform-header').evaluate(n=>n.getBoundingClientRect().height)).toBe(41);
-    const title=await page.locator('#main h1,#main h2').first().boundingBox();
+    const title=await page.locator(route ? '#main h1,#main h2' : '.transcript .message-meta').first().boundingBox();
     expect(title.x+title.width<=button.x || title.x>=button.x+button.width || title.y>=button.y+button.height).toBe(true);
+    if (!route) await conversationSpace(page, info, `collapsed-${side}`);
     await page.screenshot({path:info.outputPath(`collapsed-${side}-${route.slice(1)||'conversation'}.png`)});
     await page.locator('[data-sidebar-reveal="single"]').click(); await settle(page);
     await page.locator('[data-sidebar-hide="navigation"]').click();

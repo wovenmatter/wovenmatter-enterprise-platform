@@ -11,6 +11,7 @@ import {
 } from "./ConversationWork";
 import type { Activity } from "../activity-state";
 import {
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -326,7 +327,7 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
     try { await onStart(harness, model, draft, folderId, attachments, tools, pi); }
     catch (e) { setError(errorMessage(e)); setBusy(false); }
   }
-  return <div className="workspace-welcome"><header className="thread-header"><h2>{title}</h2></header>
+  return <div className="workspace-welcome"><h2 className="sr-only">{title}</h2>
     <Empty title="What would you like to work on?">Start a conversation with your agent.</Empty>
     <div className="composer-area">
       <ErrorNotice message={error || catalogError || folderError || (unavailableFolder ? "This folder is unavailable. Choose All Workspaces or another folder." : unavailableModel ? "The selected model is unavailable. Choose a model from this organization." : unavailableThinking ? "The saved thinking level is unavailable for this model. Choose a supported level or Model default." : "")} />
@@ -343,20 +344,20 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
             <button className="send-button" aria-label="Send message" type="submit" disabled={busy || uploading || !ready || (!draft.trim() && !attachments.length)}><Icon icon={ArrowUp} size={16} weight="send" /></button>
           </div>
         </div>
-      </form><div className="composer-status" role="status">{busy ? "Starting conversation…" : "Shared with your workspace"}</div>
+      </form><div className="composer-status" role="status">{busy ? "Starting conversation…" : null}</div>
     </div>
   </div>;
 }
 
-function ConversationFolder({ folders, folderId, disabled, locked, workingDirectory, onChange }: {
+function ConversationFolder({ folders, folderId, disabled, locked, workingDirectory, onChange, children }: {
   folders?: WorkspaceFolder[]; folderId: string | null; disabled: boolean; locked?: boolean;
-  workingDirectory?: string | null; onChange: (id: string | null) => void;
+  workingDirectory?: string | null; onChange: (id: string | null) => void; children?: ReactNode;
 }) {
   return <div className="composer-folder-row"><Picker label="Conversation folder" heading="Folder" icon={Folder}
     className={`composer-folder${locked ? " composer-folder-locked" : ""}`} width={320} value={folderId ?? ""}
     placeholder="All Workspaces" title={locked ? `The folder is fixed after the first message.${workingDirectory ? ` Working directory: ${workingDirectory}` : ""}` : "Choose a folder in this workspace"}
     options={[{ value: "", label: "All Workspaces" }, ...(folderId && !folders?.some(folder => folder.id === folderId) ? [{ value: folderId, label: "Unavailable folder", disabled: true }] : []), ...(folders?.map(folder => ({ value: folder.id, label: folder.name })) ?? [])]}
-    disabled={disabled || locked} onChange={value => onChange(value || null)} /></div>;
+    disabled={disabled || locked} onChange={value => onChange(value || null)} />{children}</div>;
 }
 
 function ComposerMicrophone() {
@@ -1111,57 +1112,58 @@ export function Thread({
     mergeMessages(older, history),
     messages.data?.items ?? [],
   );
+  const conversationActions = (
+    <Menu label="Conversation actions" className="small">
+      <MenuLink href={`/enterprise/api/conversations/${id}/export`} download>
+        Export messages
+      </MenuLink>
+      <MenuLink
+        href={`/enterprise/api/conversations/${id}/export?full=1`}
+        download
+      >
+        Export full run
+      </MenuLink>
+      <MenuItem onSelect={() => setNativeOpen(true)}>Native history</MenuItem>
+      <MenuSeparator />
+      <MenuItem
+        icon={Square}
+        disabled={!canAct}
+        title="Stop this thread’s current work and background processes. Other threads keep running."
+        onSelect={() => void stop()}
+      >
+        {active.length ? "Stop" : "Stop background work"}
+      </MenuItem>
+      {creator ? (
+        <>
+          <MenuItem
+            icon={Settings}
+            disabled={!canAct || active.length > 0}
+            onSelect={() => setEditing(true)}
+          >
+            Conversation settings
+          </MenuItem>
+          {!asset ? (
+            <MenuItem
+              icon={Trash2}
+              danger
+              disabled={!canAct}
+              onSelect={() => setDeleting(true)}
+            >
+              Move to Trash
+            </MenuItem>
+          ) : null}
+        </>
+      ) : null}
+    </Menu>
+  );
   return (
     <>
-      <header className="thread-header">
-        <h2 title={detail.data?.title}>
-          {detail.data?.title ?? "Conversation"}
-        </h2>
-        <div className="thread-header-actions">
-          <Menu label="Conversation actions" className="small">
-            <MenuLink href={`/enterprise/api/conversations/${id}/export`} download>
-              Export messages
-            </MenuLink>
-            <MenuLink
-              href={`/enterprise/api/conversations/${id}/export?full=1`}
-              download
-            >
-              Export full run
-            </MenuLink>
-            <MenuItem onSelect={() => setNativeOpen(true)}>Native history</MenuItem>
-            <MenuSeparator />
-            <MenuItem
-              icon={Square}
-              disabled={!canAct}
-              title="Stop this thread’s current work and background processes. Other threads keep running."
-              onSelect={() => void stop()}
-            >
-              {active.length ? "Stop" : "Stop background work"}
-            </MenuItem>
-            {creator ? (
-              <>
-                <MenuItem
-                  icon={Settings}
-                  disabled={!canAct || active.length > 0}
-                  onSelect={() => setEditing(true)}
-                >
-                  Conversation settings
-                </MenuItem>
-                {!asset ? (
-                  <MenuItem
-                    icon={Trash2}
-                    danger
-                    disabled={!canAct}
-                    onSelect={() => setDeleting(true)}
-                  >
-                    Move to Trash
-                  </MenuItem>
-                ) : null}
-              </>
-            ) : null}
-          </Menu>
-        </div>
-      </header>
+      {asset ? (
+        <header className="thread-header">
+          <h2 title={detail.data?.title}>{detail.data?.title ?? "Conversation"}</h2>
+          <div className="thread-header-actions">{conversationActions}</div>
+        </header>
+      ) : <h2 className="sr-only">{detail.data?.title ?? "Conversation"}</h2>}
       <NativeHistory
         id={id}
         opened={nativeOpen}
@@ -1400,7 +1402,7 @@ export function Thread({
                   detail.reload(); workspaceChanged();
                 } catch (e) { setError(errorMessage(e)); }
                 finally { setModelSaving(false); }
-              }} />
+              }}>{conversationActions}</ConversationFolder>
           ) : null}
           <ComposerAttachmentChips projectId={project?.id} attachments={attachments} onChange={setAttachments} disabled={sending || uncertain} />
           <textarea
@@ -1518,7 +1520,7 @@ export function Thread({
                   : "Working · messages steer the active run"
                 : kind === "comment"
                   ? "Comments are saved for later agent context"
-                  : streamState}
+                  : streamState === "Connected" ? null : streamState}
         </div>
       </div>
       {editing && detail.data ? (

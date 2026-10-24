@@ -29,9 +29,10 @@ async function setup(page, baseURL, { settings = { defaultHarness: 'pi', agents:
     if (holdModels) await pending;
     return route.fulfill({ json: { items: models } });
   });
-  await page.route('**/projects/parity-project/conversations', route => {
+  await page.route('**/projects/parity-project/conversations', async route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { items: state.chat ? [state.chat] : [] } });
     const input = route.request().postDataJSON(); state.creates.push(input);
+    if (state.createGate) await state.createGate;
     state.chat = { id: 'welcome-default-chat', title: 'Welcome defaults fixture', harness: input.harness, model: input.model, pi: input.pi, folderId: input.folderId, tools: input.tools, createdBy: 'parity-owner', workspaceLocked: false, lastEventId: 0 };
     return route.fulfill({ status: 201, json: state.chat });
   });
@@ -65,7 +66,12 @@ test('welcome resolves workspace defaults and preserves complete Pi configuratio
   await expect(model(page).locator('.lucide-cpu')).toHaveCount(1); await expect(thinking(page).locator('.lucide-brain')).toHaveCount(1);
   await thinking(page).click(); await expect(page.getByRole('option')).toHaveText(['Model default (Low)', 'Off', 'Low', 'High']); await page.keyboard.press('Escape');
   await draft(page).fill('Use the real welcome defaults');
-  await page.screenshot({ path: info.outputPath('resolved-welcome-defaults.png') }); await send(page, state);
+  await page.screenshot({ path: info.outputPath('resolved-welcome-defaults.png') });
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
+  let release; state.createGate = new Promise(resolve => { release = resolve; });
+  await sender(page).click(); await expect(page.locator('.composer-status')).toHaveText('Starting conversation…');
+  await expect(page.locator('.composer-status')).toBeVisible(); release();
+  await expect(page).toHaveURL(/conversation=welcome-default-chat/); expect(state.creates).toHaveLength(1); expect(state.sends).toHaveLength(1);
   expect(state.creates[0].model).toBe('workspace-model'); expect(state.creates[0].pi).toEqual({ thinking: 'high', codeMode: 'only', subagentConcurrency: 4 }); clean(state);
 });
 

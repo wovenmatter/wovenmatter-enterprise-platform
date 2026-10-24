@@ -57,6 +57,24 @@
 /* Reserve horizontal title space only. Hiding a rail never adds a row. */
 .sidebar-shell .project-workspace .thread-header,
 .sidebar-shell .project-workspace .project-pane-header { min-height: 68px; height: 68px; padding-left: calc(16px + var(--sidebar-header-left)); padding-right: calc(8px + var(--sidebar-header-right)); transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1); }
+/* Conversation content starts at the top; hidden rail controls only need
+ * horizontal clearance, never a full-width header row. */
+.sidebar-shell .project-workspace .conversation-main > .transcript {
+  --conversation-inset: 32px;
+  padding-left: max(var(--conversation-inset), var(--sidebar-header-left));
+  padding-right: max(var(--conversation-inset), var(--sidebar-header-right));
+  transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1);
+}
+.sidebar-shell .project-workspace .conversation-main > .notice {
+  margin-left: max(16px, var(--sidebar-header-left));
+  margin-right: max(16px, var(--sidebar-header-right));
+}
+@media (max-width: 1080px) {
+  .sidebar-shell .project-workspace .conversation-main > .transcript { --conversation-inset: 24px; }
+}
+@media (max-width: 760px) {
+  .sidebar-shell .project-workspace .conversation-main > .transcript { --conversation-inset: 16px; }
+}
 .sidebar-shell .project-workspace .desktop-content-page > .page-header,
 .sidebar-shell .project-workspace .subpage > .page-header { padding-left: var(--sidebar-header-left); padding-right: var(--sidebar-header-right); transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1); }
 .sidebar-shell .workspace-navigation { scroll-padding-top: 68px; }

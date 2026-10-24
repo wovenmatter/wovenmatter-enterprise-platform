@@ -35,7 +35,7 @@ test('menus and pickers focus visible choices, navigate, dismiss', async ({ page
   await page.keyboard.press('Tab'); await expect(page.getByRole('listbox')).toHaveCount(0); await expect(model).toBeFocused();
   await model.click(); await menu.click({ button: 'right' });
   await expect(page.getByRole('listbox')).toHaveCount(0); await expect(page.getByRole('menu')).toBeVisible();
-  await page.getByRole('heading', { name: 'Retained parity conversation' }).click();
+  await page.locator('.transcript').click({ position: { x: 80, y: 12 } });
   await expect(page.getByRole('menu')).toHaveCount(0);
   expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
 });
@@ -45,7 +45,15 @@ test('open pickers become inert when canonical work disables controls; empty ses
   await page.goto(workspace);
   const model = picker(page, 'Conversation model');
   await model.click(); await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
+  await page.evaluate(() => window.paritySources.find(source => source.url.includes('/conversations/parity-chat/events')).onerror());
+  await expect(page.locator('.composer-status')).toHaveText('Reconnecting…');
+  await expect(page.locator('.composer-status')).toBeVisible();
+  await page.evaluate(() => window.paritySources.find(source => source.url.includes('/conversations/parity-chat/events')).onopen());
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
   state.disabled = true; await state.refresh('run.started');
+  await expect(page.locator('.composer-status')).toHaveText('Working · messages steer the active run');
+  await expect(page.locator('.composer-status')).toBeVisible();
   await expect(model).toBeDisabled(); await expect(page.getByRole('listbox')).toHaveCount(0);
   await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
   await expect(page.getByRole('listbox')).toHaveCount(0);

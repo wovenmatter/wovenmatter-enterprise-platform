@@ -2623,6 +2623,9 @@ details[open] > summary .work-chevron {
 }
 .composer-folder-row {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 6px;
 }
 .composer-controls {
@@ -2784,6 +2787,9 @@ details[open] > summary .work-chevron {
 .stop-button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.composer-status:empty {
+  display: none;
 }
 .composer-status {
   max-width: 768px;

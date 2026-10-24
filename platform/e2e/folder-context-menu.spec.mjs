@@ -70,7 +70,7 @@ test('right-click opens the unchanged folder actions without a menu button or na
   await expect(page.getByRole('menu')).toHaveCount(1); await expect(menu(page, second)).toBeVisible();
   await expect(menu(page, second).getByRole('menuitem', { name: 'Move up', exact: true })).toBeEnabled();
   await expect(menu(page, second).getByRole('menuitem', { name: 'Move down', exact: true })).toBeDisabled();
-  await page.getByRole('heading', { name: 'Retained parity conversation' }).click();
+  await page.locator('.transcript').click({ position: { x: 80, y: 12 } });
   await expect(page.getByRole('menu')).toHaveCount(0);
   await target.click({ button: 'right' }); await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await expect(menu(page)).toHaveCount(0); await expect(page.getByRole('menu', { name: 'Conversation actions', exact: true })).toBeVisible();

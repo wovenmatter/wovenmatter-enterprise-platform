@@ -2543,7 +2543,7 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
   expect(second.mode).toBe("write");
   await page.setViewportSize({ width: 855, height: 769 });
   await page.goto(`${base}?conversation=${first.id}`);
-  await expect(page.locator(".thread-header h2")).toHaveText(
+  await expect(page.locator(".conversation-main > h2")).toHaveText(
     "Workspace layout review",
   );
   await expect(page.locator(".conversation-rail")).toHaveCount(0);
@@ -2601,7 +2601,7 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
   await expect(page.locator(".session-mode")).toHaveCount(0);
   await expect(draft).toBeEnabled();
   await page.goBack();
-  await expect(page.locator(".thread-header h2")).toHaveText(
+  await expect(page.locator(".conversation-main > h2")).toHaveText(
     "Workspace layout review",
   );
   await expect(draft).toHaveValue("Keep this unsent project draft");
@@ -2645,7 +2645,7 @@ test("responsive desktop rails leave chat usable and preserves URL selection and
     .getByRole("link", { name: "Read-only research", exact: true })
     .click();
   await expect(page.getByRole("dialog", { name: "Navigation" })).toHaveCount(0);
-  await expect(page.locator(".thread-header h2")).toHaveText(
+  await expect(page.locator(".conversation-main > h2")).toHaveText(
     "Read-only research",
   );
   await page.screenshot({ path: `${evidence}/workspace-mobile.png` });

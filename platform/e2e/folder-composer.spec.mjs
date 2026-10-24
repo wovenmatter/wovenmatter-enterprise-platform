@@ -62,6 +62,13 @@ for (const width of [1280, 390]) test(`folder first send and persisted binding a
   await expect(page).toHaveURL(/conversation=composer-chat/); await expect(picker(page)).toHaveAttribute('aria-disabled', 'true');
   expect(state.creates[0].folderId).toBe(folder.id); expect(state.sends).toHaveLength(1);
   await expect(picker(page)).toContainText(folder.name); await expect(picker(page)).toHaveAttribute('title', new RegExp('/workspace/\\.WovenMatter/Records'));
+  const actions = page.getByRole('button', { name: 'Conversation actions', exact: true });
+  await actions.focus(); await page.keyboard.press('Enter');
+  const menu = page.getByRole('menu', { name: 'Conversation actions', exact: true });
+  await expect(menu.getByRole('menuitem')).toHaveText(['Export messages', 'Export full run', 'Native history', 'Stop background work', 'Conversation settings', 'Move to Trash']);
+  const popup = await menu.boundingBox(); expect(popup.x).toBeGreaterThanOrEqual(0); expect(popup.x + popup.width).toBeLessThanOrEqual(width); expect(popup.y + popup.height).toBeLessThanOrEqual(844);
+  await page.screenshot({ path: info.outputPath(`conversation-actions-${width}.png`) });
+  await page.keyboard.press('Escape'); await expect(actions).toBeFocused();
   if (width === 390) await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).click();
   await page.locator('[data-folder-selection]').filter({ hasText: second.name }).click();
   await expect(picker(page)).toContainText(folder.name); expect(state.patches).toEqual([]);
@@ -78,6 +85,10 @@ test('known creation and first-message rejections preserve editable draft and al
   await page.getByRole('button', { name: 'Send message', exact: true }).click(); await expect(page).toHaveURL(/conversation=composer-chat/);
   await expect(input).toHaveValue('Retained rejection draft'); await expect(input).toBeEditable(); await expect(picker(page)).not.toHaveAttribute('aria-disabled', 'true');
   await expect(page.getByRole('alert')).toContainText('Synthetic message rejected');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('[data-sidebar-reveal]')).toBeVisible();
+  const banner = await page.getByRole('alert').boundingBox(), reopen = await page.locator('[data-sidebar-reveal]').boundingBox();
+  expect(banner.x).toBeGreaterThanOrEqual(reopen.x + reopen.width);
   await choose(page, second.name); await expect(picker(page)).toContainText(second.name); await expect(input).toHaveValue('Retained rejection draft');
   await page.getByRole('button', { name: 'Send message', exact: true }).click(); await expect(picker(page)).toHaveAttribute('aria-disabled', 'true');
   expect(state.sends).toHaveLength(2); expect(state.sends[1].requestId).not.toBe(state.sends[0].requestId); expect(state.patches).toEqual([{ folderId: second.id }]); clean(state);
@@ -88,6 +99,8 @@ test('unknown delivery retains identity and locks changes until same-message ret
   await page.goto(root); await page.getByLabel('Message your agent').fill('Unknown delivery draft');
   await page.getByRole('button', { name: 'Send message', exact: true }).click(); await expect(page).toHaveURL(/conversation=composer-chat/);
   await expect(picker(page)).toHaveAttribute('aria-disabled', 'true'); await expect(page.getByLabel('Message your agent')).not.toBeEditable();
+  await expect(page.locator('.composer-status')).toHaveText('Delivery unconfirmed'); await expect(page.locator('.composer-status')).toBeVisible();
+
   await page.reload(); await page.getByRole('button', { name: 'Retry message', exact: true }).click();
   await expect(page.getByLabel('Message your agent')).toHaveValue(''); expect(state.sends).toHaveLength(2); expect(state.sends[1].requestId).toBe(state.sends[0].requestId);
   expect(state.creates).toHaveLength(1); expect(state.creates[0].folderId).toBe(null);
