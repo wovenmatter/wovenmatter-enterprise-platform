@@ -17,15 +17,17 @@ export function PlatformHeader({ user, organizations = [], logout, inert = false
   const returnOrg = location.pathname === "/personal-settings"
     ? new URLSearchParams(location.search).get("returnTo")?.match(/^\/organizations\/([^/?#]+)(?:\/|[?#]|$)/)?.[1]
     : undefined;
-  const organization = organizations.find(org => org.id === (orgRoute ?? returnOrg));
+  const organization = organizations.find(org => org.id === (orgRoute ?? returnOrg))
+    ?? (organizations.length === 1 ? organizations[0] : undefined);
+  const organizationDestination = organization ? `/organizations/${organization.id}/workspaces` : "/organizations";
   const accountReturn = orgRoute
     ? `?returnTo=${encodeURIComponent(`${location.pathname}${location.search}${location.hash}`)}`
     : location.pathname === "/personal-settings" ? location.search : "";
   return <header className="platform-header" inert={inert}>
-    <div className="platform-brand-row"><Brand /></div>
+    <div className="platform-brand-row"><Brand to={organizationDestination} /></div>
     <nav aria-label="Platform navigation">
       {user?.role === "owner" ? <Link to="/">Admin</Link> : null}
-      <Link to={organization ? `/organizations/${organization.id}/workspaces` : "/organizations"}>Organization</Link>
+      <Link to={organizationDestination}>Organization</Link>
       <Link to={`/personal-settings${accountReturn}`}>Settings</Link>
       {user ? <button className="text-button" onClick={() => {
         setError("");

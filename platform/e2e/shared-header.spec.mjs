@@ -27,6 +27,7 @@ async function header(page, { owner = false, anonymous = false } = {}) {
   const top = page.locator('.platform-header');
   await expect(top).toHaveCount(1); await expect(top).toBeVisible();
   await expect(top.getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true })).toBeVisible();
+  await expect(top.getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true })).toHaveAttribute('href', await top.getByRole('link', { name: 'Organization', exact: true }).getAttribute('href'));
   await expect(page.locator('a a')).toHaveCount(0);
   await expect(top.locator('nav > a, nav > button')).toHaveText([
     ...(owner ? ['Admin'] : []), 'Organization', 'Settings', anonymous ? 'Sign in' : 'Sign out',
@@ -65,11 +66,13 @@ for (const scenario of [
   if (!owner) for (const path of ['/enterprise/accounts', '/enterprise/platform-settings']) {
     await page.goto(path); await expect(page).toHaveURL(url => url.pathname.replace(/\/$/, "") === root.replace(/\/$/, "")); await check();
   }
+  await page.locator('.platform-header').getByRole('link', { name:'WovenMatter Enterprise Platform', exact:true }).click();
+  await expect(page).toHaveURL(new URL(scenario.count === 1 ? `${base}/workspaces` : '/enterprise/organizations', baseURL).href);
   await page.goto(`${base}/workspaces`); await check();
   const orgNav = page.getByRole('navigation', { name: 'Organization navigation' });
   await expect(orgNav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(owner || scenario.orgRole === 'admin' ? 1 : 0);
   await page.goto(workspace); await check();
-  await page.locator('.platform-header').getByRole('link', { name: 'Organization', exact: true }).click();
+  await page.locator('.platform-header').getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true }).click();
   await expect(page).toHaveURL(new URL(`${base}/workspaces`, baseURL).href);
   await page.goto(workspace); await check();
   await expect(page.getByRole('navigation', { name: 'Workspace navigation' }).getByRole('link', { name: 'Settings', exact: true })).toBeVisible();
@@ -230,7 +233,7 @@ for (const role of ['owner', 'member']) test(`${role}: multiple organizations sw
   const top = page.locator('.platform-header');
   await top.getByRole('link', { name:'Settings', exact:true }).click();
   await expect(top.getByRole('link', { name:'Organization', exact:true })).toHaveAttribute('href', `${base}/workspaces`);
-  await top.getByRole('link', { name:'Organization', exact:true }).click();
+  await top.getByRole('link', { name:'WovenMatter Enterprise Platform', exact:true }).click();
   const switcher = page.locator('main').getByRole('link', { name:'Switch organization', exact:true });
   await switcher.focus(); await page.keyboard.press('Enter');
   await expect(page).toHaveURL(new URL('/enterprise/organizations', baseURL).href);
@@ -260,7 +263,7 @@ for (const width of [320,390,1320]) test(`anonymous ${width}: fixed header on si
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   }
   const top = page.locator('.platform-header');
-  for (const [label,path] of [['Organization','/organizations'],['Settings','/personal-settings'],['Sign in','/login']]) {
+  for (const [label,path] of [['WovenMatter Enterprise Platform','/organizations'],['Organization','/organizations'],['Settings','/personal-settings'],['Sign in','/login']]) {
     await top.getByRole('link', {name:label,exact:true}).click();
     await expect(page).toHaveURL(new URL(`/enterprise${path}`,baseURL).href);
     await expect(page.getByRole('heading',{name:'Welcome back',exact:true})).toBeVisible();
