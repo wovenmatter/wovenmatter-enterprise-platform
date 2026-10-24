@@ -371,9 +371,12 @@ test('narrow navigation opens from the left and preserves keyboard return across
   for (const width of [390, 760]) {
     await page.setViewportSize({ width, height: 844 });
     const box = await menu.boundingBox();
-    const title = await page.locator('.platform-header .brand').boundingBox();
+    const header = await page.locator('.platform-header').boundingBox();
+    const title = await page.getByRole('heading', { name: 'Workspaces', exact: true }).boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x).toBeLessThan(16);
-    expect(box.x + box.width).toBeLessThan(title.x);
+    expect(box.y).toBeGreaterThanOrEqual(header.y + header.height);
+    expect(box.y + box.height).toBeLessThanOrEqual(title.y);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await expect(sidebar).toBeHidden();
     await menu.focus(); await page.keyboard.press('Enter');
