@@ -1,5 +1,5 @@
-import { Link, NavLink, useLocation, useParams } from "react-router-dom";
-import { ArrowLeft, Cable, Files, FolderOpen, Settings, Users } from "lucide-react";
+import { NavLink, useLocation, useParams } from "react-router-dom";
+import { Cable, Files, FolderOpen, Settings, Users } from "lucide-react";
 import type { Organization, User } from "../api";
 import { Icon } from "../components/controls";
 import { ProjectNavigation } from "./ProjectNavigation";
@@ -23,7 +23,6 @@ export function OrganizationNav({ user, organizations }: { user: User; organizat
   return <>
     {!inWorkspace ? <>
       <div className="org-title org-title-plain"><strong title={org?.name}>{org?.name ?? "Organization"}</strong></div>
-      {user.role === "owner" || organizations.length > 1 ? <Link className="nav-link org-back" to="/"><Icon icon={ArrowLeft} size={13} weight="control" /><span>{user.role === "owner" ? "Administration" : "Your organizations"}</span></Link> : null}
       <nav aria-label="Organization navigation" className="organization-navigation">
         {links.map(({ to, label, icon }) => <NavLink key={to} to={to} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}><Icon icon={icon} size={13} /><span>{label}</span></NavLink>)}
       </nav>

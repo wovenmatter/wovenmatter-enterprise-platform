@@ -11,7 +11,6 @@ import piLogo from "../assets/pi-durable.svg";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
-  ArrowLeft,
   CalendarDays,
   CalendarClock,
   LibraryBig,
@@ -194,26 +193,15 @@ export function ProjectNavigation({
     );
   return (
     <div className="project-navigation">
-      <div className="rail-row">
-        <NavLink
-          className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
-          end
-          to={`${base}/workspaces`}
+      {isAdmin ? (
+        <Link
+          className="nav-link"
+          to={`${base}/workspaces?new=1`}
         >
-          <Icon icon={FolderOpen} size={13} />
-          <span>Back to organization</span>
-        </NavLink>
-        {isAdmin ? (
-          <Link
-            className="rail-action"
-            aria-label="New workspace"
-            title="New workspace"
-            to={`${base}/workspaces?new=1`}
-          >
-            <Icon icon={Plus} size={12} />
-          </Link>
-        ) : null}
-      </div>
+          <Icon icon={Plus} size={13} />
+          <span>New workspace</span>
+        </Link>
+      ) : null}
       <ErrorNotice message={projects.error} onRetry={projects.reload} />
       <div className="rail-children">
         {projects.data?.items.map((p) => (
@@ -387,10 +375,6 @@ function WorkspaceRail({
     <div className="project-navigation workspace-navigation">
       <div className="workspace-rail-title"><SidebarControls page="navigation" placement="leading" /><strong>{project?.name ?? "Workspace"}</strong><SidebarControls page="navigation" /></div>
       <div className="rail-group">
-        <Link className="nav-link" to={`/organizations/${orgId}/workspaces`}>
-          <Icon icon={ArrowLeft} size={13} weight="control" />
-          <span>Back to organization</span>
-        </Link>
         <Link
           className="nav-link"
           to={url({ folder: selected, new: "1" })}

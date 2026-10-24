@@ -270,7 +270,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
   );
   await page
     .getByRole("link", {
-      name: "Administration",
+      name: "Admin",
       exact: true,
     })
     .click();
@@ -315,13 +315,13 @@ test("project creation, ordinary files, organization sharing and revocation", as
     .click();
   await expect(
     page.getByRole("link", {
-      name: "Administration",
+      name: "Admin",
       exact: true,
     }),
   ).toBeVisible();
   await page
     .getByRole("link", {
-      name: "Administration",
+      name: "Admin",
       exact: true,
     })
     .click();
@@ -1081,7 +1081,7 @@ test("organization settings hub, nested pages, admin reset action and personal r
     await expect(sidebar).toContainText("Example Test Organization");
     await expect(
       adminPage.getByRole("link", {
-        name: "Administration",
+        name: "Admin",
         exact: true,
       }),
     ).toHaveCount(0);
@@ -1236,7 +1236,7 @@ test("restricted members do not see owner or administrator navigation", async ({
     ).toBeVisible();
     await expect(
       employee.getByRole("link", {
-        name: "Administration",
+        name: "Admin",
         exact: true,
       }),
     ).toHaveCount(0);
@@ -1328,7 +1328,7 @@ test("owner project deep links choose the correct organization", async ({
   );
   await expect(
     page.getByRole("link", {
-      name: "Back to organization",
+      name: "Your organization",
       exact: true,
     }),
   ).toBeVisible();

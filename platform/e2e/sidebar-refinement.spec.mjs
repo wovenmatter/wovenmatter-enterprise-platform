@@ -114,6 +114,18 @@ for (const style of ['adaptive', 'single', 'split']) for (const side of ['left',
         await expect(page.locator(`[data-sidebar-reveal="${style === 'split' ? 'content' : 'single'}"]`)).toBeFocused();
       }
       await conversationSpace(page, info, `${style}-${side}-${width}`);
+      if (style !== 'split') for (const header of await page.locator('.workspace-rail-title, .workspace-detail-heading').all()) {
+        if (!await header.isVisible()) continue;
+        const title = await header.locator('strong').boundingBox();
+        for (const kind of ['move', 'back']) {
+          const control = header.locator(`.sidebar-${kind}`);
+          if (!await control.isVisible()) continue;
+          const box = await control.boundingBox();
+          const leading = kind === 'move' ? side === 'right' : side === 'left';
+          expect(leading ? box.x + box.width <= title.x + 1 : box.x >= title.x + title.width - 1).toBe(true);
+          if (kind === 'back') await expect(control.locator('svg')).toHaveClass(new RegExp(`lucide-arrow-${side === 'right' ? 'right' : 'left'}`));
+        }
+      }
       await page.screenshot({ path:info.outputPath(`${style}-${side}-${width}.png`) });
     }
     clean(state);
@@ -320,4 +332,48 @@ test('unsaved note, textarea selection/focus and scroll survive moving, collapse
   await expect(editor).toHaveValue('Unsent synthetic note\n'.repeat(60));
   expect(await editor.evaluate(n=>n===window.noteNode&&n.selectionStart===6&&n.selectionEnd===16)).toBe(true);
   await page.screenshot({path:info.outputPath('retained-mobile-note.png')}); clean(state);
+});
+
+// Source-driven geometry proof: custom desktop SVG assets, not Lucide panels.
+test('desktop divider glyphs, inverse reopen, hover and reduced-motion press on both rails', async ({ page, baseURL }, info) => {
+  const state = await setup(page, baseURL, preference('split', 'left'));
+  await page.goto(workspace);
+  await expect(page.getByRole('textbox', { name: 'Message your agent', exact: true })).toBeVisible();
+  await settle(page);
+  const proof = [];
+  for (const [rail, divider] of [['navigation', 8.75], ['content', 15.25]]) {
+    const button = page.locator(`[data-toggle="${rail}"]`);
+    for (const open of [true, false]) {
+      await settle(page); await page.mouse.move(800, 500);
+      const geometry = await button.evaluate(n => {
+        const svg = n.querySelector('svg'), r = svg.querySelector('rect'), line = svg.querySelector('line');
+        const b = n.getBoundingClientRect(), g = svg.getBoundingClientRect(), css = getComputedStyle(n);
+        return { button: [b.width,b.height], glyph: [g.width,g.height], radius: css.borderRadius, color: css.color, idle: css.backgroundColor,
+          viewBox: svg.getAttribute('viewBox'), stroke: svg.getAttribute('stroke-width'),
+          rect: ['x','y','width','height','rx'].map(k => Number(r.getAttribute(k))),
+          line: ['x1','y1','x2','y2'].map(k => Number(line.getAttribute(k))), paths: svg.querySelectorAll('path,polyline').length };
+      });
+      expect(geometry).toMatchObject({ button:[36,36], glyph:[18,18], radius:'8px', viewBox:'0 0 24 24', stroke:'1.5', rect:[3.25,4.25,17.5,15.5,4.5], paths:0 });
+      expect(geometry.line).toEqual([open ? divider : 24-divider,7.25,open ? divider : 24-divider,16.75]);
+      expect(geometry.color).toBe(open ? 'rgb(10, 31, 22)' : 'rgb(92, 111, 100)');
+      expect(geometry.idle).toBe('rgba(0, 0, 0, 0)');
+      await button.hover(); await expect(button).toHaveCSS('background-color','rgba(0, 66, 37, 0.05)');
+      await page.mouse.down(); await expect(button).toHaveCSS('background-color','rgba(0, 66, 37, 0.1)');
+      await expect(button).toHaveCSS('transform','matrix(0.94, 0, 0, 0.94, 0, 0)');
+      // Release away from the button to inspect the pressed state without toggling.
+      await page.mouse.move(800, 500); await page.mouse.up();
+      await button.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');
+      await expect(button).toBeFocused();
+      expect(await button.evaluate(n => getComputedStyle(n).outlineStyle)).not.toBe('none');
+      await page.screenshot({ path: info.outputPath(`${rail}-${open ? 'expanded' : 'collapsed'}-glyph.png`) });
+      proof.push({ rail, open, ...geometry });
+      await page.keyboard.press('Enter'); await expect(button).toBeFocused();
+    }
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const button = page.locator('[data-toggle="navigation"]');
+  await button.hover(); await page.mouse.down(); await expect(button).toHaveCSS('transform','none');
+  await page.mouse.move(800, 500); await page.mouse.up();
+  await writeFile(info.outputPath('desktop-glyph-geometry.json'), JSON.stringify(proof, null, 2));
+  clean(state);
 });

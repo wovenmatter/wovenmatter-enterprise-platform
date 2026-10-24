@@ -3395,10 +3395,11 @@ details[open] > summary .work-chevron {
 .platform-header nav a { overflow-wrap: anywhere; }
 .platform-header nav a { font-size: 12px; }
 .platform-header nav a:hover { color: var(--accent); }
+.organization-topbar-links { display: flex; align-items: center; gap: 2px; }
+.platform-header .organization-switch { width: 24px; height: 24px; }
 .platform-shell .main-content { flex: 1; padding: 40px 32px; }
 .platform-page > .search-field { max-width: 360px; margin-bottom: 16px; }
 .organization-navigation { padding: 0 12px; }
-.org-back { margin: 0 12px 12px; }
 .workspace-rail-title { min-height: 56px; display: flex; align-items: center; padding: 4px 4px 12px; font-size: 13px; }
 .workspace-navigation .rail-group { margin-bottom: 4px; }
 .workspace-navigation .workspace-tools { margin: 0 0 10px; padding: 0; border: 0; }

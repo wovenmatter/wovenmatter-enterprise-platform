@@ -32,12 +32,20 @@ async function header(page, { owner, count = 1 }) {
   await expect(page.getByRole('button', { name: 'Sign out', exact: true })).toHaveCount(1);
   await expect(top.getByRole('button', { name: 'Sign out', exact: true })).toBeVisible();
   await expect(page.locator('.sidebar a[href*="personal-settings"], .sidebar-footer')).toHaveCount(0);
-  for (const name of ['Accounts', 'Platform settings']) await expect(top.getByRole('link', { name, exact: true })).toHaveCount(owner ? 1 : 0);
-  if (!owner) await expect(top.getByRole('link', { name: count === 1 ? org.name : 'Your organizations', exact: true })).toBeVisible();
+  const url = new URL(page.url());
+  const adminContext = owner && ['/enterprise', '/enterprise/accounts', '/enterprise/platform-settings'].includes(url.pathname.replace(/\/$/, ''));
+  for (const name of ['Organizations', 'Accounts', 'Platform settings']) await expect(top.getByRole('link', { name, exact: true })).toHaveCount(adminContext ? 1 : 0);
+  await expect(top.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(owner && !adminContext ? 1 : 0);
+  const inOrg = url.pathname.includes('/organizations/') || url.searchParams.get('returnTo')?.startsWith('/organizations/') || count === 1;
+  await expect(top.getByRole('link', { name: 'Your organization', exact: true })).toHaveCount(!adminContext && inOrg ? 1 : 0);
+  await expect(top.getByRole('link', { name: 'Your organizations', exact: true })).toHaveCount(!owner && !inOrg ? 1 : 0);
+  await expect(top.getByRole('button', { name: 'Switch organization', exact: true })).toHaveCount(!owner && inOrg && count > 1 ? 1 : 0);
+  await expect(page.locator('.sidebar').getByRole('link', { name: /^(Administration|Back to organization|Your organizations)$/ })).toHaveCount(0);
 }
 
 for (const scenario of [
   { name: 'owner', role: 'owner', orgRole: 'admin', count: 1 },
+  { name: 'multi-organization owner', role: 'owner', orgRole: 'admin', count: 2 },
   { name: 'organization admin', role: 'member', orgRole: 'admin', count: 1 },
   { name: 'member', role: 'member', orgRole: 'member', count: 1 },
   { name: 'multi-organization member', role: 'member', orgRole: 'member', count: 2 },
@@ -50,7 +58,7 @@ for (const scenario of [
   await expect(page).toHaveURL(new URL(root, baseURL).href);
   await check();
   if (owner) for (const path of ['/enterprise/accounts', '/enterprise/platform-settings']) {
-    await page.goto(path); await check(); await expect(page.locator('main h1')).toBeVisible();
+    await page.locator('.platform-header').getByRole('link', { name: path.endsWith('/accounts') ? 'Accounts' : 'Platform settings', exact: true }).click(); await check(); await expect(page.locator('main h1')).toBeVisible();
   }
   if (!owner) for (const path of ['/enterprise/accounts', '/enterprise/platform-settings']) {
     await page.goto(path); await expect(page).toHaveURL(url => url.pathname.replace(/\/$/, "") === root.replace(/\/$/, "")); await check();
@@ -58,6 +66,9 @@ for (const scenario of [
   await page.goto(`${base}/workspaces`); await check();
   const orgNav = page.getByRole('navigation', { name: 'Organization navigation' });
   await expect(orgNav.getByRole('link', { name: 'Settings', exact: true })).toHaveCount(owner || scenario.orgRole === 'admin' ? 1 : 0);
+  await page.goto(workspace); await check();
+  await page.locator('.platform-header').getByRole('link', { name: 'Your organization', exact: true }).click();
+  await expect(page).toHaveURL(new URL(`${base}/workspaces`, baseURL).href);
   await page.goto(workspace); await check();
   await expect(page.getByRole('navigation', { name: 'Workspace navigation' }).getByRole('link', { name: 'Settings', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'Message your agent', exact: true })).toBeVisible();
@@ -75,11 +86,11 @@ for (const scenario of [
 });
 
 for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and composer fit remaining viewport`, async ({ page, baseURL }, testInfo) => {
-  const state = await setup(page, baseURL, { role });
+  const state = await setup(page, baseURL, { role, count: 2 });
   await page.goto(workspace);
-  for (const width of [390, 760, 761, 1320]) {
+  for (const width of [320, 390, 760, 761, 1320]) {
     await page.setViewportSize({ width, height: 844 });
-    await header(page, { owner: role === 'owner' });
+    await header(page, { owner: role === 'owner', count: 2 });
     await expect(page.getByRole('textbox', { name: 'Message your agent', exact: true })).toBeVisible();
     const geometry = await page.evaluate(() => {
       const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; };
@@ -95,6 +106,7 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
       if (await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).isVisible()) await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).click();
       const drawer = page.getByRole('dialog', { name: 'Navigation', exact: true });
       await expect(drawer).toBeVisible();
+      await page.screenshot({ path: testInfo.outputPath(`${role}-drawer-top-${width}.png`), animations: 'disabled' });
       await expect(page.locator('.platform-header')).toHaveAttribute('inert', '');
       await expect(page.locator('main')).toHaveAttribute('inert', '');
       await expect(drawer.locator('a[href*="personal-settings"]')).toHaveCount(0);
@@ -110,7 +122,7 @@ for (const role of ['owner', 'member']) test(`${role}: mobile header, drawer and
       await expect(page.getByRole('button', { name: 'Show navigation sidebar', exact: true })).toBeFocused();
       await expect(page.locator('.platform-header')).not.toHaveAttribute('inert');
     }
-    await page.screenshot({ path: testInfo.outputPath(`${role}-workspace-${width}.png`) });
+    await page.screenshot({ path: testInfo.outputPath(`${role}-workspace-${width}.png`), animations: 'disabled' });
   }
   expect(state.errors).toEqual([]); expect(state.external).toEqual([]);
 });
@@ -189,4 +201,41 @@ test('right-panel Chats and Notes search retain All Workspaces and folder scope'
   await content.getByRole('searchbox', { name: 'Search notes', exact: true }).fill('');
   await expect(content.getByRole('link', { name: 'Folder research', exact: true })).toBeVisible();
   expect(state.errors).toEqual([]); expect(state.external).toEqual([]);
+});
+
+for (const role of ['owner', 'member']) test(`${role}: no organization and invalid settings return keep scoped navigation`, async ({ page, baseURL }) => {
+  const state = await setup(page, baseURL, { role, count: 0 });
+  for (const returnTo of ['', '/organizations/revoked/workspaces', '//example.invalid/organizations/parity-org/workspaces', '/accounts']) {
+    await page.goto(`/enterprise/personal-settings?returnTo=${encodeURIComponent(returnTo)}`);
+    const top = page.locator('.platform-header');
+    await expect(page.getByRole('heading', { name: 'Personal settings', exact: true })).toBeVisible();
+    await expect(top.getByRole('link', { name: 'Your organization', exact: true })).toHaveCount(0);
+    await expect(top.getByRole('link', { name: 'Your organizations', exact: true })).toHaveCount(role === 'member' ? 1 : 0);
+    await expect(top.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(role === 'owner' ? 1 : 0);
+    await expect(top.getByRole('link', { name: /^(Accounts|Organizations|Platform settings)$/ })).toHaveCount(0);
+  }
+  await page.locator('.platform-header').getByRole('link', { name: role === 'owner' ? 'Admin' : 'Your organizations', exact: true }).click();
+  await expect(page.getByRole('heading', { name: role === 'owner' ? 'Organizations' : 'Your organizations', exact: true })).toBeVisible();
+  expect(state.errors).toEqual([]); expect(state.external).toEqual([]); expect(state.writes).toEqual([]);
+});
+
+test('multi-organization member switches with keyboard from workspace and personal settings', async ({ page, baseURL }, info) => {
+  const state = await setup(page, baseURL, { role: 'member', count: 2 });
+  await page.goto(workspace);
+  const top = page.locator('.platform-header');
+  const switcher = top.getByRole('button', { name: 'Switch organization', exact: true });
+  await switcher.focus(); await page.keyboard.press('Enter');
+  const destination = page.getByRole('menuitem', { name: 'Organization 2', exact: true });
+  await expect(destination).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(switcher).toBeFocused();
+  await page.getByRole('link', { name: 'Personal settings', exact: true }).click();
+  await expect(top.getByRole('link', { name: 'Your organization', exact: true })).toHaveAttribute('href', `${base}/workspaces`);
+  await switcher.click(); await page.getByRole('menuitem', { name: 'Organization 2', exact: true }).click();
+  await expect(page).toHaveURL(new URL('/enterprise/organizations/other-1/workspaces', baseURL).href);
+  await expect(top.getByRole('link', { name: 'Your organization', exact: true })).toHaveAttribute('href', '/enterprise/organizations/other-1/workspaces');
+  await expect(page.locator('.org-title')).toContainText('Organization 2');
+  await switcher.click(); await page.getByRole('menuitem', { name: org.name, exact: true }).click();
+  await expect(page).toHaveURL(new URL(`${base}/workspaces`, baseURL).href);
+  await page.screenshot({ path: info.outputPath('member-organization-switch.png') });
+  expect(state.errors).toEqual([]); expect(state.external).toEqual([]); expect(state.writes).toEqual([]);
 });

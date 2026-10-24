@@ -8,7 +8,7 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
-import { Menu, PanelLeftClose, PanelRightClose, PanelLeftOpen, PanelRightOpen, X } from "lucide-react";
+import { ChevronDown, Menu as MenuIcon, X } from "lucide-react";
 import {
   send,
   useResource,
@@ -18,7 +18,7 @@ import {
   type User,
 } from "../api";
 import { Brand } from "../components/Brand";
-import { Icon } from "../components/controls";
+import { Icon, Menu, MenuItem } from "../components/controls";
 import {
   AsyncForm,
   ErrorNotice,
@@ -118,6 +118,12 @@ function ShellContent({
   const memberOrganization = organizations.data?.items.length === 1
     ? organizations.data.items[0]
     : undefined;
+  const returnOrg = location.pathname === "/personal-settings"
+    ? new URLSearchParams(location.search).get("returnTo")?.match(/^\/organizations\/([^/?#]+)(?:\/|[?#]|$)/)?.[1]
+    : undefined;
+  const activeOrganization = organizations.data?.items.find(org => org.id === (orgRoute ?? returnOrg))
+    ?? (!orgRoute && !returnOrg ? memberOrganization : undefined);
+  const adminContext = user.role === "owner" && ["/", "/accounts", "/platform-settings"].includes(location.pathname.replace(/\/$/, "") || "/");
   const accountReturn = orgRoute
     ? `?returnTo=${encodeURIComponent(`${location.pathname}${location.search}${location.hash}`)}`
     : location.pathname === "/personal-settings" ? location.search : "";
@@ -164,7 +170,7 @@ function ShellContent({
       inert={mobileOpen && !open}
       aria-label={`${open ? "Hide" : "Show"} ${name} sidebar`} title={`${open ? "Hide" : "Show"} sidebar`}
       onClick={() => toggle(target, open)}>
-      <Icon icon={edge === "left" ? open ? PanelLeftClose : PanelLeftOpen : open ? PanelRightClose : PanelRightOpen} size={18} />
+      <SidebarGlyph side={open ? edge : edge === "left" ? "right" : "left"} />
     </button>;
   }
   return (
@@ -180,18 +186,25 @@ function ShellContent({
             aria-label="Open navigation"
             onClick={() => openDrawer(singleContent ? "content" : "navigation")}
           >
-            <Icon icon={Menu} size={18} weight="control" />
+            <Icon icon={MenuIcon} size={18} weight="control" />
           </button> : null}
           <Brand />
         </div>
         <nav aria-label="Platform navigation">
-          {user.role === "owner" ? <>
+          {adminContext ? <>
             <Link to="/">Organizations</Link>
             <Link to="/accounts">Accounts</Link>
             <Link to="/platform-settings">Platform settings</Link>
-          </> : memberOrganization ? (
-            <Link to={`/organizations/${memberOrganization.id}/workspaces`}>{memberOrganization.name}</Link>
-          ) : <Link to="/">Your organizations</Link>}
+          </> : <>
+            {activeOrganization ? <div className="organization-topbar-links">
+              <Link to={`/organizations/${activeOrganization.id}/workspaces`}>Your organization</Link>
+              {user.role !== "owner" && (organizations.data?.items.length ?? 0) > 1 ?
+                <Menu label="Switch organization" icon={ChevronDown} iconSize={12} className="organization-switch" align="start">
+                  {organizations.data?.items.filter(org => org.id !== activeOrganization.id).map(org => <MenuItem key={org.id} onSelect={() => navigate(`/organizations/${org.id}/workspaces`)}>{org.name}</MenuItem>)}
+                </Menu> : null}
+            </div> : user.role !== "owner" ? <Link to="/">Your organizations</Link> : null}
+            {user.role === "owner" ? <Link to="/">Admin</Link> : null}
+          </>}
           <Link to={`/personal-settings${accountReturn}`}>Personal settings</Link>
           <button className="text-button" onClick={() => {
             setError("");
@@ -337,6 +350,16 @@ function ShellContent({
       ) : null}
     </div>
   );
+}
+
+// Exact WovenMatter dashboard-{left,right}-collapse-s15 assets (PR #156).
+// Reopening uses the opposite divider, as DashboardRevealRailButton does.
+function SidebarGlyph({ side }: { side: "left" | "right" }) {
+  const divider = side === "left" ? 8.75 : 15.25;
+  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <rect x="3.25" y="4.25" width="17.5" height="15.5" rx="4.5" />
+    <line x1={divider} y1="7.25" x2={divider} y2="16.75" />
+  </svg>;
 }
 
 function LegacyProjectRedirect() {

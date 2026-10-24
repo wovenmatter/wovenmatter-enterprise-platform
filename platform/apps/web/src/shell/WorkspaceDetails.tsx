@@ -43,11 +43,12 @@ export function WorkspaceDetails({ project, chats, folderName, query, base, erro
   const pinned = (item: Conversation | ContentRecord) => "data" in item ? Boolean(item.data.pinned) : item.pinned;
   // Keep creation actions reachable in the viewport-limited paged drawer.
   const showQuickActions = sidebar.preferences.style !== "adaptive" || sidebar.pagedAdaptive;
+  const backToNavigation = () => {
+    sidebar.showNavigation(); navigate(`${base}?${query}`);
+    focusSidebarControl(".sidebar [data-folder-selection].active, .sidebar [data-folder-selection]");
+  };
   return <aside className="workspace-detail-rail" aria-label="Workspace content">
-    <header className="workspace-detail-heading"><SidebarControls page="content" placement="leading" onBack={() => {
-      sidebar.showNavigation(); navigate(`${base}?${query}`);
-      focusSidebarControl(".sidebar [data-folder-selection].active, .sidebar [data-folder-selection]");
-    }} /><div><strong title={folderName ?? "All Workspaces"}>{folderName ?? "All Workspaces"}</strong><small>{scopedChats.length} {scopedChats.length === 1 ? "chat" : "chats"} · {scopedNotes.length} {scopedNotes.length === 1 ? "note" : "notes"}</small></div><SidebarControls page="content" /></header>
+    <header className="workspace-detail-heading"><SidebarControls page="content" placement="leading" onBack={backToNavigation} /><div><strong title={folderName ?? "All Workspaces"}>{folderName ?? "All Workspaces"}</strong><small>{scopedChats.length} {scopedChats.length === 1 ? "chat" : "chats"} · {scopedNotes.length} {scopedNotes.length === 1 ? "note" : "notes"}</small></div><SidebarControls page="content" onBack={backToNavigation} /></header>
     {showQuickActions ? <div className="workspace-detail-actions">
       <Link className="nav-link" to={selectionQuery("new", "1")} onClick={event => { if (!event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) { sidebar.rememberChatTrigger(event.currentTarget); sidebar.setDrawer(null); } }}><Icon icon={SquarePen} size={13} />New chat</Link>
       <button className="nav-link" onClick={() => void createNote()}><Icon icon={FileText} size={13} />New note</button>
