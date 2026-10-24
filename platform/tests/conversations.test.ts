@@ -187,7 +187,7 @@ test("API detach and restart recover service-owned output once, and acknowledge 
   }
 });
 
-test("a downgrade stops idle background ownership, preserves siblings, and does not depend on gateway deletion succeeding", async (t) => {
+test("membership removal stops idle background ownership, preserves siblings, and does not depend on gateway deletion succeeding", async (t) => {
   const durable = await durableRuntime(t),
     f = await fixture(t, 100000, {}, durable.runtime);
   const first = await f.create(f.users[0], "write"),
@@ -209,7 +209,7 @@ test("a downgrade stops idle background ownership, preserves siblings, and does 
         (await f.service.runs(user, thread.id)).items[0].status === "completed",
     );
   }
-  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [
     f.users[0].id,
   ]);
   f.deps.inference.revokeGateway = async () => {
@@ -467,17 +467,13 @@ async function fixture(
     deps,
   };
 }
-test("private conversations require current project and thread membership; sharing does not grant project rights", async (t) => {
+test("shared conversations require current workspace membership; chat records cannot grant workspace rights", async (t) => {
   const f = await fixture(t),
     c = await f.create();
   assert.equal(c.harness, "pi");
-  assert.deepEqual((await f.service.list(f.users[1], f.project)).items, []);
-  await assert.rejects(f.service.get(f.users[1], c.id), {
-    statusCode: 404,
-  });
-  await assert.rejects(f.service.get(f.users[3], c.id), {
-    statusCode: 404,
-  });
+  assert.equal((await f.service.list(f.users[1], f.project)).items.length, 1);
+  assert.equal((await f.service.get(f.users[1], c.id)).id, c.id);
+  assert.equal((await f.service.get(f.users[3], c.id)).id, c.id);
   await assert.rejects(f.service.addMember(f.users[0], c.id, f.users[2].id), {
     statusCode: 404,
   });
@@ -645,9 +641,7 @@ test("full threads retain their mode and loss of project access cancels active w
   await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
     f.users[1].id,
   ]);
-  await assert.rejects(f.create(f.users[1], "write"), {
-    code: "read_only",
-  });
+  assert.equal((await f.create(f.users[1], "write")).mode, "write");
   const response = await f.service.admit(f.users[0], c.id, {
     content: "Change files",
     requestId: randomUUID(),
@@ -1115,18 +1109,18 @@ test("a failed first cancellation retries until runtime acknowledgment even afte
     if (++attempts === 1) throw new Error("Temporary stop failure");
     await originalCancel(id);
   };
-  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [
     f.users[0].id,
   ]);
-  await f.service.cancel(f.users[0], c.id, run.run!.id);
+  await f.service.cancel(f.users[1], c.id, run.run!.id);
   assert.equal(
-    (await f.service.runs(f.users[0], c.id)).items[0].status,
+    (await f.service.runs(f.users[1], c.id)).items[0].status,
     "cancelling",
   );
   await f.service.recheckAccess();
   await until(
     async () =>
-      (await f.service.runs(f.users[0], c.id)).items[0].status === "cancelled",
+      (await f.service.runs(f.users[1], c.id)).items[0].status === "cancelled",
   );
   assert.ok(attempts >= 2);
 });
@@ -1156,7 +1150,7 @@ test("gateway revocation failure never prevents the runtime stop attempt", async
     false,
   );
 });
-test("an admitted request receipt remains recoverable after a write permission downgrade", async (t) => {
+test("an admitted request receipt remains recoverable when a legacy read grant is normalized to full workspace access", async (t) => {
   const f = await fixture(t),
     c = await f.create(f.users[0], "write"),
     input = {
@@ -1226,7 +1220,7 @@ test("closing the HTTP server terminates persistent SSE without waiting for a br
   while (!(await reader.read()).done) {}
   await reader.cancel();
 });
-test("new conversations are Pi Durable, can start without a model, and keep harness fixed through settings edits", async (t) => {
+test("new conversations default to Pi, can select a harness before execution, and preserve native history afterward", async (t) => {
   const f = await fixture(t);
   f.deps.inference.models = async () => [];
   const c = await f.service.create(f.users[0], f.project, {
@@ -1258,17 +1252,16 @@ test("new conversations are Pi Durable, can start without a model, and keep harn
     ).model,
     "gpt-test",
   );
+  assert.equal((await f.service.create(f.users[0], f.project, {
+    title: "Codex workspace chat", model: "gpt-test", harness: "codex",
+  })).harness, "codex");
+  assert.equal((await f.service.update(f.users[0], c.id, { harness: "claude_code" })).harness, "claude_code");
+  await f.service.update(f.users[0], c.id, { harness: "pi" });
+  const first = await f.service.admit(f.users[0], c.id, { content: "Start native history", requestId: randomUUID() });
+  await until(() => f.runtime.pending.has(first.run!.id));
+  await f.runtime.complete(first.run!.id);
   await assert.rejects(
-    f.service.create(f.users[0], f.project, {
-      title: "Unsupported harness",
-      mode: "read",
-      model: "gpt-test",
-      harness: "codex",
-    }),
-    { code: "fixed_harness" },
-  );
-  await assert.rejects(
-    f.service.update(f.users[0], c.id, { harness: "claude" }),
+    f.service.update(f.users[0], c.id, { harness: "claude_code" }),
     { code: "fixed_harness" },
   );
   assert.equal(
@@ -1383,58 +1376,25 @@ test("SSE reconnect Last-Event-ID supersedes the initial query cursor", async (t
     await app.close();
   }
 });
-test("read-only project access is a ceiling for shared full-access conversations", async (t) => {
-  const f = await fixture(t),
-    c = await f.create(f.users[0], "write"),
-    privateThread = await f.create();
-  await f.service.addMember(f.users[0], c.id, f.users[1].id);
-  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
-    f.users[1].id,
-  ]);
-  await assert.rejects(f.create(f.users[1], "write"), { code: "read_only" });
-  await assert.rejects(f.service.addMember(f.users[0], c.id, f.users[1].id), {
-    code: "read_only",
-  });
-  assert.equal((await f.service.get(f.users[1], c.id)).effectiveMode, "read");
-  assert.equal(
-    (await f.service.list(f.users[1], f.project)).items[0].effectiveMode,
-    "read",
-  );
-  await assert.rejects(f.service.get(f.users[1], privateThread.id), {
-    code: "conversation_not_found",
-  });
-  for (const kind of ["message", "comment"]) {
-    await assert.rejects(
-      f.service.admit(f.users[1], c.id, {
-        content: "Perform this edit",
-        kind,
-        requestId: randomUUID(),
-      }),
-      { code: "read_only" },
-    );
-  }
-  await assert.rejects(f.service.cancel(f.users[1], c.id), {
-    code: "read_only",
-  });
-  await assert.rejects(f.service.addMember(f.users[1], c.id, f.users[0].id), {
-    code: "read_only",
-  });
-  const run = await f.service.admit(f.users[0], c.id, {
-    content: "Full access remains usable",
-    requestId: randomUUID(),
-  });
+test("legacy read grants normalize to full shared workspace conversation authority", async (t) => {
+  const f = await fixture(t), c = await f.create(f.users[0], "write"), sibling = await f.create();
+  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [f.users[1].id]);
+  assert.equal((await f.create(f.users[1], "write")).mode, "write");
+  assert.equal((await f.service.get(f.users[1], c.id)).effectiveMode, "write");
+  assert.equal((await f.service.get(f.users[1], sibling.id)).id, sibling.id);
+  await f.service.update(f.users[1], c.id, { title: "Collaborative edit" });
+  const comment = await f.service.admit(f.users[1], c.id, { kind: "comment", content: "Collaborative context", requestId: randomUUID() });
+  assert.equal(comment.message.delivery, "comment");
+  const run = await f.service.admit(f.users[0], c.id, { content: "Start", requestId: randomUUID() });
   await until(() => f.runtime.pending.has(run.run!.id));
-  await assert.rejects(
-    f.service.admit(f.users[1], c.id, {
-      content: "Steer full authority",
-      requestId: randomUUID(),
-    }),
-    { code: "read_only" },
-  );
+  await f.service.admit(f.users[1], c.id, { content: "Steer together", requestId: randomUUID() });
+  await until(() => f.runtime.steers.length === 1);
   assert.equal(f.runtime.requests[0].access, "write");
-  await f.runtime.complete(run.run!.id);
+  await f.service.cancel(f.users[1], c.id);
+  assert.ok(f.runtime.cancelled.includes(run.run!.id));
 });
-test("a queued full-access run fails before dispatch when its author is downgraded", async (t) => {
+
+test("a queued full-access run fails before dispatch when its author loses workspace membership", async (t) => {
   const f = await fixture(t, 100000, {
       maxConcurrentRuns: 1,
       maxConcurrentRunsPerOrganization: 1,
@@ -1451,7 +1411,7 @@ test("a queued full-access run fails before dispatch when its author is downgrad
     content: "Queued edit",
     requestId: randomUUID(),
   });
-  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [
     f.users[1].id,
   ]);
   await f.runtime.complete(first.run!.id);
@@ -1460,17 +1420,17 @@ test("a queued full-access run fails before dispatch when its author is downgrad
       (await f.service.runs(f.users[0], c.id)).items[0].status === "failed",
   );
   const failed = (await f.service.runs(f.users[0], c.id)).items[0];
-  assert.equal(failed.error?.code, "read_only");
+  assert.equal(failed.error?.code, "conversation_not_found");
   assert.equal(f.runtime.requests.length, 1);
   assert.equal(f.runtime.pending.has(queued.run!.id), false);
   assert.equal(
-    (await f.service.messages(f.users[1], c.id)).items.find(
+    (await f.service.messages(f.users[0], c.id)).items.find(
       (m) => m.id === queued.message.id,
     )?.delivery,
     "rejected",
   );
 });
-test("new conversations default to the user's project access and may explicitly reduce it", async (t) => {
+test("all new workspace conversations use full access, including legacy read requests", async (t) => {
   const f = await fixture(t);
   const full = await f.service.create(f.users[0], f.project, {
     title: "Default full",
@@ -1484,11 +1444,11 @@ test("new conversations default to the user's project access and may explicitly 
     title: "Default read",
     model: "gpt-test",
   });
-  assert.equal(read.mode, "read");
-  assert.equal((await f.create(f.users[0], "read")).mode, "read");
-  await assert.rejects(f.create(f.users[1], "write"), { code: "read_only" });
+  assert.equal(read.mode, "write");
+  assert.equal((await f.create(f.users[0], "read")).mode, "write");
+  assert.equal((await f.create(f.users[1], "write")).mode, "write");
 });
-test("downgrading an active full-access initiator revokes its gateway and runtime", async (t) => {
+test("removing an active initiator revokes its gateway and runtime", async (t) => {
   const f = await fixture(t),
     c = await f.create(f.users[0], "write");
   const admitted = await f.service.admit(f.users[0], c.id, {
@@ -1503,7 +1463,7 @@ test("downgrading an active full-access initiator revokes its gateway and runtim
     runId: admitted.run!.id,
   };
   assert.equal(await f.service.canUseRun(grant), true);
-  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [
     f.users[0].id,
   ]);
   assert.equal(await f.service.canUseRun(grant), false);
@@ -2083,7 +2043,7 @@ test("native activity details and canonical export follow current conversation a
     "/archive/export",
     "/archive/" + archive.items[0].ordinal,
   ])
-    assert.equal((await app.inject({ url: base + path })).statusCode, 404);
+    assert.equal((await app.inject({ url: base + path })).statusCode, 200);
   await f.service.addMember(f.users[0], c.id, current.id);
   assert.equal(
     (await app.inject({ url: base + "/activities" })).statusCode,
@@ -2096,7 +2056,7 @@ test("native activity details and canonical export follow current conversation a
   );
 });
 
-test("approved SDK activation is owner scoped, idle only, fenced and reaches the next runtime request", async (t) => {
+test("approved SDK activation requires current workspace membership, idle only, fenced and reaches the next runtime request", async (t) => {
   const stopped: string[] = [];
   const catalog = {
     bundledGeneration: "approved-one",
@@ -2129,7 +2089,7 @@ test("approved SDK activation is owner scoped, idle only, fenced and reaches the
   });
   assert.equal(c.pi.sdkGeneration, "approved-one");
   await f.service.addMember(f.users[0], c.id, f.users[1].id);
-  await assert.rejects(f.service.activateSDK(f.users[1], c.id, "approved-two"));
+  await f.service.activateSDK(f.users[1], c.id, "approved-one");
   await assert.rejects(
     f.service.activateSDK(f.users[0], c.id, "../untrusted"),
     { code: "invalid_sdk_generation" },
@@ -2184,22 +2144,20 @@ test("approved SDK activation is owner scoped, idle only, fenced and reaches the
   );
 });
 
-test("permission-only launch resolves user defaults and thinking controls respect the selected model", async (t) => {
+test("full workspace launch resolves user defaults and thinking controls respect the selected model", async (t) => {
   const f = await fixture(t);
   f.users[0].defaultModel = "gpt-test-next";
   const c = await f.service.create(f.users[0], f.project, { mode: "read" });
   assert.equal(c.model, "gpt-test-next");
-  assert.equal(c.mode, "read");
+  assert.equal(c.mode, "write");
   assert.equal(c.harness, "pi");
-  assert.equal((await f.service.members(f.users[0], c.id)).items.length, 1);
+  assert.equal((await f.service.members(f.users[0], c.id)).items.length, 3);
   f.users[0].defaultModel = "unavailable";
   assert.equal(
     (await f.service.create(f.users[0], f.project, { mode: "read" })).model,
     "gpt-test",
   );
-  await assert.rejects(f.service.update(f.users[0], c.id, { mode: "write" }), {
-    code: "fixed_mode",
-  });
+  assert.equal((await f.service.update(f.users[0], c.id, { mode: "read" })).mode, "write");
   await f.service.update(f.users[0], c.id, { model: "gpt-test" });
   await f.service.update(f.users[0], c.id, {
     pi: { thinking: "high", codeMode: "off" },
@@ -2513,8 +2471,8 @@ test("compact replies expose complete authorized content outside the activity wi
     400,
   );
   current = f.users[1];
-  assert.equal((await app.inject({ url: endpoint })).statusCode, 404);
-  assert.equal((await app.inject({ url: activityBase })).statusCode, 404);
+  assert.equal((await app.inject({ url: endpoint })).statusCode, 200);
+  assert.equal((await app.inject({ url: activityBase })).statusCode, 200);
   await f.service.addMember(f.users[0], c.id, current.id);
   assert.equal(
     (await app.inject({ url: endpoint })).json().contentTruncated,
@@ -2564,20 +2522,20 @@ test("SSE drains full persisted pages without one second of delay per page", asy
   }
 });
 
-test("a downgraded creator cannot delete or activate an SDK for its full-access conversation", async (t) => {
+test("a revoked creator cannot delete or activate an SDK for its full-access conversation", async (t) => {
   const f = await fixture(t),
     c = await f.create(f.users[0], "write");
-  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [
     f.users[0].id,
   ]);
   await assert.rejects(f.service.remove(f.users[0], c.id), {
-    code: "read_only",
+    code: "conversation_not_found",
   });
   await assert.rejects(
     f.service.activateSDK(f.users[0], c.id, "approved-next"),
-    { code: "read_only" },
+    { code: "conversation_not_found" },
   );
-  assert.equal((await f.service.get(f.users[0], c.id)).effectiveMode, "read");
+  assert.equal((await f.service.get(f.users[1], c.id)).effectiveMode, "write");
   assert.equal(
     (await f.db.get<any>("SELECT deleted_at FROM conversations WHERE id=?", [
       c.id,
@@ -2586,7 +2544,7 @@ test("a downgraded creator cannot delete or activate an SDK for its full-access 
   );
 });
 
-test("pending steering is rejected if its author loses full project access before delivery", async (t) => {
+test("pending steering is rejected if its author loses workspace membership before delivery", async (t) => {
   const f = await fixture(t),
     c = await f.create(f.users[0], "write");
   await f.service.addMember(f.users[0], c.id, f.users[1].id);
@@ -2602,7 +2560,7 @@ test("pending steering is rejected if its author loses full project access befor
     content: "Pending collaborator edit",
     requestId: randomUUID(),
   });
-  await f.db.run("UPDATE project_members SET access='read' WHERE user_id=?", [
+  await f.db.run("DELETE FROM project_members WHERE user_id=?", [
     f.users[1].id,
   ]);
   await drain(c.id, first.run!.id);

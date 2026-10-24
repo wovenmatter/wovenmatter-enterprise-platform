@@ -116,4 +116,5 @@ export async function prepareNativeConfiguration(
 /** One retained Pi native environment inside a thread namespace. */
 export interface NativeSessionState {
   pi?: unknown;
+  native?: unknown;
 }

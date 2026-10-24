@@ -6,10 +6,12 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type AriaAttributes,
   type ChangeEvent,
   type CSSProperties,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import {
   Check,
@@ -76,22 +78,35 @@ function place(anchor: DOMRect, node: HTMLElement, align: "start" | "end") {
   return { top, left };
 }
 type Focus = "selected" | "first" | "last";
-function usePopup(align: "start" | "end") {
+export function usePopup<T extends HTMLElement = HTMLButtonElement>(
+  align: "start" | "end",
+  anchorRef?: RefObject<T | null>,
+) {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
-  const trigger = useRef<HTMLButtonElement>(null);
+  const defaultTrigger = useRef<T>(null);
+  const trigger = anchorRef ?? defaultTrigger;
+  const [pointerOffset, setPointerOffset] = useState<{ x: number; y: number } | null>(null);
   const popup = useRef<HTMLDivElement>(null);
   const initialFocus = useRef<Focus>("selected");
   const entry = useRef({ close: () => setOpen(false) });
   const close = useCallback((restoreFocus: boolean) => {
     setOpen(false);
-    if (restoreFocus) trigger.current?.focus({ preventScroll: true });
-  }, []);
-  const show = useCallback((focus: Focus) => {
+    if (restoreFocus) {
+      const anchor = trigger.current;
+      const target = anchor?.getClientRects().length
+        ? anchor
+        : anchor?.closest("form")?.querySelector<HTMLButtonElement>(".composer-collapse");
+      target?.focus({ preventScroll: true });
+    }
+  }, [trigger]);
+  const show = useCallback((focus: Focus, point?: { x: number; y: number }) => {
     initialFocus.current = focus;
+    const bounds = trigger.current?.getBoundingClientRect();
+    setPointerOffset(point && bounds ? { x: point.x - bounds.left, y: point.y - bounds.top } : null);
     setStyle({ visibility: "hidden" });
     setOpen(true);
-  }, []);
+  }, [trigger]);
   useLayoutEffect(() => {
     const node = popup.current;
     if (!open || !node) return;
@@ -103,18 +118,30 @@ function usePopup(align: "start" | "end") {
     let frame = 0;
     const update = () => {
       const anchor = trigger.current?.getBoundingClientRect();
+      if (anchor && (!anchor.width || !anchor.height)) {
+        // Hiding a popup's ancestor can move focus to body before the resize
+        // observer runs. The visible composer expander is its recovery target.
+        close(node.contains(document.activeElement) || document.activeElement === document.body);
+        return false;
+      }
       if (!anchor || anchor.bottom < 0 || anchor.top > window.innerHeight) {
         close(false);
-        return;
+        return false;
       }
-      const position = place(anchor, node, align);
+      const position = place(pointerOffset
+        ? new DOMRect(anchor.left + pointerOffset.x, anchor.top + pointerOffset.y, 0, 0)
+        : anchor, node, align);
       // Position before focusing: hidden elements cannot take focus.
       node.style.top = `${position.top}px`;
       node.style.left = `${position.left}px`;
       node.style.visibility = "visible";
       setStyle(position);
+      return true;
     };
-    update();
+    if (!update()) {
+      if (activePopup === entry.current) activePopup = null;
+      return;
+    }
     const items = focusable(node);
     const selected =
       initialFocus.current === "selected"
@@ -173,6 +200,7 @@ function usePopup(align: "start" | "end") {
       frame = requestAnimationFrame(update);
     });
     size.observe(node);
+    if (trigger.current) size.observe(trigger.current);
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("scroll", reposition, true);
     window.addEventListener("resize", reposition);
@@ -186,7 +214,7 @@ function usePopup(align: "start" | "end") {
       window.removeEventListener("resize", reposition);
       if (activePopup === entry.current) activePopup = null;
     };
-  }, [open, align, close]);
+  }, [open, align, close, trigger, pointerOffset]);
   function keys(event: KeyboardEvent<HTMLDivElement>, choose?: () => void) {
     const node = popup.current;
     if (!node) return;
@@ -234,7 +262,7 @@ function focusPopupItem(node: HTMLElement, item: HTMLElement) {
 function focusable(node: HTMLElement) {
   return Array.from(
     node.querySelectorAll<HTMLElement>(
-      '[role="menuitem"]:not(:disabled),[role="option"]:not([aria-disabled="true"])',
+      '[role="menuitem"]:not(:disabled),[role="option"]:not([aria-disabled="true"]),[role="switch"]:not(:disabled)',
     ),
   );
 }
@@ -250,23 +278,34 @@ export function Menu({
   children,
   icon = Ellipsis,
   iconSize = 16,
+  iconWeight = "control",
   className = "",
   align = "end",
+  triggerText,
+  disabled,
 }: {
   label: string;
+  triggerText?: string;
   children: ReactNode;
   icon?: LucideIcon;
   iconSize?: number;
+  iconWeight?: IconWeight;
   className?: string;
   align?: "start" | "end";
+  disabled?: boolean;
 }) {
   const popup = usePopup(align);
+  const close = popup.close;
+  useLayoutEffect(() => {
+    if (disabled && popup.open) close(true);
+  }, [disabled, popup.open, close]);
   const id = useId();
   return (
     <>
       <button
         ref={popup.trigger}
         type="button"
+        disabled={disabled}
         className={`icon-button menu-trigger ${className}`}
         aria-label={label}
         title={label}
@@ -276,7 +315,8 @@ export function Menu({
         onClick={() => (popup.open ? popup.close(false) : popup.show("first"))}
         onKeyDown={popup.triggerKeys}
       >
-        <Icon icon={icon} size={iconSize} weight="control" />
+        <Icon icon={icon} size={iconSize} weight={iconWeight} />
+        {triggerText ? <span>{triggerText}</span> : null}
       </button>
       {popup.open ? (
         <div
@@ -297,6 +337,49 @@ export function Menu({
       ) : null}
     </>
   );
+}
+
+/** A row's actions, opened at the pointer or from its existing focusable link. */
+export function ContextMenu({ label, trigger, actions, children, onOpen }: {
+  label: string;
+  trigger: RefObject<HTMLAnchorElement | null>;
+  actions: ReactNode;
+  children: (attributes: AriaAttributes) => ReactNode;
+  onOpen: () => void;
+}) {
+  const popup = usePopup("start", trigger);
+  const id = useId();
+  return <>
+    <div className="rail-row"
+      onClick={() => popup.close(false)}
+      onContextMenu={event => {
+        if (!actions) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+        popup.show("first", { x: event.clientX, y: event.clientY });
+      }}
+      onKeyDown={event => {
+        if (!actions || event.target !== trigger.current ||
+          !(event.key === "ContextMenu" || (event.shiftKey && event.key === "F10"))) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+        popup.show("first");
+      }}>
+      {children(actions ? {
+        "aria-haspopup": "menu",
+        "aria-expanded": popup.open,
+        "aria-controls": popup.open ? id : undefined,
+        "aria-keyshortcuts": "Shift+F10",
+      } : {})}
+    </div>
+    {popup.open ? <div ref={popup.popup} id={id} role="menu" tabIndex={-1}
+      aria-label={label} popover="manual" className="popup menu" style={popup.style}
+      onKeyDown={event => popup.keys(event)}>
+      <MenuContext.Provider value={popup.close}>{actions}</MenuContext.Provider>
+    </div> : null}
+  </>;
 }
 export function MenuItem({
   children,
@@ -357,6 +440,45 @@ export function MenuSeparator() {
   return <div role="separator" className="menu-separator" />;
 }
 
+/** Calendar category palette, using the same focus/positioning as other pickers. */
+export function ColorPicker({ label, value, options, onChange }: {
+  label: string;
+  value: string;
+  options: { value: string; label: string; color: string }[];
+  onChange: (value: string) => void;
+}) {
+  const popup = usePopup("start");
+  const id = useId();
+  const current = options.find(option => option.value === value) ?? options[0];
+  function choose(value: string) {
+    onChange(value);
+    popup.close(true);
+  }
+  return <>
+    <button ref={popup.trigger} type="button" className="calendar-color-trigger"
+      aria-label={`${label} color: ${current.label}`} title={`Change the color for ${label.toLowerCase()}`}
+      aria-haspopup="listbox" aria-expanded={popup.open} aria-controls={popup.open ? id : undefined}
+      onClick={() => popup.open ? popup.close(false) : popup.show("selected")} onKeyDown={popup.triggerKeys}>
+      <i aria-hidden="true" style={{ backgroundColor: current.color }} />
+      <span>{label}</span><Icon icon={ChevronDown} size={10} weight="control" />
+    </button>
+    {popup.open ? <div ref={popup.popup} popover="manual" tabIndex={-1} className="popup calendar-color-picker" style={popup.style}
+      onKeyDown={event => popup.keys(event, () => {
+        const value = document.activeElement?.getAttribute("data-value");
+        if (value && options.some(option => option.value === value)) choose(value);
+      })}>
+      <div className="calendar-color-heading" id={`${id}-heading`}>{label}</div>
+      <div role="listbox" id={id} aria-labelledby={`${id}-heading`} className="calendar-color-options">
+        {options.map(option => <div key={option.value} role="option" tabIndex={-1} aria-selected={value === option.value}
+          data-value={option.value} className="calendar-color-option" onClick={() => choose(option.value)}>
+          <i aria-hidden="true" style={{ backgroundColor: option.color }} /><span>{option.label}</span>
+          {value === option.value ? <Icon icon={Check} size={12} /> : null}
+        </div>)}
+      </div>
+    </div> : null}
+  </>;
+}
+
 export type PickerOption = {
   value: string;
   label: string;
@@ -365,17 +487,70 @@ export type PickerOption = {
   description?: string;
   disabled?: boolean;
 };
+/** Fit whole rows like DashboardComposer's regular/compact/collapsed controls. */
+export function useComposerLayout() {
+  const formRef = useRef<HTMLFormElement>(null);
+  const [override, setOverride] = useState<boolean | null>(null);
+  const [narrow, setNarrow] = useState(false);
+  const collapsed = override ?? narrow;
+  useLayoutEffect(() => {
+    const form = formRef.current;
+    const row = form?.querySelector<HTMLElement>(".composer-controls");
+    if (!form || !row) return;
+    let frame = 0;
+    let previousWidth = form.clientWidth;
+    function measure() {
+      if (!form || !row) return;
+      const wasCollapsed = form.classList.contains("composer-collapsed");
+      // Measure both complete rows before paint, including current labels and
+      // Enterprise's message-mode selector, without cloning interactive nodes.
+      form.classList.remove("composer-collapsed");
+      delete form.dataset.composerOverflow;
+      form.dataset.composerLayout = "regular";
+      const compact = row.scrollWidth > row.clientWidth + 1;
+      if (compact) form.dataset.composerLayout = "compact";
+      const tooNarrow = row.scrollWidth > row.clientWidth + 1;
+      if (wasCollapsed) form.classList.add("composer-collapsed");
+      setNarrow(tooNarrow);
+      // Native permits explicitly expanding narrow controls. Keep every item
+      // reachable in that case; the trailing action group stays together.
+      if (override === false && tooNarrow) form.dataset.composerOverflow = "expanded";
+      if (override === false && Math.abs(form.clientWidth - previousWidth) > 1) setOverride(null);
+      previousWidth = form.clientWidth;
+    }
+    function schedule() {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measure);
+    }
+    measure();
+    const size = new ResizeObserver(schedule);
+    size.observe(form);
+    const content = new MutationObserver(schedule);
+    content.observe(row, { childList: true, characterData: true, subtree: true });
+    return () => { cancelAnimationFrame(frame); size.disconnect(); content.disconnect(); };
+  }, [override]);
+  return { formRef, collapsed, setCollapsed: setOverride };
+}
+
 /**
  * WovenMatter composer selector: a full-height trigger with the current
  * choice, and a titled popout listing full labels with a checked selection.
  */
+// Desktop session menus stay visible when unavailable. A sole different choice
+// is actionable; a sole selected choice (or only unavailable choices) is not.
+export function sessionMenuUnavailable(options: PickerOption[], selection: string) {
+  return !options.some(option => !option.disabled && option.value !== selection);
+}
+
 export function Picker({
   label,
   heading,
   icon,
+  leadingIcon,
   value,
   options,
   placeholder,
+  valueLabel,
   disabled,
   width = 288,
   emptyMessage,
@@ -388,9 +563,11 @@ export function Picker({
   title?: string;
   className?: string;
   icon: LucideIcon;
+  leadingIcon?: ReactNode;
   value: string;
   options: PickerOption[];
   placeholder: string;
+  valueLabel?: string;
   disabled?: boolean;
   width?: number;
   emptyMessage?: string;
@@ -403,6 +580,7 @@ export function Picker({
   }, [disabled, popup.open, close]);
   const id = useId();
   const current = options.find((option) => option.value === value);
+  const currentLabel = valueLabel ?? current?.label ?? placeholder;
   function choose(option?: PickerOption) {
     if (disabled || !option || option.disabled) return;
     popup.close(true);
@@ -419,7 +597,7 @@ export function Picker({
         aria-expanded={popup.open}
         aria-controls={popup.open ? `${id}-list` : undefined}
         aria-labelledby={`${id}-label ${id}-value`}
-        title={title ?? (current ? `${heading}: ${current.label}` : heading)}
+        title={title ?? (current ? `${heading}: ${currentLabel}` : heading)}
         // aria-disabled keeps keyboard focus when a pending save disables it.
         aria-disabled={disabled || undefined}
         onClick={() => {
@@ -434,9 +612,9 @@ export function Picker({
         <span className="sr-only" id={`${id}-label`}>
           {label}
         </span>
-        <Icon icon={icon} size={14} weight="control" />
+        {leadingIcon ? <span className="composer-picker-icon" aria-hidden="true">{leadingIcon}</span> : <Icon icon={icon} size={16} weight="control" />}
         <span className="composer-picker-value" id={`${id}-value`}>
-          {current?.label ?? placeholder}
+          {currentLabel}
         </span>
         <Icon icon={ChevronDown} size={14} weight="control" />
       </button>

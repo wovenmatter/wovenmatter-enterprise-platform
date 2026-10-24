@@ -1,0 +1,118 @@
+/* WovenMatter 0c1f8f82 desktop rails, with bounded browser paging/overlays.
+ * Numeric geometry keeps the portal target, navigation and center tree mounted.
+ * Interrupted CSS transitions continue from the currently rendered position. */
+.sidebar-shell .shell-body { display: block; position: relative; overflow: hidden; padding: 0; }
+.sidebar-shell .main-content {
+  position: absolute; top: 8px; bottom: 8px;
+  left: var(--sidebar-center-left); width: var(--sidebar-center-width);
+  transition: left .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1);
+}
+.sidebar-shell .sidebar-container { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.sidebar-shell .sidebar-layout {
+  position: absolute; top: 8px; bottom: 8px;
+  left: var(--sidebar-group-left); width: var(--sidebar-group-width);
+  transform: translateX(var(--sidebar-group-offset));
+  pointer-events: none; z-index: 2; opacity: var(--sidebar-group-opacity);
+  transition: left .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1), transform .3s cubic-bezier(.2,.8,.2,1), opacity .3s ease;
+}
+.sidebar-shell .sidebar, .sidebar-shell .sidebar-content-slot {
+  display: flex; position: absolute; top: 0; bottom: 0;
+  width: var(--sidebar-page-width); min-height: 0; min-width: 0;
+  pointer-events: auto;
+  transition: left .3s cubic-bezier(.2,.8,.2,1), width .3s cubic-bezier(.2,.8,.2,1), transform .3s cubic-bezier(.2,.8,.2,1), opacity .3s ease, visibility 0s;
+}
+.sidebar-shell .sidebar { left: var(--sidebar-nav-left); }
+.sidebar-shell .sidebar-content-slot { left: var(--sidebar-content-left); }
+.sidebar-shell .sidebar-content-slot > .workspace-detail-rail { display: flex; width: 100%; flex: 1; }
+.sidebar-shell .rail-hidden {
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transform: translateX(-24px);
+  transition-delay: 0s, 0s, 0s, 0s, .3s;
+}
+.sidebar-shell[data-sidebar-style="split"] .sidebar-content-slot.rail-hidden,
+.sidebar-shell:not([data-sidebar-style="split"])[data-sidebar-side="right"] .rail-hidden { transform: translateX(24px); }
+.sidebar-shell .rail-visible { opacity: 1; visibility: visible; transform: translateX(0); }
+.sidebar-shell:not([data-sidebar-style="split"]):not([data-sidebar-style="organization"]) .sidebar-layout::before {
+  content: ""; position: absolute; inset: 0; border-radius: var(--surface-radius);
+  background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace);
+  box-shadow: inset 0 0 0 1px var(--rail-rim), inset 0 0 0 2px var(--rail-inner), 0 0 0 .5px var(--rail-edge);
+}
+.sidebar-shell:not([data-sidebar-style="split"]):not([data-sidebar-style="organization"]) .sidebar,
+.sidebar-shell:not([data-sidebar-style="split"]):not([data-sidebar-style="organization"]) .workspace-detail-rail { border-radius: 0; box-shadow: none; background: transparent; }
+/* Opaque matching pages prevent their text showing through each other while
+ * the adjacent pages exchange positions during a side switch. */
+.sidebar-shell[data-sidebar-style="adaptive"] .adaptive-expanded .sidebar,
+.sidebar-shell[data-sidebar-style="adaptive"] .adaptive-expanded .workspace-detail-rail { background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace); }
+.sidebar-shell .adaptive-expanded .sidebar-content-slot { border-left: 1px solid var(--line); }
+.sidebar-shell[data-sidebar-side="right"] .adaptive-expanded .sidebar-content-slot { border-left: 0; border-right: 1px solid var(--line); }
+.sidebar-shell .sidebar-toggle { position: absolute; top: 24px; left: var(--sidebar-toggle-left); width: 36px; height: 36px; min-width: 36px; padding: 0; pointer-events: auto; z-index: 5; transition: left .3s cubic-bezier(.2,.8,.2,1); }
+.sidebar-shell .sidebar-toggle[data-toggle="content"] { left: var(--sidebar-toggle-right); }
+.sidebar-toggle-space { display: block; width: 36px; height: 36px; flex: none; }
+.sidebar-shell .sidebar-top { display: none; }
+.sidebar-shell .sidebar-backdrop { position: absolute; inset: 0; z-index: 3; display: block; width: 100%; height: 100%; border: 0; border-radius: 0; background: var(--scrim); }
+.sidebar-shell .drawer-open { z-index: 4; }
+/* Only organization navigation has its independent mobile close/menu row. */
+.sidebar-shell[data-sidebar-style="organization"] .drawer-open .sidebar-top { position: absolute; display: flex; top: 0; right: 0; height: 44px; min-height: 44px; padding: 0 8px; z-index: 1; pointer-events: auto; }
+.sidebar-shell[data-sidebar-style="organization"][data-compact="true"] .sidebar { top: 44px; }
+/* Reserve horizontal title space only. Hiding a rail never adds a row. */
+.sidebar-shell .project-workspace .thread-header,
+.sidebar-shell .project-workspace .project-pane-header { min-height: 68px; height: 68px; padding-left: calc(16px + var(--sidebar-header-left)); padding-right: calc(8px + var(--sidebar-header-right)); transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1); }
+/* Conversation content starts at the top; hidden rail controls only need
+ * horizontal clearance, never a full-width header row. */
+.sidebar-shell .project-workspace .conversation-main > .transcript {
+  --conversation-inset: 32px;
+  padding-left: max(var(--conversation-inset), var(--sidebar-header-left));
+  padding-right: max(var(--conversation-inset), var(--sidebar-header-right));
+  transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1);
+}
+.sidebar-shell .project-workspace .conversation-main > .notice {
+  margin-left: max(16px, var(--sidebar-header-left));
+  margin-right: max(16px, var(--sidebar-header-right));
+}
+@media (max-width: 1080px) {
+  .sidebar-shell .project-workspace .conversation-main > .transcript { --conversation-inset: 24px; }
+}
+@media (max-width: 760px) {
+  .sidebar-shell .project-workspace .conversation-main > .transcript { --conversation-inset: 16px; }
+}
+.sidebar-shell .project-workspace .desktop-content-page > .page-header,
+.sidebar-shell .project-workspace .subpage > .page-header { padding-left: var(--sidebar-header-left); padding-right: var(--sidebar-header-right); transition: padding-left .3s cubic-bezier(.2,.8,.2,1), padding-right .3s cubic-bezier(.2,.8,.2,1); }
+.sidebar-shell .workspace-navigation { scroll-padding-top: 68px; }
+.sidebar-shell .workspace-rail-title { position: sticky; top: 0; z-index: 1; justify-content: space-between; gap: 4px; min-height: 68px; padding: 0 8px; background: linear-gradient(var(--rail-fill), var(--rail-fill)) var(--workspace); }
+.sidebar-shell .workspace-rail-title > strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-controls { display: inline-flex; flex: none; align-items: center; gap: 0; }
+.sidebar-controls .icon-button { width: 32px; height: 36px; min-width: 32px; padding: 0; }
+.sidebar-shell .workspace-detail-heading { gap: 4px; }
+.sidebar-shell .workspace-detail-heading > div { flex: 1; }
+.sidebar-shell .workspace-detail-heading small { white-space: nowrap; }
+.sidebar-shell .workspace-detail-actions { flex-direction: column; gap: 1px; }
+.sidebar-shell .workspace-detail-actions > .nav-link { font-size: 13px; padding-inline: 8px; }
+.sidebar-style-choices { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; padding: 0; border: 0; }
+.sidebar-style-choice { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid var(--line); border-radius: var(--control-radius); cursor: pointer; }
+.sidebar-style-choice:has(input:checked) { background: var(--soft); border-color: var(--ring); }
+.sidebar-style-choice input { flex: none; margin: 4px 0 0; accent-color: var(--primary); }
+.sidebar-style-choice strong, .sidebar-style-choice small { display: block; }
+.sidebar-style-choice small { margin-top: 2px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-shell .main-content, .sidebar-shell .sidebar-layout,
+  .sidebar-shell .sidebar, .sidebar-shell .sidebar-content-slot, .sidebar-shell .sidebar-toggle { transition: none; }
+}
+@media (pointer: coarse) {
+  .sidebar-controls .icon-button { width: 44px; min-width: 44px; height: 44px; }
+  .sidebar-shell .sidebar-toggle { height: 44px; top: 20px; }
+  .sidebar-toggle-space { height: 44px; }
+  .sidebar-shell .mobile-close { min-width: 44px; min-height: 44px; }
+}
+
+/* Phone overlays enter from their own edge while the center stays bounded. */
+.sidebar-shell[data-compact="true"] .sidebar.rail-hidden { transform: translateX(-264px); }
+.sidebar-shell[data-compact="true"]:not([data-sidebar-style="split"])[data-sidebar-side="right"] .sidebar.rail-hidden,
+.sidebar-shell[data-compact="true"][data-sidebar-style="split"] .sidebar-content-slot.rail-hidden { transform: translateX(264px); }
+.sidebar-shell[data-sidebar-style="adaptive"] .sidebar-layout,
+.sidebar-shell[data-sidebar-style="single"] .sidebar-layout { border-radius: var(--surface-radius); overflow: hidden; }
+
+@media (max-width: 760px) {
+  /* Preserve the shared header's previous menu-row height without putting
+   * workspace rail controls back into that header. */
+  .sidebar-shell:not([data-sidebar-style="organization"]) .platform-brand-row { min-height: 40px; }
+}

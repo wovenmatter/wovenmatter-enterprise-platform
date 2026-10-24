@@ -51,4 +51,29 @@ ALTER TABLE projects ADD COLUMN deleted_at TEXT;
 ALTER TABLE projects ADD COLUMN purge_after TEXT;
 `,
   );
+  await db.migrate(
+    "platform-accounts-workspaces-v2",
+    `
+DROP TRIGGER legacy_user_membership;
+CREATE TABLE users_next(id TEXT PRIMARY KEY,org_id TEXT REFERENCES organizations(id),email TEXT NOT NULL UNIQUE COLLATE NOCASE,name TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('owner','admin','member')),enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),password_hash TEXT,created_at TEXT NOT NULL,theme TEXT NOT NULL DEFAULT 'green' CHECK(theme IN ('green','cognac','dark')),default_model TEXT,CHECK(role<>'owner' OR org_id IS NULL));
+INSERT INTO users_next SELECT id,org_id,email,name,role,enabled,password_hash,created_at,theme,default_model FROM users;
+DROP TABLE users;
+ALTER TABLE users_next RENAME TO users;
+CREATE UNIQUE INDEX users_one_owner ON users(role) WHERE role='owner';
+CREATE TRIGGER users_keep_owner BEFORE DELETE ON users WHEN OLD.role='owner' BEGIN SELECT RAISE(ABORT,'The platform owner cannot be removed'); END;
+CREATE TRIGGER users_keep_owner_authority BEFORE UPDATE OF role,enabled ON users WHEN OLD.role='owner' AND (NEW.role<>'owner' OR NEW.enabled<>1) BEGIN SELECT RAISE(ABORT,'The platform owner cannot be disabled or demoted'); END;
+CREATE TRIGGER legacy_user_membership AFTER INSERT ON users WHEN NEW.org_id IS NOT NULL BEGIN
+ INSERT INTO organization_memberships VALUES(NEW.org_id,NEW.id,NEW.role,CASE WHEN NEW.role='admin' THEN 'write' ELSE 'read' END,NEW.created_at);
+END;
+CREATE TABLE invitations_next(id TEXT PRIMARY KEY,org_id TEXT REFERENCES organizations(id),user_id TEXT NOT NULL REFERENCES users(id),token_hash TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,accepted_at TEXT,created_at TEXT NOT NULL);
+INSERT INTO invitations_next SELECT * FROM invitations;
+DROP TABLE invitations;
+ALTER TABLE invitations_next RENAME TO invitations;
+UPDATE project_members SET access='write' WHERE access='read';
+UPDATE projects SET access='write' WHERE access='read';
+CREATE TRIGGER workspace_members_full_insert AFTER INSERT ON project_members WHEN NEW.access='read' BEGIN UPDATE project_members SET access='write' WHERE project_id=NEW.project_id AND user_id=NEW.user_id; END;
+CREATE TRIGGER workspace_members_full_update AFTER UPDATE OF access ON project_members WHEN NEW.access='read' BEGIN UPDATE project_members SET access='write' WHERE project_id=NEW.project_id AND user_id=NEW.user_id; END;
+`,
+    { rebuild: true },
+  );
 }

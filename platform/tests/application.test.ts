@@ -97,6 +97,8 @@ test("production image healthcheck uses the application's actual base-path route
   });
   assert.equal(result.statusCode, 200, result.body);
   assert.deepEqual(result.json(), { status: "ok" });
+  assert.equal(result.headers["permissions-policy"], "camera=(), microphone=(self), geolocation=()",
+    "Same-origin dictation remains subject to browser consent; camera and location stay denied");
   assert.equal(
     (
       await s.app.inject({
@@ -180,7 +182,7 @@ test("assembled platform provisions a project, renders a safe report and immedia
     404,
   );
 });
-test("assembled admission uses real SQLite and remains private until a project member is added", async (t) => {
+test("assembled admission uses real SQLite and shares chats with every current workspace member", async (t) => {
   const s = await fixture(t);
   s.inference.models = async () => [
     { id: "gpt-test", name: "GPT Test", provider: "openai" },
@@ -249,7 +251,7 @@ test("assembled admission uses real SQLite and remains private until a project m
     url: `/enterprise/api/conversations/${id}`,
     headers: other,
   });
-  assert.equal(hidden.statusCode, 404, hidden.body);
+  assert.equal(hidden.statusCode, 200, hidden.body);
   const message = await s.app.inject({
     method: "POST",
     url: `/enterprise/api/conversations/${id}/messages`,

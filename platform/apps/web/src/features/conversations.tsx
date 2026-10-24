@@ -1,3 +1,8 @@
+import { ComposerTools, defaultConversationTools, type ConversationTools } from "./composer-tools";
+import { ComposerAttachments, ComposerAttachmentChips, type ComposerAttachment } from "./composer-attachments";
+import { useNativeControls } from "./native-controls";
+import { WorkspaceNotePanel } from "../shell/WorkspaceDetails";
+import { agents, agentName, acceptsModel } from "../agents";
 import {
   ConversationRunWork,
   NativeChecklist,
@@ -6,6 +11,7 @@ import {
 } from "./ConversationWork";
 import type { Activity } from "../activity-state";
 import {
+  type ReactNode,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -21,14 +27,14 @@ import {
   ChevronDown,
   Copy,
   Cpu,
-  FolderOpen,
-  LockKeyhole,
+  Folder,
   MessageSquare,
-  ShieldCheck,
+  Mic,
+  FileText,
+  Paperclip,
   Settings,
   Square,
   Trash2,
-  Users,
 } from "lucide-react";
 import {
   api,
@@ -40,7 +46,6 @@ import {
   useResource,
   type List,
   type Project,
-  type User,
   type Model,
   type Run,
   type Conversation,
@@ -63,9 +68,10 @@ import {
   MenuLink,
   MenuSeparator,
   Picker,
+  sessionMenuUnavailable,
+  useComposerLayout,
   type PickerOption,
 } from "../components/controls";
-import { Link } from "react-router-dom";
 import {
   mergeMessages,
   emptyAssistantLabel,
@@ -88,7 +94,11 @@ import {
   Status,
 } from "../components/ui";
 export type { Model, Conversation } from "../api";
+type AgentDefaults = { defaultHarness: string; agents: Record<string, { model?: string; thinking?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number }> };
+type WelcomePi = { thinking?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number };
+const thinkingLabel = (level: string) => level === "xhigh" ? "Extra high" : level.charAt(0).toUpperCase() + level.slice(1);
 type Message = {
+  attachments?: ComposerAttachment[];
   id: string;
   requestId?: string;
   role: "user" | "assistant";
@@ -122,6 +132,7 @@ const activeStatuses = new Set([
 ]);
 export function ConversationsPage({ project }: { project: Project }) {
   const { org, user } = useWorkspace();
+  const agentDefaults = useResource<AgentDefaults>(`/enterprise/api/projects/${project.id}/agent-settings`);
   const list = useResource<List<Conversation>>(
     `/enterprise/api/projects/${project.id}/conversations`,
   );
@@ -143,6 +154,7 @@ export function ConversationsPage({ project }: { project: Project }) {
       ? requestedConversation
       : undefined;
   const creating = query.get("new") === "1";
+  const [startError, setStartError] = useState("");
   useEffect(() => {
     if (requestedConversation) list.reload();
   }, [requestedConversation, list.reload]);
@@ -181,15 +193,14 @@ export function ConversationsPage({ project }: { project: Project }) {
   const selectedFolder = folders.data?.items.find(
     (f) => f.id === query.get("folder"),
   );
-  const folderChats =
-    list.data?.items.filter((c) => c.folderId === selectedFolder?.id) ?? [];
   return (
-    <div className="conversation-layout">
+    <div className={`conversation-layout ${query.has("note") ? "has-note" : ""}`}>
       <div className="conversation-main">
         {conversationId ? (
           <Thread
             key={conversationId}
             id={conversationId}
+            initialError={startError}
             project={project}
             models={models.data?.items ?? []}
             refresh={workspaceChanged}
@@ -206,53 +217,38 @@ export function ConversationsPage({ project }: { project: Project }) {
             <ErrorNotice
               message={
                 list.error ||
-                "This conversation is unavailable in this project."
+                "This conversation is unavailable in this workspace."
               }
             />
           )
-        ) : (
-          <div className="workspace-home">
-            <Empty
-              title={selectedFolder?.name ?? "All Workspaces"}
-              action={
-                <button
-                  className="primary"
-                  onClick={() => {
-                    const next = new URLSearchParams(query);
-                    next.set("new", "1");
-                    setQuery(next);
-                  }}
-                >
-                  New conversation
-                </button>
-              }
-            >
-              Ask a question, analyze your files, or work through ideas.
-            </Empty>
-            {selectedFolder && folderChats.length ? (
-              <nav className="folder-conversations" aria-label={`Conversations in ${selectedFolder.name}`}>
-                {folderChats.map((c) => (
-                  <Link
-                    key={c.id}
-                    className="nav-link"
-                    to={`?${new URLSearchParams({ folder: selectedFolder.id, conversation: c.id })}`}
-                  >
-                    <Icon icon={MessageSquare} size={13} />
-                    <span className="rail-title">{c.title}</span>
-                  </Link>
-                ))}
-              </nav>
-            ) : null}
-          </div>
+        ) : !agentDefaults.data && agentDefaults.loading ? <Loading /> : (
+          <WorkspaceWelcome key={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "loading"} title={selectedFolder?.name ?? project.name} initialAgent={query.get("agent") ?? agentDefaults.data?.defaultHarness ?? "pi"} models={models.data?.items ?? []}
+            defaults={agentDefaults.data} defaultModel={user.defaultModel} catalogReady={Boolean(models.data)} catalogError={models.error || agentDefaults.error}
+            project={project} folders={folders.data?.items} folderError={folders.error} folderId={query.get("folder") === "all" ? null : query.get("folder")}
+            onFolderChange={folderId => setQuery(current => { const next = new URLSearchParams(current); next.set("folder", folderId ?? "all"); return next; }, { replace: true })}
+            onStart={async (harness, model, content, folderId, attachments, tools, pi) => {
+            setStartError("");
+            const chat = await send<Conversation>(`/enterprise/api/projects/${project.id}/conversations`, { harness, model: model || undefined, ...(harness === "pi" ? { pi } : {}), folderId, tools, mode: "write" });
+            const draftKey = `wme:draft:${user.id}:${chat.id}`, pendingKey = `wme:pending:${user.id}:${chat.id}`;
+            const pending = { id: crypto.randomUUID(), content, kind: "message" as const, attachments };
+            saveConversationDraft(draftKey, content, "message", undefined, attachments); savePendingMessage(pendingKey, pending);
+            try { await send(`/enterprise/api/conversations/${chat.id}/messages`, { content, kind: "message", requestId: pending.id, attachments: attachments.map(({kind,id}) => ({kind,id})) }); settleConversationInput(pendingKey, draftKey, pending); } catch (error) {
+              // A known rejection has no admitted message. Keep the saved draft
+              // editable in its new chat; only an unknown delivery keeps a retry identity.
+              if (error instanceof ApiError && error.status < 500) { clearPendingMessage(pendingKey); setStartError(errorMessage(error)); }
+            }
+            select(chat.id, chat.folderId); workspaceChanged();
+          }} />
         )}
         {!conversationId ? <ErrorNotice message={list.error} /> : null}
       </div>
+      {query.get("note") ? <WorkspaceNotePanel projectId={project.id} noteId={query.get("note")!} onClose={() => { const next = new URLSearchParams(query); next.delete("note"); setQuery(next); }} /> : null}
       {creating ? (
         <Modal title="New conversation" compact onClose={closeCreate}>
-          {!folders.data ? (
+          {!folders.data || (!agentDefaults.data && agentDefaults.loading) ? (
             <>
               <Loading />
-              <ErrorNotice message={folders.error} />
+              <ErrorNotice message={folders.error || agentDefaults.error} />
             </>
           ) : query.get("folder") &&
             query.get("folder") !== "all" &&
@@ -263,6 +259,7 @@ export function ConversationsPage({ project }: { project: Project }) {
               project={project}
               folders={folders.data?.items}
               initialFolder={query.get("folder")}
+              initialAgent={query.get("agent") ?? agentDefaults.data?.defaultHarness}
               onCancel={closeCreate}
               onSave={async (body) => {
                 const navigationTarget = window.location.href;
@@ -281,6 +278,99 @@ export function ConversationsPage({ project }: { project: Project }) {
     </div>
   );
 }
+function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel, catalogReady, catalogError, project, folders, folderError, folderId, onFolderChange, onStart }: {
+  title: string; initialAgent: string; models: Model[]; defaults?: AgentDefaults; defaultModel?: string | null; catalogReady: boolean; catalogError?: string;
+  project: Project; folders?: WorkspaceFolder[]; folderError?: string;
+  folderId: string | null; onFolderChange: (id: string | null) => void;
+  onStart: (harness: string, model: string, content: string, folderId: string | null, attachments: ComposerAttachment[], tools: ConversationTools, pi: WelcomePi) => Promise<void>;
+}) {
+  const { org } = useWorkspace();
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [tools, setTools] = useState(defaultConversationTools);
+  const [uploading, setUploading] = useState(false);
+  const harness = initialAgent;
+  const [modelChoice, setModelChoice] = useState<string>();
+  // Undefined inherits workspace defaults; empty explicitly chooses model default.
+  const [thinkingChoice, setThinkingChoice] = useState<string>();
+  const { formRef, collapsed, setCollapsed } = useComposerLayout();
+  const [draft, setDraft] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const configured = defaults?.agents?.[harness] ?? {};
+  const available = models.filter(model => acceptsModel(harness, model.provider));
+  // Match ConversationService.create: workspace agent, current personal default,
+  // then the first authorized catalog item. Never hide an unavailable explicit/default choice.
+  const model = modelChoice ?? (configured.model || (available.some(item => item.id === defaultModel) ? defaultModel! : available[0]?.id ?? ""));
+  const selectedModel = available.find(item => item.id === model);
+  const levels = selectedModel?.thinkingLevels ?? [];
+  const thinking = thinkingChoice ?? configured.thinking ?? "";
+  const unavailableModel = Boolean(model && !selectedModel);
+  const unavailableThinking = harness === "pi" && Boolean(thinking && !levels.includes(thinking));
+  const unavailableFolder = Boolean(folderId && folders && !folders.some(folder => folder.id === folderId));
+  const ready = Boolean(folders && defaults && model) && catalogReady && !catalogError && !folderError && !unavailableFolder && !unavailableModel && !unavailableThinking;
+  const modelOptions: PickerOption[] = [
+    ...(unavailableModel ? [{ value: model, label: `${model} (unavailable)`, disabled: true }] : []),
+    ...available.map(item => ({ value: item.id, label: item.name || item.id,
+      detail: available.some(other => other !== item && (other.name || other.id) === (item.name || item.id)) ? `${providerNames[item.provider] ?? item.provider} · ${item.id}` : undefined })),
+  ];
+  const thinkingOptions: PickerOption[] = harness === "pi" && (levels.length > 0 || unavailableThinking) ? [
+    { value: "", label: selectedModel?.defaultThinkingLevel ? `Model default (${thinkingLabel(selectedModel.defaultThinkingLevel)})` : "Model default" },
+    ...(unavailableThinking ? [{ value: thinking, label: `${thinkingLabel(thinking)} (unavailable)`, disabled: true }] : []),
+    ...levels.map(level => ({ value: level, label: thinkingLabel(level) })),
+  ] : [];
+  async function submit() {
+    if ((!draft.trim() && !attachments.length) || busy || uploading || !ready) return;
+    setBusy(true); setError("");
+    // Explicit Pi input replaces configured options on creation, so retain the
+    // unrelated configured code/subagent defaults when choosing thinking here.
+    const pi: WelcomePi = { ...(configured.codeMode ? { codeMode: configured.codeMode } : {}),
+      ...(configured.subagentConcurrency !== undefined ? { subagentConcurrency: configured.subagentConcurrency } : {}),
+      ...(thinking ? { thinking } : {}) };
+    try { await onStart(harness, model, draft, folderId, attachments, tools, pi); }
+    catch (e) { setError(errorMessage(e)); setBusy(false); }
+  }
+  return <div className="workspace-welcome"><h2 className="sr-only">{title}</h2>
+    <Empty title="What would you like to work on?">Start a conversation with your agent.</Empty>
+    <div className="composer-area">
+      <ErrorNotice message={error || catalogError || folderError || (unavailableFolder ? "This folder is unavailable. Choose All Workspaces or another folder." : unavailableModel ? "The selected model is unavailable. Choose a model from this organization." : unavailableThinking ? "The saved thinking level is unavailable for this model. Choose a supported level or Model default." : "")} />
+      <form ref={formRef} className={collapsed ? "composer-collapsed" : undefined} onSubmit={event => { event.preventDefault(); void submit(); }}>
+        <ConversationFolder folders={folders} folderId={folderId} disabled={busy || !folders || Boolean(folderError)} onChange={onFolderChange} />
+        <ComposerAttachmentChips projectId={project.id} attachments={attachments} onChange={setAttachments} disabled={busy} />
+        <textarea aria-label="Message your agent" placeholder="Message your agent…" value={draft} disabled={busy} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void submit(); } }} />
+        <div className="composer-controls">
+          <ComposerAttachments orgId={org.id} projectId={project.id} attachments={attachments} onChange={setAttachments} disabled={busy} onBusy={setUploading} />
+          <Picker label="Model" heading="Model" icon={Cpu} width={360} value={model} placeholder="Model" options={modelOptions} title={catalogReady && !available.length ? "No models are available. An administrator can connect a provider in Connections." : undefined} onChange={value => { setModelChoice(value); setThinkingChoice(""); }} disabled={busy || !catalogReady || Boolean(catalogError) || sessionMenuUnavailable(modelOptions, model)} />
+          <Picker label="Thinking level" heading="Thinking Level" icon={Brain} value={harness === "pi" ? thinking : ""} placeholder="Thinking" valueLabel={!thinking && harness === "pi" ? (selectedModel?.defaultThinkingLevel ? thinkingLabel(selectedModel.defaultThinkingLevel) : "Thinking") : undefined} options={thinkingOptions} onChange={setThinkingChoice} disabled={busy || !catalogReady || Boolean(catalogError) || !selectedModel || sessionMenuUnavailable(thinkingOptions, thinking)} />
+          <ComposerTools settings={tools} onChange={setTools} disabled={busy} />
+          <div className="composer-send-actions"><ComposerCollapse collapsed={collapsed} onChange={setCollapsed} /><ComposerMicrophone />
+            <button className="send-button" aria-label="Send message" type="submit" disabled={busy || uploading || !ready || (!draft.trim() && !attachments.length)}><Icon icon={ArrowUp} size={16} weight="send" /></button>
+          </div>
+        </div>
+      </form><div className="composer-status" role="status">{busy ? "Starting conversation…" : null}</div>
+    </div>
+  </div>;
+}
+
+function ConversationFolder({ folders, folderId, disabled, locked, workingDirectory, onChange, children }: {
+  folders?: WorkspaceFolder[]; folderId: string | null; disabled: boolean; locked?: boolean;
+  workingDirectory?: string | null; onChange: (id: string | null) => void; children?: ReactNode;
+}) {
+  return <div className="composer-folder-row"><Picker label="Conversation folder" heading="Folder" icon={Folder}
+    className={`composer-folder${locked ? " composer-folder-locked" : ""}`} width={320} value={folderId ?? ""}
+    placeholder="All Workspaces" title={locked ? `The folder is fixed after the first message.${workingDirectory ? ` Working directory: ${workingDirectory}` : ""}` : "Choose a folder in this workspace"}
+    options={[{ value: "", label: "All Workspaces" }, ...(folderId && !folders?.some(folder => folder.id === folderId) ? [{ value: folderId, label: "Unavailable folder", disabled: true }] : []), ...(folders?.map(folder => ({ value: folder.id, label: folder.name })) ?? [])]}
+    disabled={disabled || locked} onChange={value => onChange(value || null)} />{children}</div>;
+}
+
+function ComposerMicrophone() {
+  return <button type="button" className="composer-microphone" disabled aria-label="Dictation coming later" title="Dictation coming later"><Icon icon={Mic} size={16} weight="control" /></button>;
+}
+
+function ComposerCollapse({ collapsed, onChange }: { collapsed: boolean; onChange: (value: boolean) => void }) {
+  return <button type="button" className="composer-collapse" aria-label={collapsed ? "Expand composer" : "Collapse composer"}
+    title={collapsed ? "Expand composer" : "Collapse composer"} aria-expanded={!collapsed} onClick={() => onChange(!collapsed)}>
+    <Icon icon={ChevronDown} size={18} weight="control" className={collapsed ? undefined : "composer-collapse-up"} />
+  </button>;
+}
+
 function PiSDKSettings({ conversationId }: { conversationId: string }) {
   const catalog = useResource<{
     defaultGeneration: string;
@@ -358,10 +448,10 @@ function PiSDKSettings({ conversationId }: { conversationId: string }) {
   );
 }
 export function ConversationForm({
-  project,
   conversation,
   folders,
   initialFolder,
+  initialAgent,
   onSave,
   onCancel,
 }: {
@@ -370,6 +460,7 @@ export function ConversationForm({
   conversation?: Conversation;
   folders?: WorkspaceFolder[];
   initialFolder?: string | null;
+  initialAgent?: string | null;
   onSave: (body: unknown) => Promise<void>;
   onCancel: () => void;
 }) {
@@ -382,12 +473,9 @@ export function ConversationForm({
           conversation
             ? {
                 title: d.get("title"),
-                pi: {
-                  codeMode: d.get("codeMode"),
-                  subagentConcurrency: Number(d.get("subagentConcurrency")),
-                },
+                ...(conversation.harness === "pi" ? { pi: { codeMode: d.get("codeMode"), subagentConcurrency: Number(d.get("subagentConcurrency")) } } : {}),
               }
-            : { mode: d.get("mode"), folderId: d.get("folderId") || null },
+            : { mode: "write", harness: d.get("harness"), folderId: d.get("folderId") || null },
         )
       }
     >
@@ -402,7 +490,7 @@ export function ConversationForm({
               autoFocus
             />
           </Field>
-          <details className="settings-disclosure pi-options">
+          {conversation.harness === "pi" ? <><details className="settings-disclosure pi-options">
             <summary>
               <Icon
                 icon={ChevronDown}
@@ -433,24 +521,12 @@ export function ConversationForm({
               />
             </Field>
           </details>
-          <PiSDKSettings conversationId={conversation.id} />
+          <PiSDKSettings conversationId={conversation.id} /></> : <p className="muted">{agentName(conversation.harness)} keeps its native runtime settings and approval controls.</p>}
         </>
       ) : (
         <>
-          <Field
-            label="Session permissions"
-            hint="Access is fixed for this session."
-          >
-            <select
-              name="mode"
-              defaultValue={project?.access ?? "read"}
-              autoFocus
-            >
-              <option value="read">Read-only</option>
-              {project?.access === "write" ? (
-                <option value="write">Full access</option>
-              ) : null}
-            </select>
+          <Field label="Agent">
+            <select name="harness" defaultValue={initialAgent ?? "pi"} autoFocus>{agents.map(agent => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</select>
           </Field>
           <Field label="Folder">
             <select
@@ -497,7 +573,8 @@ function ModelControls({
     setValue(current);
     setThinking(currentThinking);
   }, [current, currentThinking]);
-  const levels = models.find((m) => m.id === value)?.thinkingLevels ?? [];
+  const selectedModel = models.find((m) => m.id === value);
+  const levels = selectedModel?.thinkingLevels ?? [];
   async function change(body: unknown) {
     onSaving(true);
     onError("");
@@ -519,8 +596,8 @@ function ModelControls({
     }
   }
   const modelOptions: PickerOption[] = [
-    ...(current && !models.some((m) => m.id === current)
-      ? [{ value: current, label: `${current} (unavailable)`, disabled: true }]
+    ...(value && !models.some((m) => m.id === value)
+      ? [{ value, label: `${value} (unavailable)`, disabled: true }]
       : []),
     ...models.map((m) => {
       const label = m.name || m.id;
@@ -537,7 +614,7 @@ function ModelControls({
       };
     }),
   ];
-  const thinkingOptions: PickerOption[] = [
+  const thinkingOptions: PickerOption[] = levels.length || thinking ? [
     { value: "", label: "Model default" },
     ...(thinking && !levels.includes(thinking)
       ? [{ value: thinking, label: `${thinking} (unavailable)`, disabled: true }]
@@ -549,7 +626,7 @@ function ModelControls({
           ? "Extra high"
           : level.charAt(0).toUpperCase() + level.slice(1),
     })),
-  ];
+  ] : [];
   return (
     <div className="composer-model-controls">
       <Picker
@@ -558,13 +635,11 @@ function ModelControls({
         icon={Cpu}
         width={360}
         value={value}
-        placeholder="Select a model"
+        placeholder="Model"
         options={modelOptions}
-        emptyMessage="No models are available. An administrator can connect a provider in Connections."
-        disabled={disabled || !canEdit || !conversation}
+        title={!models.length ? "No models are available. An administrator can connect a provider in Connections." : undefined}
+        disabled={disabled || !canEdit || !conversation || sessionMenuUnavailable(modelOptions, value)}
         onChange={(model) => {
-          setValue(model);
-          setThinking("");
           void change({ model });
         }}
       />
@@ -573,16 +648,17 @@ function ModelControls({
         heading="Thinking Level"
         icon={Brain}
         value={thinking}
-        placeholder="Model default"
+        placeholder="Thinking"
+        valueLabel={!thinking ? (selectedModel?.defaultThinkingLevel ? thinkingLabel(selectedModel.defaultThinkingLevel) : "Thinking") : undefined}
         options={thinkingOptions}
         disabled={
           disabled ||
           !canEdit ||
           !conversation ||
-          (!levels.length && !thinking)
+          !selectedModel ||
+          sessionMenuUnavailable(thinkingOptions, thinking)
         }
         onChange={(next) => {
-          setThinking(next);
           void change({ pi: { thinking: next || null } });
         }}
       />
@@ -648,6 +724,7 @@ function RetainedReply({ id, message }: { id: string; message: Message }) {
 }
 export function Thread({
   id,
+  initialError = "",
   project,
   models,
   refresh,
@@ -655,13 +732,14 @@ export function Thread({
   asset,
 }: {
   id: string;
+  initialError?: string;
   project?: Project;
   models: Model[];
   refresh: () => void;
   onDeleted: () => void;
   asset?: { onSaved: () => void };
 }) {
-  const { user } = useWorkspace();
+  const { user, org } = useWorkspace();
   const assetSaved = useRef(asset?.onSaved);
   assetSaved.current = asset?.onSaved;
   const [, setWorkspaceQuery] = useSearchParams();
@@ -691,6 +769,8 @@ export function Thread({
   const [olderLoaded, setOlderLoaded] = useState(false);
   const draftKey = `wme:draft:${user.id}:${id}`;
   const [savedDraft] = useState(() => loadConversationDraft(draftKey));
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>(restored?.attachments ?? savedDraft?.attachments ?? []);
+  const [uploading, setUploading] = useState(false);
   const [draft, setDraft] = useState(
     restored?.content ?? savedDraft?.content ?? "",
   );
@@ -698,8 +778,8 @@ export function Thread({
     restored?.kind ?? savedDraft?.kind ?? "message",
   );
   useEffect(() => {
-    saveConversationDraft(draftKey, draft, kind);
-  }, [draftKey, draft, kind]);
+    saveConversationDraft(draftKey, draft, kind, undefined, attachments);
+  }, [draftKey, draft, kind, attachments]);
   const inputElement = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const input = inputElement.current;
@@ -711,6 +791,7 @@ export function Thread({
   }, [draft]);
   const [nativeOpen, setNativeOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  const [acceptedMessage, setAcceptedMessage] = useState(false);
   const [modelSaving, setModelSaving] = useState(false);
   const [uncertain, setUncertain] = useState(Boolean(restored));
   const request = useRef<
@@ -718,10 +799,12 @@ export function Thread({
         id: string;
         content: string;
         kind?: "message" | "comment";
+        attachments?: ComposerAttachment[];
       }
     | undefined
   >(restored);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError);
+  const { formRef, collapsed, setCollapsed } = useComposerLayout();
   // A navigation can lose the POST acknowledgement after durable admission.
   // Reconcile only this user's exact receipt; never replay an uncertain input.
   useEffect(() => {
@@ -735,21 +818,23 @@ export function Thread({
           message.authorId === user.id &&
           message.requestId === pending.id &&
           message.content === pending.content.trim() &&
+          JSON.stringify((message.attachments ?? []).map(({kind,id}) => ({kind,id}))) === JSON.stringify((pending.attachments ?? []).map(({kind,id}) => ({kind,id}))) &&
           (message.kind ?? "message") === (pending.kind ?? "message"),
       )
     )
       return;
     request.current = undefined;
+    if (pending.kind !== "comment") setAcceptedMessage(true);
     settleConversationInput(pendingKey, draftKey, pending);
     setUncertain(false);
     setDraft((current) => (current === pending.content ? "" : current));
+    setAttachments(current => JSON.stringify(current) === JSON.stringify(pending.attachments ?? []) ? [] : current);
     setError("");
   }, [messages.data, uncertain, pendingKey, user.id]);
   const [streamState, setStreamState] = useState("Connecting…");
   const [initialCursor, setInitialCursor] = useState<number>();
   const [tool, setTool] = useState("");
   const [editing, setEditing] = useState(false);
-  const [members, setMembers] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
@@ -782,12 +867,10 @@ export function Thread({
   indexedRuns.current = new Set(activityByRun.keys());
   const active =
     runs.data?.items.filter((r) => activeStatuses.has(r.status)) ?? [];
-  const creator = !!asset || detail.data?.createdBy === user.id;
-  const canAct =
-    !!detail.data &&
-    (!project ||
-      detail.data.mode === "read" ||
-      (project.access === "write" && detail.data.effectiveMode !== "read"));
+  const creator = Boolean(detail.data);
+  const canAct = Boolean(detail.data);
+  const native = useNativeControls({ conversation: detail.data, models, disabled: active.length > 0 || sending || uncertain || modelSaving,
+    onSaving: setModelSaving, onSaved: () => { detail.reload(); refresh(); } });
   async function stop() {
     try {
       await send(`/enterprise/api/conversations/${id}/cancel`, {});
@@ -958,10 +1041,11 @@ export function Thread({
       !canAct ||
       sending ||
       modelSaving ||
-      (!draft.trim() && !request.current)
+      uploading ||
+      (!draft.trim() && !attachments.length && !request.current)
     )
       return;
-    if (kind === "message" && !active.length && !detail.data?.model) {
+    if (kind === "message" && !active.length && detail.data?.harness === "pi" && !detail.data?.model) {
       setError("Select a model before sending a message.");
       return;
     }
@@ -971,6 +1055,7 @@ export function Thread({
       id: crypto.randomUUID(),
       content: draft,
       kind,
+      attachments,
     };
     request.current = pending;
     savePendingMessage(pendingKey, pending);
@@ -979,11 +1064,15 @@ export function Thread({
         content: pending.content,
         requestId: pending.id,
         kind: pending.kind ?? "message",
+        attachments: (pending.attachments ?? []).map(({kind,id}) => ({kind,id})),
       });
       request.current = undefined;
+      if (pending.kind !== "comment") setAcceptedMessage(true);
+      detail.reload();
       settleConversationInput(pendingKey, draftKey, pending);
       setUncertain(false);
       setDraft("");
+      setAttachments([]);
       messages.reload();
       runs.reload();
       refresh();
@@ -1023,68 +1112,58 @@ export function Thread({
     mergeMessages(older, history),
     messages.data?.items ?? [],
   );
+  const conversationActions = (
+    <Menu label="Conversation actions" className="small">
+      <MenuLink href={`/enterprise/api/conversations/${id}/export`} download>
+        Export messages
+      </MenuLink>
+      <MenuLink
+        href={`/enterprise/api/conversations/${id}/export?full=1`}
+        download
+      >
+        Export full run
+      </MenuLink>
+      <MenuItem onSelect={() => setNativeOpen(true)}>Native history</MenuItem>
+      <MenuSeparator />
+      <MenuItem
+        icon={Square}
+        disabled={!canAct}
+        title="Stop this thread’s current work and background processes. Other threads keep running."
+        onSelect={() => void stop()}
+      >
+        {active.length ? "Stop" : "Stop background work"}
+      </MenuItem>
+      {creator ? (
+        <>
+          <MenuItem
+            icon={Settings}
+            disabled={!canAct || active.length > 0}
+            onSelect={() => setEditing(true)}
+          >
+            Conversation settings
+          </MenuItem>
+          {!asset ? (
+            <MenuItem
+              icon={Trash2}
+              danger
+              disabled={!canAct}
+              onSelect={() => setDeleting(true)}
+            >
+              Move to Trash
+            </MenuItem>
+          ) : null}
+        </>
+      ) : null}
+    </Menu>
+  );
   return (
     <>
-      <header className="thread-header">
-        <h2 title={detail.data?.title}>
-          {detail.data?.title ?? "Conversation"}
-        </h2>
-        <div className="thread-header-actions">
-          {!asset ? (
-            <button
-              type="button"
-              className="icon-button small"
-              aria-label="Conversation members"
-              title="Conversation members"
-              onClick={() => setMembers(true)}
-            >
-              <Icon icon={Users} size={16} />
-            </button>
-          ) : null}
-          <Menu label="Conversation actions" className="small">
-            <MenuLink href={`/enterprise/api/conversations/${id}/export`} download>
-              Export messages
-            </MenuLink>
-            <MenuLink
-              href={`/enterprise/api/conversations/${id}/export?full=1`}
-              download
-            >
-              Export full run
-            </MenuLink>
-            <MenuItem onSelect={() => setNativeOpen(true)}>Native history</MenuItem>
-            <MenuSeparator />
-            <MenuItem
-              icon={Square}
-              disabled={!canAct}
-              title="Stop this thread’s current work and background processes. Other threads keep running."
-              onSelect={() => void stop()}
-            >
-              {active.length ? "Stop" : "Stop background work"}
-            </MenuItem>
-            {creator ? (
-              <>
-                <MenuItem
-                  icon={Settings}
-                  disabled={!canAct || active.length > 0}
-                  onSelect={() => setEditing(true)}
-                >
-                  Conversation settings
-                </MenuItem>
-                {!asset ? (
-                  <MenuItem
-                    icon={Trash2}
-                    danger
-                    disabled={!canAct}
-                    onSelect={() => setDeleting(true)}
-                  >
-                    Move to Trash
-                  </MenuItem>
-                ) : null}
-              </>
-            ) : null}
-          </Menu>
-        </div>
-      </header>
+      {asset ? (
+        <header className="thread-header">
+          <h2 title={detail.data?.title}>{detail.data?.title ?? "Conversation"}</h2>
+          <div className="thread-header-actions">{conversationActions}</div>
+        </header>
+      ) : <h2 className="sr-only">{detail.data?.title ?? "Conversation"}</h2>}
       <NativeHistory
         id={id}
         opened={nativeOpen}
@@ -1136,7 +1215,7 @@ export function Thread({
           <Empty title="What would you like to work on?">
             {asset
               ? "Describe what you want to create or change. The agent saves a private draft for your review."
-              : "Your agent can use the files available in this project."}
+              : "Your agent can use the files available in this workspace."}
           </Empty>
         ) : (
           combined.map((m) => (
@@ -1148,6 +1227,7 @@ export function Thread({
                 <time dateTime={m.createdAt}>{date(m.createdAt)}</time>
               </div>
               <div className="message-content">
+                {m.attachments?.length ? <div className="message-attachments">{m.attachments.map(item => <span key={`${item.kind}:${item.id}`}><Icon icon={item.kind === "conversation" ? MessageSquare : item.kind === "note" ? FileText : Paperclip} size={14} />{item.title}</span>)}</div> : null}
                 {m.role === "assistant" ? (
                   activityByRun.has(m.runId) ? (
                     <>
@@ -1280,6 +1360,7 @@ export function Thread({
           ))}
       </div>
       <div className="composer-area">
+        {native.feedback}
         {!following ? (
           <button
             type="button"
@@ -1291,7 +1372,7 @@ export function Thread({
                 scroll.current.scrollTop = scroll.current.scrollHeight;
             }}
           >
-            <Icon icon={ArrowDown} size={12} weight="control" />
+            <Icon icon={ArrowDown} size={12} weight="send" />
             Latest reply
           </button>
         ) : null}
@@ -1299,7 +1380,7 @@ export function Thread({
           items={activity.items}
           activeRunIds={new Set(active.map((run) => run.id))}
         />
-        <form
+        <form ref={formRef} className={collapsed ? "composer-collapsed" : undefined}
           onSubmit={(e) => {
             e.preventDefault();
             void submit();
@@ -1309,73 +1390,26 @@ export function Thread({
             Message your agent
           </label>
           {!asset ? (
-            <div className="composer-folder-row">
-              <Picker
-                label="Conversation folder"
-                heading="Folder"
-                icon={FolderOpen}
-                className="composer-folder"
-                width={320}
-                value={detail.data?.folderId ?? ""}
-                placeholder="All Workspaces"
-                title={
-                  detail.data?.workingDirectory ??
-                  "Choose a working folder before sending"
-                }
-                options={[
-                  { value: "", label: "All Workspaces" },
-                  ...(detail.data?.folderId &&
-                  !folders.data?.items.some((f) => f.id === detail.data?.folderId)
-                    ? [{ value: detail.data.folderId, label: "Removed folder" }]
-                    : []),
-                  ...(folders.data?.items.map((f) => ({
-                    value: f.id,
-                    label: f.name,
-                  })) ?? []),
-                ]}
-                disabled={
-                  !detail.data ||
-                  detail.data.workspaceLocked ||
-                  detail.data.createdBy !== user.id ||
-                  sending ||
-                  modelSaving ||
-                  uncertain
-                }
-                onChange={async (value) => {
-                  const navigationTarget = window.location.href;
-                  const folderId = value || null;
-                  setModelSaving(true);
-                  try {
-                    const updated = await send<Conversation>(
-                      `/enterprise/api/conversations/${id}/organization`,
-                      { folderId },
-                      "PATCH",
-                    );
-                    if (window.location.href === navigationTarget)
-                      setWorkspaceQuery(
-                        (current) => {
-                          const next = new URLSearchParams(current);
-                          next.set("folder", updated.folderId ?? "all");
-                          return next;
-                        },
-                        { replace: true },
-                      );
-                    detail.reload();
-                    workspaceChanged();
-                  } catch (e) {
-                    setError(errorMessage(e));
-                  } finally {
-                    setModelSaving(false);
-                  }
-                }}
-              />
-            </div>
+            <ConversationFolder folders={folders.data?.items} folderId={detail.data?.folderId ?? null}
+              workingDirectory={detail.data?.workingDirectory} locked={detail.data?.workspaceLocked || acceptedMessage}
+              disabled={!detail.data || !folders.data || Boolean(folders.error) || sending || modelSaving || uncertain}
+              onChange={async folderId => {
+                const navigationTarget = window.location.href;
+                setModelSaving(true);
+                try {
+                  const updated = await send<Conversation>(`/enterprise/api/conversations/${id}/organization`, { folderId }, "PATCH");
+                  if (window.location.href === navigationTarget) setWorkspaceQuery(current => { const next = new URLSearchParams(current); next.set("folder", updated.folderId ?? "all"); return next; }, { replace: true });
+                  detail.reload(); workspaceChanged();
+                } catch (e) { setError(errorMessage(e)); }
+                finally { setModelSaving(false); }
+              }}>{conversationActions}</ConversationFolder>
           ) : null}
+          <ComposerAttachmentChips projectId={project?.id} attachments={attachments} onChange={setAttachments} disabled={sending || uncertain} />
           <textarea
             ref={inputElement}
             id="message"
             rows={3}
-            placeholder={canAct ? "Message your agent…" : "Read-only for you"}
+            placeholder={canAct ? `Message ${agentName(detail.data?.harness)}…` : "Loading conversation…"}
             value={draft}
             maxLength={100000}
             readOnly={uncertain}
@@ -1393,39 +1427,22 @@ export function Thread({
             }}
           />
           <div className="composer-controls">
-            <ModelControls
+            {!asset && project ? <ComposerAttachments key={id} orgId={org.id} projectId={project.id} attachments={attachments} onChange={setAttachments} disabled={sending || uncertain || !canAct || kind === "comment"} onBusy={setUploading} /> : null}
+            {(!detail.data?.harness || detail.data.harness === "pi") ? <ModelControls
               conversation={detail.data}
               models={models}
               disabled={
                 active.length > 0 || sending || uncertain || modelSaving
               }
-              canEdit={creator && canAct}
+              canEdit={canAct}
               onSaving={setModelSaving}
               onSaved={() => {
                 detail.reload();
                 refresh();
               }}
               onError={setError}
-            />
-            <span
-              className="session-mode"
-              title={
-                detail.data?.mode === "write" && !canAct
-                  ? "Your project access is read-only. Create a read-only conversation to use the agent."
-                  : "Access is fixed for this conversation."
-              }
-            >
-              {detail.data?.mode === "write" && canAct ? (
-                <Icon icon={ShieldCheck} size={14} weight="control" />
-              ) : (
-                <Icon icon={LockKeyhole} size={14} weight="control" />
-              )}
-              <span>
-                {detail.data?.mode === "write" && canAct
-                  ? "Full access"
-                  : "Read-only"}
-              </span>
-            </span>
+            /> : native.controls}
+            {!asset ? <ComposerTools conversationId={id} settings={detail.data?.tools} onSaved={detail.reload} onSaving={setModelSaving} disabled={!canAct || sending || uncertain || modelSaving} /> : null}
             <div className="composer-send-actions">
               <div className="message-kind">
                 <Picker
@@ -1445,13 +1462,16 @@ export function Thread({
                     {
                       value: "comment",
                       label: "Comment",
+                      disabled: attachments.length > 0,
                       description: "Saved for later agent context without starting work.",
                     },
                   ]}
                   onChange={(value) => setKind(value as "message" | "comment")}
                 />
               </div>
-              {active.length ? (
+              <ComposerCollapse collapsed={collapsed} onChange={setCollapsed} />
+              <ComposerMicrophone />
+              {active.length && !draft.trim() && !attachments.length && !uncertain ? (
                 <button
                   className="stop-button"
                   type="button"
@@ -1462,8 +1482,7 @@ export function Thread({
                 >
                   <Icon icon={Square} size={12} weight="control" />
                 </button>
-              ) : null}
-              <button
+              ) : <button
                 type="submit"
                 className={`send-button${uncertain ? " retry" : ""}`}
                 aria-label={
@@ -1477,7 +1496,8 @@ export function Thread({
                   !canAct ||
                   sending ||
                   modelSaving ||
-                  (!draft.trim() && !uncertain)
+                  uploading ||
+                  (!draft.trim() && !attachments.length && !uncertain)
                 }
               >
                 {uncertain ? (
@@ -1485,13 +1505,13 @@ export function Thread({
                 ) : (
                   <Icon icon={ArrowUp} size={16} weight="send" />
                 )}
-              </button>
+              </button>}
             </div>
           </div>
         </form>
         <div className="composer-status" role="status">
           {!canAct && detail.data
-            ? "Read-only for you. Start a read-only conversation to use the agent."
+            ? "Conversation unavailable."
             : uncertain
               ? "Delivery unconfirmed"
               : active.length
@@ -1500,7 +1520,7 @@ export function Thread({
                   : "Working · messages steer the active run"
                 : kind === "comment"
                   ? "Comments are saved for later agent context"
-                  : streamState}
+                  : streamState === "Connected" ? null : streamState}
         </div>
       </div>
       {editing && detail.data ? (
@@ -1517,13 +1537,6 @@ export function Thread({
             }}
           />
         </Modal>
-      ) : null}
-      {members ? (
-        <ThreadMembers
-          id={id}
-          canAdd={canAct}
-          onClose={() => setMembers(false)}
-        />
       ) : null}
       {deleting ? (
         <Confirm
@@ -1543,76 +1556,6 @@ export function Thread({
     </>
   );
 }
-function ThreadMembers({
-  id,
-  canAdd,
-  onClose,
-}: {
-  id: string;
-  canAdd: boolean;
-  onClose: () => void;
-}) {
-  const members = useResource<
-    List<
-      User & {
-        isCreator?: boolean;
-      }
-    >
-  >(`/enterprise/api/conversations/${id}/members`);
-  const people = useResource<List<User>>(
-    canAdd ? `/enterprise/api/conversations/${id}/eligible-members` : null,
-  );
-  return (
-    <Modal title="Conversation members" onClose={onClose}>
-      <p className="muted">
-        Conversations are private until you add people. Participants must retain
-        the project access required by this conversation. Read-only project
-        access never grants full-access agent authority.
-      </p>
-      <ErrorNotice message={members.error || people.error} />
-      <div className="row-list">
-        {members.data?.items.map((u) => (
-          <div className="setting-row" key={u.id}>
-            <div>
-              <strong>{u.name || u.email}</strong>
-              <small>
-                {u.email}
-                {u.isCreator ? " · Creator" : ""}
-              </small>
-            </div>
-          </div>
-        ))}
-      </div>
-      {people.data ? (
-        <AsyncForm
-          submitLabel="Add person"
-          onSubmit={async (d) => {
-            await send(`/enterprise/api/conversations/${id}/members`, {
-              userId: d.get("userId"),
-            });
-            members.reload();
-          }}
-        >
-          <Field label="Project member">
-            <select name="userId" required defaultValue="">
-              <option value="" disabled>
-                Select a person
-              </option>
-              {people.data?.items
-                .filter((u) => !members.data?.items.some((m) => m.id === u.id))
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name || u.email}
-                  </option>
-                ))}
-            </select>
-          </Field>
-        </AsyncForm>
-      ) : null}
-    </Modal>
-  );
-}
-
 function ConversationTrash({ project }: { project: Project }) {
   const { user } = useWorkspace();
   const chats = useResource<List<Conversation>>(

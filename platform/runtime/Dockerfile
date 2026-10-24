@@ -8,14 +8,16 @@ FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dc
 WORKDIR /build
 COPY package.json package-lock.json ./
 COPY platform ./platform
-RUN npm install --global npm@12.2.0 && npm ci --ignore-scripts && npm run build:server
+RUN npm install --global npm@12.2.0 && npm ci --no-audit --no-fund --ignore-scripts && npm run build:server
 
 FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS dependencies
 WORKDIR /opt/runtime
 COPY package.json package-lock.json ./
 COPY platform/apps/web/package.json ./platform/apps/web/package.json
-COPY platform/packages ./platform/packages
-RUN npm install --global npm@12.2.0 && npm ci --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
+COPY platform/packages/runtime/package.json ./platform/packages/runtime/package.json
+RUN npm install --global npm@12.2.0 && npm ci --no-audit --no-fund --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
+COPY platform/runtime/install-native.mjs /opt/install-native.mjs
+RUN node /opt/install-native.mjs /opt/runtime/node_modules
 
 FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe
 RUN test "$(dpkg --print-architecture)" = amd64 \
@@ -39,11 +41,20 @@ COPY package-lock.json ./package-lock.json
 COPY --from=build /build/platform/dist/packages/runtime/src ./src
 RUN chmod 0755 /opt/runtime/src/background-cli.js && ln -s /opt/runtime/src/background-cli.js /usr/local/bin/wme-background
 RUN chmod 0755 /opt/runtime/src/asset-cli.js && ln -s /opt/runtime/src/asset-cli.js /usr/local/bin/wme-asset
+RUN chmod 0755 /opt/runtime/src/workspace-cli.js && ln -s /opt/runtime/src/workspace-cli.js /usr/local/bin/wme-workspace
+# Native adapters and their pinned CLI dependencies are installed from the lockfile.
+RUN test -x /opt/runtime/node_modules/.bin/codex-acp \
+ && test -x /opt/runtime/node_modules/.bin/claude-agent-acp \
+ && test -x /opt/runtime/node_modules/.bin/grok \
+ && test -x /opt/runtime/node_modules/.bin/opencode
 COPY platform/runtime/AGENTS.md /opt/runtime/AGENTS.md
 ENV NODE_ENV=production HOME=/home/agent PATH=/opt/document-tools/bin:/usr/local/bin:/usr/bin:/bin
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/wovenmatter-enterprise/
 COPY third-party /usr/share/doc/wovenmatter-enterprise/third-party
 COPY --from=boundary /wme-restrict /usr/local/bin/wme-restrict
+ARG WME_REVISION=development
+LABEL org.opencontainers.image.revision=$WME_REVISION
+ENV WME_REVISION=$WME_REVISION
 USER 0:0
 WORKDIR /workspace
 ENTRYPOINT ["node", "/opt/runtime/src/project-daemon.js"]

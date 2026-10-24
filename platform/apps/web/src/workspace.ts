@@ -3,6 +3,7 @@ import type { Organization, User } from "./api";
 
 type Workspace = {
   user: User;
+  onUserChange: (user: User) => void;
   org: Organization;
   isAdmin: boolean;
   libraryFull: boolean;

@@ -196,6 +196,19 @@ function scalar(value: unknown): string {
   return String(value).slice(0, 4000);
 }
 export async function creator(ctx: AppContext, a: Asset) {
+  // Workspace reports outlive their original author. Source files still pass
+  // the workspace/share policy in source(), using a current workspace member.
+  if (a.project_id) {
+    const member = await ctx.db.get<any>(
+      "SELECT u.* FROM users u WHERE u.enabled=1 AND (u.role='owner' OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u.id AND m.org_id=? AND (m.role='admin' OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.user_id=u.id AND pm.project_id=?)))) ORDER BY (u.id=?) DESC,u.id LIMIT 1",
+      [a.org_id, a.project_id, a.creator_id],
+    );
+    if (member) {
+      const user = mapUser(member);
+      await ctx.requireProject(user, a.project_id);
+      return user;
+    }
+  }
   const row = await ctx.db.get<any>(
     "SELECT * FROM users WHERE id=? AND enabled=1",
     [a.creator_id],

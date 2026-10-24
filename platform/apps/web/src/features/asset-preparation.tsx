@@ -5,7 +5,6 @@ import { useWorkspace } from "../workspace";
 import {
   AsyncForm,
   ErrorNotice,
-  Field,
   Loading,
   Status,
 } from "../components/ui";
@@ -33,8 +32,7 @@ export function AssetPreparation({
   const models = useResource<List<Model>>(
     `/enterprise/api/organizations/${org.id}/inference/models`,
   );
-  const [mode, setMode] = useState("read"),
-    [starting, setStarting] = useState(false),
+  const [starting, setStarting] = useState(false),
     [error, setError] = useState("");
   const refresh = useCallback(() => {
     agent.reload();
@@ -50,7 +48,7 @@ export function AssetPreparation({
     try {
       await send<Conversation>(
         "/enterprise/api/assets/" + asset.id + "/agent",
-        { mode },
+        { mode: "write" },
       );
       agent.reload();
     } catch (e) {
@@ -99,19 +97,6 @@ export function AssetPreparation({
             }}
           >
             <h3>Start a session</h3>
-            <Field
-              label="Session permissions"
-              hint="Access is fixed for this session."
-            >
-              <select
-                value={mode}
-                onChange={(e) => setMode(e.target.value)}
-                disabled={starting}
-              >
-                <option value="read">Read-only</option>
-                <option value="write">Full access</option>
-              </select>
-            </Field>
             <button className="primary" disabled={starting}>
               {starting ? "Starting…" : "Start session"}
             </button>

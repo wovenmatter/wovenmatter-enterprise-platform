@@ -272,11 +272,19 @@ async function native(input, answer = "SYNTHETIC_RUNTIME_ACCEPTANCE") {
     AbortSignal.timeout(45000),
   );
   assert.equal(events.at(-1)?.type, "completed", JSON.stringify(events));
-  assert.ok(
-    events.some((e) => e.type === "input_accepted"),
-    "Missing actual input receipt",
+  assert.equal(
+    events.filter((e) => e.type === "input_accepted").length,
+    1,
+    "Each turn must receive exactly one actual input receipt",
   );
-  if (input.pi) {
+  if (input.harness === "pi" && input.pi) {
+    const userRecords = new Map(events
+      .filter((event) => event.type === "native_records")
+      .flatMap((event) => event.batch.records)
+      .filter((record) => record.kind === "pi.user")
+      .map((record) => [record.id, record]));
+    assert.equal(userRecords.size, 1, "Each Pi turn must append one user input without replaying prior inputs");
+    assert.equal([...userRecords.values()][0].runID, input.runId);
     const options = events
       .filter((e) => e.type === "native_update")
       .flatMap((e) => e.update.configOptions ?? []);
@@ -293,13 +301,8 @@ async function native(input, answer = "SYNTHETIC_RUNTIME_ACCEPTANCE") {
       "Pi thinking preference was dropped at the container boundary",
     );
   }
-  assert.equal(
-    events
-      .filter((e) => e.type === "assistant_delta")
-      .map((e) => e.delta)
-      .join(""),
-    answer,
-  );
+  const snapshots = events.filter(e => e.type === "native_update" && e.update.sessionUpdate === "agent_message_chunk" && e.update._meta?.wovenAssistantSnapshot);
+  assert.equal(snapshots.length ? snapshots.at(-1).update.content.text : events.filter(e => e.type === "assistant_delta").map(e => e.delta).join(""), answer);
   return events.find((e) => e.type === "native_session")?.sessionId;
 }
 async function workspaceStatus() {
@@ -578,11 +581,14 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     "shared edit",
   );
   const nativeIds = new Map();
-  for (const harness of ["pi"]) {
-    const input = await request(harness),
+  const nativeRequests = new Map();
+  for (const harness of ["pi", "codex", "claude_code", "grok_build", "opencode"]) {
+    const model = ({codex: "gpt-5.4", claude_code: "claude-sonnet-4-6"})[harness] ?? "synthetic-acceptance-model";
+    const input = await request(harness, "write", harness, model),
       nativeId = await native(input);
     assert.ok(nativeId);
     nativeIds.set(harness, nativeId);
+    nativeRequests.set(harness, input);
     const environment = (await workspaceStatus()).sessions.find(
       (s) => s.conversationId === input.conversationId,
     );
@@ -599,7 +605,7 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
       environment.processId,
       "Ordinary turn completion recreated the thread environment",
     );
-    const toolInput = await request(
+    if (harness === "pi") { const toolInput = await request(
       harness,
       "write",
       harness + "-tools",
@@ -607,6 +613,7 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     );
     toolInput.egressProxyUrl = "http://api:4101";
     await native(toolInput, "PROXY_TOOL_VERIFIED");
+    }
     console.log(
       harness +
         " actual installed native turn and durable resume passed against synthetic gateway",
@@ -654,9 +661,32 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
     peerBefore,
     "Stopping one Pi session must preserve sibling background work",
   );
-  const resume = await request("pi", "read", "pi");
+  // Cold resume must use the exact private storage lineage opened above. Access
+  // is not a selector for another native history directory.
+  const resume = { ...nativeRequests.get("pi"), runId: randomUUID() };
   await runtime.stopSession(projectId, "pi", 1);
-  await native({ ...resume, generation: 1, resumeId: nativeIds.get("pi") });
+  assert.equal(
+    await native({ ...resume, generation: 1, resumeId: nativeIds.get("pi") }),
+    nativeIds.get("pi"),
+  );
+  // A populated legacy read session gains write authority while keeping its
+  // original private native root, exactly as conversation.native_storage_mode.
+  const legacyRead = await request("pi", "read", "pi-legacy-read");
+  const legacyId = await native(legacyRead);
+  assert.ok(legacyId);
+  await runtime.stopSession(projectId, legacyRead.conversationId, 1);
+  const upgraded = {
+    ...await request("pi", "write", legacyRead.conversationId),
+    generation: 1,
+    resumeId: legacyId,
+    sessionStorageAccess: "read",
+    sessionDirectory: legacyRead.sessionDirectory,
+  };
+  assert.equal(
+    await native(upgraded),
+    legacyId,
+    "Upgraded access must load the original native session",
+  );
   const held = await Promise.all([
     request("pi", "write", "cancel-a", "synthetic-hold-a"),
     request("pi", "write", "cancel-b", "synthetic-hold-b"),

@@ -3,7 +3,7 @@ import type { NativeSessionState } from "./native.ts";
 import type { ContainerRequest, EventSink } from "./types.ts";
 import { runEnterprisePi } from "./embedded/enterprise-pi.ts";
 
-/** Pi Durable is the only executable harness. Provider SDKs run inside Pi. */
+/** Embedded Pi Durable retains its SDK generation and native history. */
 export async function runPi(
   request: ContainerRequest,
   emit: EventSink,

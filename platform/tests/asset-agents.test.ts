@@ -398,7 +398,7 @@ test("generated output is privately snapshotted, survives idle/reopen and cannot
   await f.complete(bt);
 });
 
-test("linked asset runs share the existing project with siblings; their private history and Stop never lend full authority", async (t) => {
+test("linked asset runs share workspace history while Stop and runtime capabilities remain asset-scoped", async (t) => {
   const f = await fixture(t),
     a = await f.create(f.projectA, "full"),
     c = await f.conversation(a.id, "full");
@@ -425,7 +425,7 @@ test("linked asset runs share the existing project with siblings; their private 
   assert.equal(
     (await f.request("read", "GET", `/enterprise/api/conversations/${c.id}`))
       .statusCode,
-    403,
+    200,
   );
   assert.equal(
     (await f.request("other", "GET", `/enterprise/api/assets/${a.id}/agent`))
@@ -657,7 +657,7 @@ test("admin editing after creator revocation uses current draft authority withou
   const preview = await f.request("admin", "GET", a.url + "/preview");
   assert.equal(preview.statusCode, 200, preview.body);
   assert.match(preview.body, /Current editor authority/);
-  // Published-source policy remains creator-based until deliberately re-owned.
+  // Workspace source policy survives creator revocation through current editors.
   assert.equal(
     (
       await f.request(
@@ -667,7 +667,7 @@ test("admin editing after creator revocation uses current draft authority withou
         { expectedRevision: a.revision + 1, visibility: "public" },
       )
     ).statusCode,
-    404,
+    200,
   );
   await f.complete(turn);
 });
@@ -774,7 +774,7 @@ test("deleting an unopened asset needs no compute; project trash restores asset 
   );
 });
 
-test("read-only asset sessions expose context but cannot mutate files or save drafts", async (t) => {
+test("legacy read asset requests become full shared sessions and preserve draft revision fencing", async (t) => {
   const f = await fixture(t),
     asset = await f.create();
   const created = await f.request(
@@ -785,18 +785,17 @@ test("read-only asset sessions expose context but cannot mutate files or save dr
   );
   assert.equal(created.statusCode, 200, created.body);
   const turn = await f.prompt(created.json().id);
-  assert.equal(turn.request.access, "read");
-  assert.ok(turn.request.mounts.every((mount) => mount.access === "read"));
+  assert.equal(turn.request.access, "write");
+  assert.equal(turn.request.mounts[0].access, "write");
   const context = await f.operation(turn, { operation: "context" });
   assert.equal(context.statusCode, 200, context.body);
   const result = await f.save(
     turn,
     context.json().revision,
-    document("Must not persist"),
+    document("Shared workspace update"),
   );
-  assert.equal(result.statusCode, 403, result.body);
-  assert.equal(result.json().error.code, "read_only");
+  assert.equal(result.statusCode, 200, result.body);
   const after = await f.operation(turn, { operation: "context" });
-  assert.equal(after.json().revision, context.json().revision);
+  assert.equal(after.json().revision, context.json().revision + 1);
   await f.complete(turn);
 });

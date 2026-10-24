@@ -52,7 +52,7 @@ export async function launchWorkspaceWorker(
       "sessions",
       request.conversationId,
       request.harness,
-      request.access,
+      request.sessionStorageAccess ?? request.access,
       "environment",
     ),
     request.access,
@@ -213,6 +213,7 @@ export async function launchWorkspaceWorker(
         model: next.model,
         ...(next.pi ? { pi: next.pi } : {}),
         prompt: next.prompt,
+        ...(next.attachments ? { attachments: next.attachments } : {}),
         access: next.access,
         mountEvidence: sandbox.attestations,
         gateway: {
@@ -223,6 +224,7 @@ export async function launchWorkspaceWorker(
           ? { egressProxyUrl: "http://127.0.0.1:4102" }
           : {}),
         ...(next.resumeId ? { resumeId: next.resumeId } : {}),
+        ...(next.native ? { native: next.native } : {}),
       };
       return new Promise<void>((resolve, reject) => {
         current = { id: next.runId, emit, resolve, reject };

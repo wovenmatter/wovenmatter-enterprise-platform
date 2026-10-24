@@ -1,0 +1,8 @@
+.composer-tools-trigger { gap: 4px; }
+.composer-tools-popup { width: 330px; max-width: calc(100vw - 16px); max-height: min(520px, calc(100dvh - 16px)); padding: 14px; }
+.composer-tools-heading { display: block; margin-bottom: 12px; font-size: 13px; }
+.composer-tool-groups { display: grid; gap: 14px; }
+.composer-tool-group .switch { width: 100%; }
+.composer-tool-group small { display: block; margin: 3px 0 0 36px; color: var(--muted); font-size: 11px; }
+.composer-tools-scope { margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; line-height: 1.5; }
+.composer-tools-popup .notice { margin-top: 10px; }

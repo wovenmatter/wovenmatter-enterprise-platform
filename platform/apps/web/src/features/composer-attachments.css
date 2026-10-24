@@ -1,0 +1,22 @@
+.composer-attachments { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 2px 8px; }
+.composer-attachment-chip { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: 100%; min-height: 34px; padding: 0 5px 0 8px; border-radius: 9px; background: var(--whisper); font-size: 11.5px; }
+.composer-attachment-chip > span, .composer-attachment-chip > a { min-width: 0; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-attachment-chip > small { color: var(--muted); font-size: 10px; }
+.composer-attachment-chip > svg { flex-shrink: 0; }
+.composer-attachment-chip .icon-button { flex-shrink: 0; width: 24px; height: 28px; }
+.composer-attachment-control { position: relative; display: flex; align-items: center; }
+.composer-attachment-trigger { width: 36px; height: 36px; color: var(--muted); }
+.menu[aria-label="Add files or photos"] { width: 224px; padding: 8px; }
+.menu[aria-label="Add files or photos"] .menu-item { min-height: 40px; gap: 12px; }
+.composer-upload-status { position: absolute; bottom: calc(100% + 8px); left: 0; width: max-content; max-width: 240px; padding: 6px 8px; border-radius: 8px; background: var(--surface); font-size: 12px; }
+.composer-attachment-error { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 1; display: flex; align-items: flex-start; width: min(320px, calc(100vw - 48px)); padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: var(--popup-shadow); }
+.composer-attachment-error .notice { margin: 0; }
+.attachment-reference-list { max-height: min(350px, 50dvh); overflow: auto; margin: 12px 0; }
+.attachment-reference-row { display: flex; align-items: center; gap: 11px; width: 100%; padding: 10px; border: 0; border-radius: 8px; text-align: left; background: transparent; }
+.attachment-reference-row:hover { background: var(--whisper); }
+.attachment-reference-row > svg { flex-shrink: 0; color: var(--accent); }
+.attachment-reference-row > span { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.attachment-reference-row strong { font-size: 13.5px; font-weight: 500; }
+.attachment-reference-row small { color: var(--muted); font-size: 11.5px; }
+.attachment-reference-row strong, .attachment-reference-row > span > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (pointer: coarse) { .composer-attachment-trigger, .composer-attachment-chip .icon-button { min-width: 44px; min-height: 44px; } }

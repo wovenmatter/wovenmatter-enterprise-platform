@@ -50,15 +50,13 @@ async function organization(page, name, project = false) {
 async function create(page, f, name, project = false) {
   await page.goto(`/enterprise/organizations/${f.org.id}/library`);
   await expect(
-    page.getByRole("heading", { name: "Library", exact: true }),
+    page.getByRole("heading", { name: "Organization Files", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "New asset", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill(name);
   if (project) await page.getByLabel("Belongs to").selectOption(f.project.id);
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
-  await page
-    .getByLabel("Session permissions", { exact: true })
-    .selectOption("write");
+  await expect(page.getByLabel("Session permissions", { exact: true })).toHaveCount(0);
   await page
     .getByRole("button", { name: "Start session", exact: true })
     .click();
@@ -126,7 +124,7 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
   );
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   const submitted = (await sending).postDataJSON();
-  await expect(page.getByPlaceholder("Message your agent…")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Message your agent", exact: true })).toBeVisible();
   const list = await (
       await page.request.get(`/enterprise/api/organizations/${f.org.id}/assets`)
     ).json(),
@@ -197,7 +195,7 @@ test("asset conversation reconnects after acceptance, reads a selected source, a
   });
   await page.setViewportSize({ width: 390, height: 844 });
   await page
-    .getByPlaceholder("Message your agent…")
+    .getByRole("textbox", { name: "Message your agent", exact: true })
     .fill("Continue and revise the saved draft.");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(

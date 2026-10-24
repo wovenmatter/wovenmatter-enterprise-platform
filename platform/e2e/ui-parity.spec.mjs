@@ -16,54 +16,62 @@ const picker = (page, label) => page.getByRole('button', { name: new RegExp(`^${
 test('menus and pickers focus visible choices, navigate, dismiss', async ({ page, baseURL }) => {
   const state = await parityFixture(page, { baseURL });
   await page.goto(workspace);
-  const menu = page.getByRole('button', { name: `Actions for folder ${folder.name}`, exact: true });
-  await menu.focus(); await page.keyboard.press('Enter');
+  const menu = page.getByRole('link', { name: folder.name, exact: true });
+  await menu.focus(); await page.keyboard.press('Shift+F10');
   await expect(page.getByRole('menuitem').first()).toBeFocused();
   await page.keyboard.press('End'); await expect(page.getByRole('menuitem').last()).toBeFocused();
   await page.keyboard.press('Home'); await expect(page.getByRole('menuitem').first()).toBeFocused();
   await page.keyboard.press('ArrowDown'); await expect(page.getByRole('menu')).toBeVisible();
   await page.keyboard.press('Escape'); await expect(page.getByRole('menu')).toHaveCount(0); await expect(menu).toBeFocused();
   const model = picker(page, 'Conversation model');
+  // The rail can load before the conversation and its model catalog. Keyboard
+  // focus is intentionally allowed on aria-disabled pickers during that load.
+  await expect(model).toBeEnabled();
+  await expect(model).toHaveAccessibleName('Conversation model Synthetic selected model');
   await model.focus(); await page.keyboard.press('Enter');
   await expect(page.getByRole('option', { selected: true })).toBeFocused();
   await page.keyboard.press('ArrowDown'); await expect(page.getByRole('option', { name: 'Other synthetic model' })).toBeFocused();
   await expect(page.getByRole('listbox')).toBeVisible();
   await page.keyboard.press('Tab'); await expect(page.getByRole('listbox')).toHaveCount(0); await expect(model).toBeFocused();
-  await model.click(); await menu.click();
+  await model.click(); await menu.click({ button: 'right' });
   await expect(page.getByRole('listbox')).toHaveCount(0); await expect(page.getByRole('menu')).toBeVisible();
-  await page.getByRole('heading', { name: 'Retained parity conversation' }).click();
+  await page.locator('.transcript').click({ position: { x: 80, y: 12 } });
   await expect(page.getByRole('menu')).toHaveCount(0);
   expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
 });
 
-test('open pickers become inert when canonical work disables controls; empty popouts dismiss by keyboard', async ({ page, baseURL }) => {
+test('open pickers become inert when canonical work disables controls; empty session menus stay disabled', async ({ page, baseURL }) => {
   const state = await parityFixture(page, { baseURL });
   await page.goto(workspace);
   const model = picker(page, 'Conversation model');
   await model.click(); await expect(page.getByRole('listbox')).toBeVisible();
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
+  await page.evaluate(() => window.paritySources.find(source => source.url.includes('/conversations/parity-chat/events')).onerror());
+  await expect(page.locator('.composer-status')).toHaveText('Reconnecting…');
+  await expect(page.locator('.composer-status')).toBeVisible();
+  await page.evaluate(() => window.paritySources.find(source => source.url.includes('/conversations/parity-chat/events')).onopen());
+  await expect(page.locator('.composer-status')).toHaveCSS('display', 'none');
   state.disabled = true; await state.refresh('run.started');
+  await expect(page.locator('.composer-status')).toHaveText('Working · messages steer the active run');
+  await expect(page.locator('.composer-status')).toBeVisible();
   await expect(model).toBeDisabled(); await expect(page.getByRole('listbox')).toHaveCount(0);
   await page.keyboard.press('Enter'); await page.keyboard.press('ArrowDown');
   await expect(page.getByRole('listbox')).toHaveCount(0);
   expect(state.writes).toEqual([]);
-  // New document with no model options: popup itself takes focus for Escape.
+  // Desktop keeps empty session menus visible but inert.
   await page.context().unrouteAll();
   await parityFixture(page, { baseURL, emptyModels: true }); await page.goto(workspace);
+  await expect(picker(page, 'Conversation model')).toBeDisabled();
+  await expect(picker(page, 'Thinking level')).toBeVisible(); await expect(picker(page, 'Thinking level')).toBeDisabled();
   await picker(page, 'Conversation model').focus(); await page.keyboard.press('Enter');
-  await expect(page.getByText('No models are available.', { exact: false })).toBeVisible();
-  const emptyList = page.getByRole('listbox', { name: 'Model', exact: true });
-  await expect(emptyList).toBeFocused();
-  await expect(picker(page, 'Conversation model')).toHaveAttribute('aria-controls', await emptyList.getAttribute('id'));
-  await expect(emptyList).toHaveAccessibleDescription('No models are available. An administrator can connect a provider in Connections.');
-  await page.keyboard.press('Escape');
-  await expect(page.getByText('No models are available.', { exact: false })).toHaveCount(0);
-  await expect(picker(page, 'Conversation model')).toBeFocused();
+  await expect(page.getByRole('listbox')).toHaveCount(0);
+  await expect(picker(page, 'Conversation model')).toHaveAttribute('title', 'No models are available. An administrator can connect a provider in Connections.');
   // Exercise the new clipboard stub after both persisted init scripts run.
   await page.getByRole('button', { name: 'Copy code', exact: true }).click();
   expect(await page.evaluate(() => window.clipboardWrites)).toEqual(['const revision = 1;']);
 });
 
-for (const change of ['disable', 'remove']) {
+for (const change of ['disable']) {
   test(`canonical ${change} of the focused menu action preserves arrows and Escape`, async ({ page, baseURL }) => {
     const state = await parityFixture(page, { baseURL });
     await page.goto(workspace);
@@ -309,6 +317,9 @@ test('long model identifiers remain readable and keyboard scrolling reaches the 
   for (let index = 0; index < 40; index++) state.models.push({ id: `long-${index}`, name: `Long model ${index} with full version and provider attribution`, provider: 'custom', thinkingLevels: [] });
   for (const viewport of [{ width: 1536, height: 1024 }, { width: 855, height: 769 }, { width: 390, height: 844 }]) {
     await page.setViewportSize(viewport); await page.goto(workspace);
+    await expect(page.getByLabel('Message your agent')).toBeVisible();
+    const expand = page.getByRole('button', { name: 'Expand composer', exact: true });
+    if (await expand.isVisible()) await expand.click();
     await picker(page, 'Conversation model').focus(); await page.keyboard.press('Enter');
     const option = page.getByRole('option', { name: longName, exact: true });
     await expect(option).toHaveText(longName);
@@ -338,7 +349,8 @@ test('coarse-pointer actions retain 44-point targets and Markdown utility strips
       });
       for (const item of geometry) { expect(item.height).toBeGreaterThanOrEqual(44); expect(item.width).toBeGreaterThanOrEqual(44); expect(item.contained).toBe(true); }
     }
-    await page.getByRole('button', { name: 'Open navigation', exact: true }).tap();
+    await page.getByRole('button', { name: 'Show navigation sidebar', exact: true }).tap();
+    await page.getByRole('button', { name: 'Back to workspace navigation', exact: true }).tap();
     const plus = page.getByRole('link', { name: `New chat in ${folder.name}`, exact: true });
     const box = await plus.boundingBox(); expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
     await plus.tap(); await expect(page.getByRole('dialog', { name: 'New conversation', exact: true })).toBeVisible();
@@ -352,14 +364,14 @@ test('coarse-pointer actions retain 44-point targets and Markdown utility strips
 test('narrow navigation opens from the left and preserves keyboard return across breakpoints', async ({ page, baseURL }, testInfo) => {
   const state = await parityFixture(page, { baseURL });
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(`${base}/projects`);
-  await expect(page.getByRole('heading', { name: 'Projects', exact: true })).toBeVisible();
+  await page.goto(`${base}/workspaces`);
+  await expect(page.getByRole('heading', { name: 'Workspaces', exact: true })).toBeVisible();
   const menu = page.getByRole('button', { name: 'Open navigation', exact: true });
   const sidebar = page.locator('.sidebar');
   for (const width of [390, 760]) {
     await page.setViewportSize({ width, height: 844 });
     const box = await menu.boundingBox();
-    const title = await page.locator('.mobile-title').boundingBox();
+    const title = await page.locator('.platform-header .brand').boundingBox();
     expect(box.x).toBeLessThan(16);
     expect(box.x + box.width).toBeLessThan(title.x);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -373,16 +385,17 @@ test('narrow navigation opens from the left and preserves keyboard return across
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath('sidebar-mobile-left.png') });
   await menu.click();
-  await sidebar.getByRole('link', { name: 'Parity workspace', exact: true }).click();
-  await expect(page).toHaveURL(/\/projects\/parity-project$/);
-  await expect(sidebar).toBeHidden(); await expect(menu).toBeFocused();
-  await page.setViewportSize({ width: 761, height: 844 });
+  await sidebar.getByRole('link', { name: 'Workspaces', exact: true }).click();
+  await page.getByRole('link', { name: 'Parity workspace', exact: true }).click();
+  await expect(page).toHaveURL(/\/workspaces\/parity-project$/);
+  await expect(sidebar).toBeHidden();
+  await page.setViewportSize({ width: 904, height: 844 });
   await expect(menu).toBeHidden(); await expect(sidebar).toBeVisible();
   await expect(page.locator('.sidebar-backdrop')).toHaveCount(0);
   expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
 });
 
-for (const initial of ['empty', 'no-match', 'populated']) {
+for (const initial of ['empty', 'populated']) {
   test(`sidebar ${initial} state stays still during polling and selection, then respects authorization loss`, async ({ page, baseURL }, testInfo) => {
     await page.clock.install();
     const state = await parityFixture(page, { baseURL });
@@ -396,12 +409,11 @@ for (const initial of ['empty', 'no-match', 'populated']) {
         : { status, json: { error: { message: `Synthetic chat refresh ${status}` } } });
     });
     try {
-      await page.goto(`${base}/projects/parity-project/settings`);
+      await page.goto(`${base}/workspaces/parity-project/settings`);
       const rail = page.locator('.workspace-navigation');
-      const tools = page.getByRole('navigation', { name: 'Project navigation', exact: true });
+      const tools = page.getByRole('navigation', { name: 'Workspace navigation', exact: true });
       const chatLink = rail.getByRole('link', { name: chat.title, exact: true });
-      const label = page.getByText(initial === 'no-match' ? 'No matching conversations.' : 'No conversations yet.', { exact: true });
-      if (initial === 'no-match') await page.getByRole('searchbox', { name: 'Search conversations', exact: true }).fill('absent conversation');
+      const label = page.getByText('No conversations yet.', { exact: true });
       if (initial === 'populated') await expect(chatLink).toBeVisible();
       else await expect(label).toBeVisible();
       const agents = rail.locator('details').filter({ has: page.locator(':scope > summary', { hasText: /^Agents$/ }) });
@@ -413,7 +425,7 @@ for (const initial of ['empty', 'no-match', 'populated']) {
       await expect.poll(() => pending.length).toBe(1);
       if (initial === 'populated') await expect(chatLink).toBeVisible();
       else await expect(label).toBeVisible();
-      for (const name of ['Files', 'Members', 'Project settings']) {
+      for (const name of ['Workspace Files', 'Calendar', 'Settings']) {
         await tools.getByRole('link', { name, exact: true }).click();
         await expect(tools.getByRole('link', { name, exact: true })).toHaveAttribute('aria-current', 'page');
         expect((await tools.boundingBox()).y).toBe(before.y);
@@ -430,7 +442,7 @@ for (const initial of ['empty', 'no-match', 'populated']) {
       await expect(rail.getByRole('alert')).toContainText('Synthetic chat refresh 503');
       if (initial === 'populated') await expect(chatLink).toBeVisible();
       else await expect(label).toBeVisible();
-      expect((await tools.boundingBox()).y).toBeGreaterThan(before.y); // The explicit error notice occupies space.
+      expect((await tools.boundingBox()).y).toBe(before.y); // Utilities stay above the polling notice.
       status = 403;
       const denied = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 403);
       await page.evaluate(() => dispatchEvent(new Event('workspace-changed'))); await denied;
@@ -440,7 +452,7 @@ for (const initial of ['empty', 'no-match', 'populated']) {
       const restored = page.waitForResponse(r => r.url().endsWith('/projects/parity-project/conversations') && r.status() === 200);
       await page.evaluate(() => dispatchEvent(new Event('workspace-changed'))); await restored;
       await expect(rail.getByRole('alert')).toHaveCount(0);
-      await expect(page.getByText(initial === 'no-match' ? 'No matching conversations.' : 'No conversations yet.', { exact: true })).toBeVisible();
+      await expect(page.getByText('No conversations yet.', { exact: true })).toBeVisible();
       expect(state.writes).toEqual([]); expect(state.external).toEqual([]); expect(state.unknown).toEqual([]);
     } finally { hold = false; pending.splice(0).forEach(resolve => resolve()); }
   });
@@ -454,6 +466,9 @@ for (const method of ['selected', 'ArrowUp']) {
     state.models = [...manyModels(), ...state.models];
     for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }, { width: 1280, height: 240 }]) {
       await page.setViewportSize(viewport); await page.goto(workspace);
+      await expect(page.getByLabel('Message your agent')).toBeVisible();
+      const expand = page.getByRole('button', { name: 'Expand composer', exact: true });
+      if (await expand.isVisible()) await expand.click();
       const trigger = picker(page, 'Conversation model'); await trigger.focus();
       const editor = await page.getByLabel('Message your agent').boundingBox();
       await page.keyboard.press(method === 'selected' ? 'Enter' : method);
@@ -472,13 +487,13 @@ for (const method of ['selected', 'ArrowUp']) {
 test('open picker remains within the viewport when its polled catalog grows', async ({ page, baseURL }) => {
   await page.clock.install();
   const state = await parityFixture(page, { baseURL });
-  state.models = state.models.slice(0, 1);
+  // Keep a real alternative: a sole selected model is intentionally disabled.
   await page.goto(workspace); await picker(page, 'Conversation model').click();
   const current = page.getByRole('option', { selected: true }); await expect(current).toBeFocused();
   state.models.push(...manyModels());
   const refreshed = page.waitForResponse(response => response.url().endsWith('/inference/models'));
   await page.clock.fastForward(60000); await refreshed;
-  await expect(page.getByRole('option')).toHaveCount(61);
+  await expect(page.getByRole('option')).toHaveCount(62);
   await expect.poll(async () => {
     const box = await page.locator('.popup.picker').boundingBox();
     return box.y + box.height <= page.viewportSize().height - 8;
@@ -494,7 +509,7 @@ test('confirmation checkboxes keep a visible keyboard focus outline in every the
     await page.context().unrouteAll();
     const state = await parityFixture(page, { baseURL, theme });
     await page.goto(workspace);
-    await page.getByRole('button', { name: `Actions for folder ${folder.name}`, exact: true }).click();
+    await page.getByRole('link', { name: folder.name, exact: true }).click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Remove folder…', exact: true }).click();
     const checkbox = page.getByRole('checkbox');
     await checkbox.focus(); await page.keyboard.press('Tab'); await page.keyboard.press('Shift+Tab');

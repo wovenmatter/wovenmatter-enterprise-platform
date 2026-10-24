@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { agentInstructions } from "../native.ts";
 import { SteeringChannel, steeringText } from "../steering.ts";
+import { prepareAttachments, attachmentToolText } from "../attachments.js";
 import {
   RuntimeError,
   type ContainerRequest,
@@ -557,6 +558,7 @@ export async function runEnterprisePi(
     if (retained) delete retained.pi;
   }
   record ??= await createEngine(request, dependencies);
+  const files = await prepareAttachments(request.attachments, dependencies.sessionDirectory ?? "/session");
   await refreshEngine(record, request);
   if (retained && !retained.pi) retained.pi = record;
   const native = nativeEmitter(emit, request.runId);
@@ -596,11 +598,12 @@ export async function runEnterprisePi(
         native.handle,
       );
     steering?.set(async (input) => {
+      const files = await prepareAttachments(input.attachments, dependencies.sessionDirectory ?? "/session");
       await record.engine.handle(
         "_session/steering",
         {
           sessionId,
-          prompt: [{ type: "text", text: steeringText(input) }],
+          prompt: [{ type: "text", text: attachmentToolText(steeringText(input), files) }],
           _meta: {
             wovenInputID: input.id,
             wovenTools: undefined,
@@ -614,7 +617,7 @@ export async function runEnterprisePi(
       "session/prompt",
       {
         sessionId,
-        prompt: [{ type: "text", text: request.prompt }],
+        prompt: [{ type: "text", text: attachmentToolText(request.prompt, files) }],
         _meta: {
           wovenRunID: request.runId,
           wovenInputID: request.runId,

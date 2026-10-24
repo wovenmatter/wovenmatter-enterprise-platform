@@ -126,7 +126,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
   await page.goto("/enterprise");
   await expect(
     page.getByRole("heading", {
-      name: "Administration",
+      name: "Organizations",
       exact: true,
     }),
   ).toBeVisible();
@@ -142,8 +142,8 @@ test("zero-org owner overview and personal settings remain usable", async ({
   });
   await page
     .getByRole("link", {
-      name: "Test Owner",
-      exact: false,
+      name: "Personal settings",
+      exact: true,
     })
     .click();
   await expect(
@@ -236,27 +236,15 @@ test("zero-org owner overview and personal settings remain usable", async ({
     path: `${evidence}/personal-settings-green-desktop.png`,
     fullPage: true,
   });
-  await expect(
-    page.locator(".sidebar").getByRole("link", {
-      name: "WovenMatter Enterprise Platform",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    page.locator(".sidebar").getByRole("link", {
-      name: "Administration",
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await expect(page.locator(".account")).toContainText(
-    "Settings · Example Browser Owner",
-  );
-  await expect(page.locator(".account")).not.toContainText("Platform owner");
+  await expect(page.locator(".sidebar")).toHaveCount(0);
+  await expect(page.locator(".platform-header")).toBeVisible();
+  await page.getByRole("link", { name: "Organizations", exact: true }).click();
   await page
     .getByRole("button", {
-      name: "New organization",
+      name: "Create organization",
       exact: true,
     })
+    .first()
     .click();
   await page
     .getByLabel("Organization name", {
@@ -269,10 +257,11 @@ test("zero-org owner overview and personal settings remain usable", async ({
       name: "Create organization",
       exact: true,
     })
+    .first()
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Projects",
+      name: "Workspaces",
       exact: true,
     }),
   ).toBeVisible();
@@ -281,18 +270,17 @@ test("zero-org owner overview and personal settings remain usable", async ({
   );
   await page
     .getByRole("link", {
-      name: "Back to administration",
+      name: "Administration",
       exact: true,
     })
     .click();
   await expect(
-    page.locator(".sidebar").getByRole("link", {
+    page.getByRole("link", {
       name: "Browser-created organization",
       exact: true,
     }),
   ).toBeVisible();
   await page
-    .locator(".sidebar")
     .getByRole("link", {
       name: "Browser-created organization",
       exact: true,
@@ -300,7 +288,7 @@ test("zero-org owner overview and personal settings remain usable", async ({
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Projects",
+      name: "Workspaces",
       exact: true,
     }),
   ).toBeVisible();
@@ -315,12 +303,11 @@ test("project creation, ordinary files, organization sharing and revocation", as
   await page.goto("/enterprise");
   await expect(
     page.getByRole("heading", {
-      name: "Administration",
+      name: "Organizations",
       exact: true,
     }),
   ).toBeVisible();
   await page
-    .locator(".sidebar")
     .getByRole("link", {
       name: "Example Test Organization",
       exact: true,
@@ -328,24 +315,23 @@ test("project creation, ordinary files, organization sharing and revocation", as
     .click();
   await expect(
     page.getByRole("link", {
-      name: "Back to administration",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await page
-    .getByRole("link", {
-      name: "Back to administration",
-      exact: true,
-    })
-    .click();
-  await expect(
-    page.getByRole("heading", {
       name: "Administration",
       exact: true,
     }),
   ).toBeVisible();
   await page
-    .locator(".sidebar")
+    .getByRole("link", {
+      name: "Administration",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Organizations",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
     .getByRole("link", {
       name: "Example Test Organization",
       exact: true,
@@ -353,7 +339,7 @@ test("project creation, ordinary files, organization sharing and revocation", as
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Projects",
+      name: "Workspaces",
       exact: true,
     }),
   ).toBeVisible();
@@ -363,29 +349,29 @@ test("project creation, ordinary files, organization sharing and revocation", as
   });
   await page
     .getByRole("button", {
-      name: "New project",
+      name: "New workspace",
       exact: true,
     })
     .click();
   await page
-    .getByLabel("Project name", {
+    .getByLabel("Workspace name", {
       exact: true,
     })
     .fill("Browser-created workspace");
   await page
     .getByRole("button", {
-      name: "Create project",
+      name: "Create workspace",
       exact: true,
     })
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "All Workspaces",
+      name: "Browser-created workspace",
     }),
   ).toBeVisible();
   await page
     .getByRole("link", {
-      name: "Files",
+      name: "Workspace Files",
       exact: true,
     })
     .click();
@@ -445,15 +431,10 @@ test("project creation, ordinary files, organization sharing and revocation", as
       exact: true,
     }),
   ).toBeVisible();
-  await page
-    .getByRole("link", {
-      name: "Library",
-      exact: true,
-    })
-    .click();
+  await page.goto(`/enterprise/organizations/${f.orgId}/files`);
   await expect(
     page.getByRole("heading", {
-      name: "Library",
+      name: "Organization Files",
       exact: true,
     }),
   ).toBeVisible();
@@ -519,10 +500,10 @@ test("project creation, ordinary files, organization sharing and revocation", as
     .getByRole("button", { name: "Actions for Shared references" })
     .click();
   await page
-    .getByRole("menuitem", { name: "Share with projects", exact: true })
+    .getByRole("menuitem", { name: "Share with workspaces", exact: true })
     .click();
   await page
-    .getByLabel("Project", {
+    .getByLabel("Workspace", {
       exact: true,
     })
     .selectOption({
@@ -530,7 +511,7 @@ test("project creation, ordinary files, organization sharing and revocation", as
     });
   await page
     .getByRole("button", {
-      name: "Share with project",
+      name: "Share with workspace",
       exact: true,
     })
     .click();
@@ -574,24 +555,19 @@ test("project creation, ordinary files, organization sharing and revocation", as
     }),
   ).toBeVisible();
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}/files`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}/files`,
   );
   await expect(
-    page.getByText("Shared with this project", {
+    page.getByText("Organization Files source", {
       exact: true,
     }),
   ).toBeVisible();
-  await page
-    .getByRole("link", {
-      name: "Library",
-      exact: true,
-    })
-    .click();
+  await page.goto(`/enterprise/organizations/${f.orgId}/files`);
   await page
     .getByRole("button", { name: "Actions for Shared references" })
     .click();
   await page
-    .getByRole("menuitem", { name: "Share with projects", exact: true })
+    .getByRole("menuitem", { name: "Share with workspaces", exact: true })
     .click();
   await page
     .getByRole("button", {
@@ -611,33 +587,31 @@ test("project creation, ordinary files, organization sharing and revocation", as
     })
     .click();
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}/files`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}/files`,
   );
   await expect(
-    page.getByText("Shared with this project", {
+    page.getByText("Organization Files source", {
       exact: true,
     }),
   ).toHaveCount(0);
   expect(errors).toEqual([]);
 });
-test("durable conversation streams and can add a project colleague", async ({
+test("durable conversation streams are shared automatically with workspace colleagues", async ({
   page,
 }) => {
   const f = await ensureFixture(page);
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}`,
   );
   await page
     .getByRole("link", {
-      name: "New conversation",
+      name: "New chat",
       exact: true,
     })
     .first()
     .click();
-  await expect(page.getByRole("dialog").locator("select")).toHaveCount(2);
-  await expect(
-    page.getByRole("dialog").getByLabel("Session permissions"),
-  ).toHaveValue("write");
+  await expect(page.getByRole("dialog").getByLabel("Agent", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog").getByLabel("Session permissions")).toHaveCount(0);
   await expect(
     page.getByRole("dialog").getByLabel("Title", { exact: true }),
   ).toHaveCount(0);
@@ -658,7 +632,7 @@ test("durable conversation streams and can add a project colleague", async ({
   );
   await expect(
     page.getByRole("heading", {
-      name: "New conversation",
+      name: "New chat",
       exact: true,
     }),
   ).toBeVisible();
@@ -739,35 +713,15 @@ test("durable conversation streams and can add a project colleague", async ({
   await expect(
     page.getByRole("heading", { name: "Browser conversation", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("button", {
-      name: "Conversation members",
-      exact: true,
-    })
-    .click();
-  await page
-    .getByLabel("Project member", {
-      exact: true,
-    })
-    .selectOption(f.memberId);
-  await page
-    .getByRole("button", {
-      name: "Add person",
-      exact: true,
-    })
-    .click();
-  await expect(
-    page.getByText("analyst@example.test", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await page
-    .getByRole("button", {
-      name: "Close dialog",
-    })
-    .click();
+  await expect(page.getByRole("button", { name: "Conversation members", exact: true })).toHaveCount(0);
+  const memberContext = await page.context().browser().newContext({ baseURL: f.origin, storageState: `${evidence}/member-auth.json` });
+  try {
+    const listed = await (await memberContext.request.get(`/enterprise/api/projects/${f.projectId}/conversations`)).json();
+    expect(listed.items.some(item => item.title === "Browser conversation")).toBe(true);
+  } finally { await memberContext.close(); }
   await page.reload();
   await page
+    .getByRole("complementary", { name: "Workspace content", exact: true })
     .getByRole("link", {
       name: /Browser conversation/,
     })
@@ -1020,14 +974,15 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
       name: "Open navigation",
     })
     .click();
-  const closeNav = page.locator(".sidebar").getByRole("button", {
+  const closeNav = page.getByRole("dialog", { name: "Navigation", exact: true }).getByRole("button", {
     name: "Close navigation",
   });
   await expect(closeNav).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(
-    page.getByRole("button", {
-      name: "Sign out",
+    page.locator(".sidebar").getByRole("link", {
+      name: "Settings",
+      exact: true,
     }),
   ).toBeFocused();
   await page.keyboard.press("Tab");
@@ -1048,14 +1003,15 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
       name: "Members",
       exact: true,
     }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await page
     .getByRole("link", {
-      name: "Organization settings",
+      name: "Settings",
       exact: true,
     })
     .click();
   await page
+    .locator("main")
     .getByRole("link", {
       name: /Connections/,
     })
@@ -1076,16 +1032,13 @@ test("admin invitation is copyable and mobile navigation remains usable", async 
     fullPage: true,
   });
   await page.goto("/enterprise");
+  await expect(page.locator(".sidebar")).toHaveCount(0);
   await page
     .getByRole("button", {
-      name: "Open navigation",
-    })
-    .click();
-  await page
-    .getByRole("button", {
-      name: "New organization",
+      name: "Create organization",
       exact: true,
     })
+    .first()
     .click();
   await expect(
     page.getByRole("dialog", {
@@ -1123,24 +1076,24 @@ test("organization settings hub, nested pages, admin reset action and personal r
   });
   try {
     const adminPage = await admin.newPage();
-    await adminPage.goto(`/enterprise/organizations/${f.orgId}/projects`);
+    await adminPage.goto(`/enterprise/organizations/${f.orgId}/workspaces`);
     const sidebar = adminPage.locator(".sidebar");
     await expect(sidebar).toContainText("Example Test Organization");
     await expect(
       adminPage.getByRole("link", {
-        name: "Back to administration",
+        name: "Administration",
         exact: true,
       }),
     ).toHaveCount(0);
     await expect(
       sidebar.getByRole("link", {
-        name: "Projects",
+        name: "Workspaces",
         exact: true,
       }),
     ).toBeVisible();
     await expect(
       sidebar.getByRole("link", {
-        name: "Library",
+        name: "Organization Files",
         exact: true,
       }),
     ).toBeVisible();
@@ -1149,10 +1102,10 @@ test("organization settings hub, nested pages, admin reset action and personal r
         name: "Members",
         exact: true,
       }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await sidebar
       .getByRole("link", {
-        name: "Organization settings",
+        name: "Settings",
         exact: true,
       })
       .click();
@@ -1163,6 +1116,7 @@ test("organization settings hub, nested pages, admin reset action and personal r
       }),
     ).toBeVisible();
     await adminPage
+      .locator("main")
       .getByRole("link", {
         name: /Members/,
       })
@@ -1175,7 +1129,7 @@ test("organization settings hub, nested pages, admin reset action and personal r
     ).toBeVisible();
     await expect(
       sidebar.getByRole("link", {
-        name: "Organization settings",
+        name: "Members",
         exact: true,
       }),
     ).toHaveClass(/active/);
@@ -1218,11 +1172,12 @@ test("organization settings hub, nested pages, admin reset action and personal r
     ).toBeVisible();
     await adminPage
       .getByRole("link", {
-        name: "Back to organization settings",
+        name: "Settings",
         exact: true,
       })
       .click();
     await adminPage
+      .locator("main")
       .getByRole("link", {
         name: /Connections/,
       })
@@ -1235,7 +1190,7 @@ test("organization settings hub, nested pages, admin reset action and personal r
     ).toBeVisible();
     await adminPage
       .getByRole("link", {
-        name: "Organization Admin",
+        name: "Personal settings",
       })
       .click();
     await expect(
@@ -1271,17 +1226,17 @@ test("restricted members do not see owner or administrator navigation", async ({
   try {
     const employee = await member.newPage();
     await employee.goto(
-      `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
+      `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}`,
     );
     await expect(
       employee.getByRole("heading", {
-        name: "All Workspaces",
+        name: "Case review",
         exact: true,
       }),
     ).toBeVisible();
     await expect(
       employee.getByRole("link", {
-        name: "Back to administration",
+        name: "Administration",
         exact: true,
       }),
     ).toHaveCount(0);
@@ -1291,7 +1246,7 @@ test("restricted members do not see owner or administrator navigation", async ({
         name: "Members",
         exact: true,
       }),
-    ).toHaveCount(1);
+    ).toHaveCount(0);
     await expect(
       sidebar.getByRole("link", {
         name: "Connections",
@@ -1300,14 +1255,14 @@ test("restricted members do not see owner or administrator navigation", async ({
     ).toHaveCount(0);
     await expect(
       sidebar.getByRole("link", {
-        name: "Organization settings",
+        name: "Settings",
         exact: true,
       }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     await employee.goto(`/enterprise/organizations/${f.orgId}/members`);
     await expect(
       employee.getByRole("heading", {
-        name: "Projects",
+        name: "Workspaces",
         exact: true,
       }),
     ).toBeVisible();
@@ -1316,14 +1271,14 @@ test("restricted members do not see owner or administrator navigation", async ({
     );
     await expect(
       employee.getByRole("heading", {
-        name: "Projects",
+        name: "Workspaces",
         exact: true,
       }),
     ).toBeVisible();
     await employee.goto("/enterprise");
     await expect(
       employee.getByRole("heading", {
-        name: "Projects",
+        name: "Workspaces",
         exact: true,
       }),
     ).toBeVisible();
@@ -1365,22 +1320,20 @@ test("owner project deep links choose the correct organization", async ({
   await page.goto(`/enterprise/projects/${project.id}/files`);
   await expect(page).toHaveURL(
     new RegExp(
-      `/enterprise/organizations/${org.id}/projects/${project.id}/files$`,
+      `/enterprise/organizations/${org.id}/workspaces/${project.id}/files$`,
     ),
   );
   await page.goto(
-    `/enterprise/organizations/${org.id}/projects/${project.id}/files`,
+    `/enterprise/organizations/${org.id}/workspaces/${project.id}/files`,
   );
   await expect(
     page.getByRole("link", {
-      name: "Back to administration",
+      name: "Back to organization",
       exact: true,
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", {
-      name: "Second organization project",
-    }),
+    page.locator(".sidebar").getByText("Second organization project", {exact:true}).first(),
   ).toBeVisible();
   await page
     .getByRole("button", {
@@ -1402,111 +1355,28 @@ test("owner project deep links choose the correct organization", async ({
     }),
   ).toBeVisible();
 });
-test("downgraded collaborators can view a full-access thread without directing it", async ({
-  page,
-  browser,
-}) => {
+test("legacy read memberships normalize to full shared access while actual removal revokes it", async ({page,browser}) => {
   const f = await ensureFixture(page);
-  await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
-  );
-  const session = await (
-    await page.request.get("/enterprise/api/session")
-  ).json();
-  const headers = {
-    origin: f.origin,
-    "x-csrf-token": session.csrfToken,
-  };
-  const threadResponse = await page.request.post(
-    `/enterprise/api/projects/${f.projectId}/conversations`,
-    {
-      headers,
-      data: {
-        title: "Read-only collaboration",
-        mode: "write",
-        model: "gpt-test-fixture",
-      },
-    },
-  );
-  expect(threadResponse.status()).toBe(201);
-  const thread = await threadResponse.json();
-  expect(
-    (
-      await page.request.post(
-        `/enterprise/api/conversations/${thread.id}/members`,
-        {
-          headers,
-          data: {
-            userId: f.memberId,
-          },
-        },
-      )
-    ).ok(),
-  ).toBe(true);
-  expect(
-    (
-      await page.request.patch(
-        `/enterprise/api/projects/${f.projectId}/members/${f.memberId}`,
-        {
-          headers,
-          data: {
-            access: "read",
-          },
-        },
-      )
-    ).ok(),
-  ).toBe(true);
-  const member = await browser.newContext({
-    baseURL: f.origin,
-    storageState: `${evidence}/member-auth.json`,
-  });
-  const employee = await member.newPage();
+  const session = await (await page.request.get("/enterprise/api/session")).json();
+  const headers = {origin:f.origin,"x-csrf-token":session.csrfToken};
+  const response = await page.request.post(`/enterprise/api/projects/${f.projectId}/conversations`, {headers,data:{title:"Shared collaboration",mode:"read",model:"gpt-test-fixture"}});
+  expect(response.status()).toBe(201);
+  const thread = await response.json(); expect(thread.mode).toBe("write");
+  expect((await page.request.patch(`/enterprise/api/projects/${f.projectId}/members/${f.memberId}`,{headers,data:{access:"read"}})).ok()).toBe(true);
+  const member = await browser.newContext({baseURL:f.origin,storageState:`${evidence}/member-auth.json`});
   try {
-    await employee.goto(
-      `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
-    );
-    await employee
-      .getByRole("link", {
-        name: /Read-only collaboration/,
-      })
-      .click();
-    await expect(employee.getByLabel("Message your agent")).toBeDisabled();
-    await expect(
-      employee.getByRole("button", { name: "Send message", exact: true }),
-    ).toBeDisabled();
-    await expect(
-      employee.getByText(
-        "Read-only for you. Start a read-only conversation to use the agent.",
-      ),
-    ).toBeVisible();
-    const memberSession = await (
-      await member.request.get("/enterprise/api/session")
-    ).json();
-    const forbidden = await member.request.post(
-      `/enterprise/api/conversations/${thread.id}/messages`,
-      {
-        headers: { origin: f.origin, "x-csrf-token": memberSession.csrfToken },
-        data: {
-          content: "Cannot borrow full authority",
-          requestId: "readonly-no-elevation",
-        },
-      },
-    );
-    expect(forbidden.status()).toBe(403);
-    expect((await forbidden.json()).error.code).toBe("read_only");
-    const runs = await (
-      await member.request.get(
-        `/enterprise/api/conversations/${thread.id}/runs`,
-      )
-    ).json();
-    expect(runs.items).toHaveLength(0);
-    await expect(
-      employee.getByRole("link", {
-        name: "Connections",
-        exact: true,
-      }),
-    ).toHaveCount(0);
+    const employee = await member.newPage();
+    await employee.goto(`/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}?conversation=${thread.id}`);
+    await expect(employee.getByLabel("Message your agent")).toBeEnabled();
+    await expect(employee.getByLabel("Session permissions")).toHaveCount(0);
+    await employee.getByLabel("Message your agent").fill("Shared member work");
+    await employee.getByRole("button",{name:"Send message",exact:true}).click();
+    await expect(employee.getByText("Synthetic protocol fixture: the request reached the durable runtime.",{exact:true})).toBeVisible();
+    expect((await page.request.delete(`/enterprise/api/projects/${f.projectId}/members/${f.memberId}`,{headers})).ok()).toBe(true);
+    expect((await member.request.get(`/enterprise/api/conversations/${thread.id}`)).status()).toBe(404);
+    expect((await member.request.get(`/enterprise/api/conversations/${thread.id}/export`)).status()).toBe(404);
   } finally {
+    await page.request.post(`/enterprise/api/projects/${f.projectId}/members`,{headers,data:{userId:f.memberId}});
     await member.close();
   }
 });
@@ -1515,7 +1385,7 @@ test("source viewer preserves document versions and renders HTML as text", async
 }) => {
   const f = await ensureFixture(page);
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}/files`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}/files`,
   );
   const session = await (
     await page.request.get("/enterprise/api/session")
@@ -1598,7 +1468,7 @@ test("PDF source preview uses a bounded blob and preserves the citation page", a
 }) => {
   const f = await ensureFixture(page);
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}/files`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}/files`,
   );
   const session = await (
     await page.request.get("/enterprise/api/session")
@@ -1744,7 +1614,7 @@ test.afterEach(async ({}, testInfo) => {
     ),
   ).toEqual([]);
 });
-test("activation and reset stay under enterprise; one account switches organizations and library permission stays scoped", async ({
+test("activation and reset stay under enterprise; one account switches organizations and administrator authority stays scoped", async ({
   page,
   browser,
 }) => {
@@ -1798,7 +1668,7 @@ test("activation and reset stay under enterprise; one account switches organizat
       .click();
     await expect(
       member.getByRole("heading", {
-        name: "Projects",
+        name: "Workspaces",
         exact: true,
       }),
     ).toBeVisible();
@@ -1825,7 +1695,8 @@ test("activation and reset stay under enterprise; one account switches organizat
         exact: true,
       })
       .click();
-    await page.getByLabel("Library access").selectOption("write");
+    await expect(page.getByLabel("Organization Files access")).toHaveCount(0);
+    await page.getByRole("dialog").getByLabel("Role", { exact: true }).selectOption("admin");
     await page
       .getByRole("dialog")
       .getByRole("button", {
@@ -1843,10 +1714,10 @@ test("activation and reset stay under enterprise; one account switches organizat
     ).toBeVisible();
     await expect(
       member.getByRole("link", {
-        name: "Organization settings",
+        name: "Settings",
         exact: true,
       }),
-    ).toHaveCount(0);
+    ).toBeVisible();
     const second = await (
       await page.request.post("/enterprise/api/organizations", {
         headers,
@@ -1871,7 +1742,7 @@ test("activation and reset stay under enterprise; one account switches organizat
     await member.goto("/enterprise");
     await expect(
       member.getByRole("heading", {
-        name: "Your access",
+        name: "Your organizations",
       }),
     ).toBeVisible();
     await member
@@ -1882,12 +1753,12 @@ test("activation and reset stay under enterprise; one account switches organizat
       .click();
     await expect(
       member.getByRole("link", {
-        name: "Switch organization",
+        name: "Your organizations",
       }),
     ).toBeVisible();
     await member
       .getByRole("link", {
-        name: "Library",
+        name: "Organization Files",
         exact: true,
       })
       .click();
@@ -1962,7 +1833,7 @@ test("activation and reset stay under enterprise; one account switches organizat
       .click();
     await expect(
       member.getByRole("heading", {
-        name: "Your access",
+        name: "Your organizations",
       }),
     ).toBeVisible();
     expect(
@@ -1978,7 +1849,7 @@ test("activation and reset stay under enterprise; one account switches organizat
     await member.goto("/enterprise");
     await expect(
       member.getByRole("heading", {
-        name: "Projects",
+        name: "Workspaces",
         exact: true,
       }),
     ).toBeVisible();
@@ -2050,12 +1921,12 @@ test("deleted-project administration recovers files and restores the original wo
   await page.goto(`/enterprise/organizations/${f.orgId}/settings`);
   await page
     .getByRole("link", {
-      name: /Deleted projects/,
+      name: /Deleted workspaces/,
     })
     .click();
   await expect(
     page.getByRole("heading", {
-      name: "Deleted projects",
+      name: "Deleted workspaces",
       exact: true,
     }),
   ).toBeVisible();
@@ -2079,13 +1950,13 @@ test("deleted-project administration recovers files and restores the original wo
     })
     .click();
   await expect(
-    page.getByText("Project restored.", {
+    page.getByText("Workspace restored.", {
       exact: true,
     }),
   ).toBeVisible();
   await expect(row).toHaveCount(0);
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${project.id}/files`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${project.id}/files`,
   );
   await expect(
     page.getByText("recovery.txt", {
@@ -2115,7 +1986,7 @@ test("organization assets start without projects from Files and Assets, remain p
   });
   await page.goto(`/enterprise/organizations/${org.id}/library`);
   await expect(
-    page.getByRole("heading", { name: "Library", exact: true }),
+    page.getByRole("heading", { name: "Organization Files", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "New asset", exact: true }).click();
   await page.getByLabel("Name", { exact: true }).fill("Organization overview");
@@ -2124,9 +1995,7 @@ test("organization assets start without projects from Files and Assets, remain p
     .fill("Prepared without a project");
   await expect(page.getByLabel("Belongs to")).toHaveValue("");
   await page.getByRole("button", { name: "Create asset", exact: true }).click();
-  await page
-    .getByLabel("Session permissions", { exact: true })
-    .selectOption("write");
+  await expect(page.getByLabel("Session permissions", { exact: true })).toHaveCount(0);
   await page
     .getByRole("button", { name: "Start session", exact: true })
     .click();
@@ -2181,7 +2050,7 @@ test("organization assets start without projects from Files and Assets, remain p
   expect((await anonymous.request.get(url)).status()).toBe(200);
   await page.getByRole("button", { name: "Prepare", exact: true }).click();
   await page
-    .getByPlaceholder("Message your agent…")
+    .getByRole("textbox", { name: "Message your agent", exact: true })
     .fill("Revise the overview and its generated data.");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(
@@ -2399,18 +2268,16 @@ test("native streaming retains chronological work, task progress, full copy and 
   });
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(
-    "/enterprise/organizations/" + f.orgId + "/projects/" + f.projectId,
+    "/enterprise/organizations/" + f.orgId + "/workspaces/" + f.projectId,
   );
   await page
-    .getByRole("link", { name: "New conversation", exact: true })
+    .getByRole("link", { name: "New chat", exact: true })
     .first()
     .click();
   await page
     .getByRole("button", { name: "Start session", exact: true })
     .click();
-  await expect(page.locator(".composer-area .session-mode")).toContainText(
-    "Full access",
-  );
+  await expect(page.locator(".composer-area .session-mode")).toHaveCount(0);
   await page
     .getByRole("button", { name: "Conversation actions", exact: true })
     .click();
@@ -2466,7 +2333,7 @@ test("native streaming retains chronological work, task progress, full copy and 
     "The record is complete.\n\nAll retained output remains available after reopening this conversation.",
   );
   await page.reload();
-  await page.getByRole("link", { name: /Native streaming review/ }).click();
+  await page.getByRole("complementary", { name: "Workspace content", exact: true }).getByRole("link", { name: /Native streaming review/ }).click();
   await expect(page.locator(".native-final")).toContainText(
     "All retained output remains available",
   );
@@ -2547,10 +2414,10 @@ test("older replies outside the activity window expose complete text and their p
   page.on("pageerror", (error) => errors.push(error.message));
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}`,
   );
   await page
-    .getByRole("link", { name: "New conversation", exact: true })
+    .getByRole("link", { name: "New chat", exact: true })
     .first()
     .click();
   await page
@@ -2636,7 +2503,7 @@ test("older replies outside the activity window expose complete text and their p
   expect(errors).toEqual([]);
 });
 
-test("one persistent rail leaves the chat full width and preserves URL selection and scoped drafts", async ({
+test("responsive desktop rails leave chat usable and preserves URL selection and scoped drafts", async ({
   page,
 }) => {
   const f = await ensureFixture(page);
@@ -2649,7 +2516,7 @@ test("one persistent rail leaves the chat full width and preserves URL selection
     await page.request.get("/enterprise/api/session")
   ).json();
   const headers = { origin: f.origin, "x-csrf-token": session.csrfToken };
-  const base = `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`;
+  const base = `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}`;
   const first = await (
     await page.request.post(
       `/enterprise/api/projects/${f.projectId}/conversations`,
@@ -2673,15 +2540,20 @@ test("one persistent rail leaves the chat full width and preserves URL selection
     )
   ).json();
   expect(first.mode).toBe("write");
+  expect(second.mode).toBe("write");
   await page.setViewportSize({ width: 855, height: 769 });
   await page.goto(`${base}?conversation=${first.id}`);
-  await expect(page.locator(".thread-header h2")).toHaveText(
+  await expect(page.locator(".conversation-main > h2")).toHaveText(
     "Workspace layout review",
   );
   await expect(page.locator(".conversation-rail")).toHaveCount(0);
   const geometry = await page.locator(".conversation-main").boundingBox();
-  expect(geometry.width).toBeGreaterThan(550);
-  expect(geometry.height).toBeGreaterThan(730);
+  await expect(page.getByRole("complementary", { name: "Workspace content" })).not.toBeVisible();
+  expect(geometry.width).toBeGreaterThan(500);
+  const header = await page.locator(".platform-header").boundingBox();
+  expect(geometry.y).toBeGreaterThanOrEqual(header.y + header.height);
+  expect(geometry.height).toBeGreaterThan(500);
+  expect(geometry.y + geometry.height).toBeLessThanOrEqual(769);
   expect(
     await page.evaluate(
       () =>
@@ -2691,15 +2563,26 @@ test("one persistent rail leaves the chat full width and preserves URL selection
   ).toBe(true);
   const rail = await page.locator(".sidebar").elementHandle();
   const draft = page.getByLabel("Message your agent");
+  await expect(page.locator(".sidebar")).toBeVisible();
+  await expect(page.locator(".sidebar-backdrop")).toHaveCount(0);
+  async function showNavigation() {
+    const reveal = page.getByRole("button", { name: "Show navigation sidebar", exact: true });
+    if (await reveal.isVisible()) await reveal.click();
+    const back = page.getByRole("button", { name: "Back to workspace navigation", exact: true });
+    if (await back.isVisible()) await back.click();
+    await expect(page.locator(".sidebar")).toBeVisible();
+  }
   await draft.fill("Keep this unsent project draft");
+  await showNavigation();
   await page
     .locator(".sidebar")
-    .getByRole("link", { name: "Files", exact: true })
+    .getByRole("link", { name: "Workspace Files", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Project files", exact: true }),
+    page.getByRole("heading", { name: "Workspace Files", exact: true }),
   ).toBeVisible();
   expect(await rail.evaluate((node) => node.isConnected)).toBe(true);
+  await showNavigation();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Workspace layout review", exact: true })
@@ -2707,22 +2590,29 @@ test("one persistent rail leaves the chat full width and preserves URL selection
   await expect(draft).toHaveValue("Keep this unsent project draft");
   await page.reload();
   await expect(draft).toHaveValue("Keep this unsent project draft");
-  await expect(page).toHaveURL(
-    `${f.origin}${base}?folder=all&conversation=${first.id}`,
-  );
+  await expect(page).toHaveURL(url => url.origin === f.origin && url.pathname === base
+    && url.searchParams.get("folder") === "all" && url.searchParams.get("conversation") === first.id);
+  await showNavigation();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Read-only research", exact: true })
     .click();
   await expect(draft).toHaveValue("");
-  await expect(page.locator(".session-mode")).toHaveText("Read-only");
+  await expect(page.locator(".session-mode")).toHaveCount(0);
+  await expect(draft).toBeEnabled();
   await page.goBack();
-  await expect(page.locator(".thread-header h2")).toHaveText(
+  await expect(page.locator(".conversation-main > h2")).toHaveText(
     "Workspace layout review",
   );
   await expect(draft).toHaveValue("Keep this unsent project draft");
+  // Adaptive opens contents on folder selection, then expands that same page
+  // beside navigation when the viewport has room for both rails.
+  await page.locator(".sidebar").getByRole("link", { name: "All Workspaces", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Workspace content" })).toBeVisible();
+  await expect(draft).toHaveValue("Keep this unsent project draft");
   await page.screenshot({ path: `${evidence}/workspace-855.png` });
   await page.setViewportSize({ width: 1536, height: 1024 });
+  await expect(page.getByRole("complementary", { name: "Workspace content" })).toBeVisible();
   await page.screenshot({ path: `${evidence}/workspace-wide.png` });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(draft).toBeVisible();
@@ -2749,15 +2639,13 @@ test("one persistent rail leaves the chat full width and preserves URL selection
     modelControls[0].right <= modelControls[1].left ||
       modelControls[0].bottom <= modelControls[1].top,
   ).toBe(true);
-  await page
-    .getByRole("button", { name: "Open navigation", exact: true })
-    .click();
+  await showNavigation();
   await page
     .locator(".sidebar")
     .getByRole("link", { name: "Read-only research", exact: true })
     .click();
   await expect(page.getByRole("dialog", { name: "Navigation" })).toHaveCount(0);
-  await expect(page.locator(".thread-header h2")).toHaveText(
+  await expect(page.locator(".conversation-main > h2")).toHaveText(
     "Read-only research",
   );
   await page.screenshot({ path: `${evidence}/workspace-mobile.png` });
@@ -2779,7 +2667,7 @@ test("a successful send acknowledged after navigation cannot restore an already-
     },
   );
   const conversation = await response.json();
-  const base = `/enterprise/organizations/${f.orgId}/projects/${f.projectId}`;
+  const base = `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}`;
   await page.goto(`${base}?conversation=${conversation.id}`);
   let released = false;
   let release;
@@ -2813,7 +2701,7 @@ test("a successful send acknowledged after navigation cannot restore an already-
   await seen;
   await page
     .locator(".sidebar")
-    .getByRole("link", { name: "Files", exact: true })
+    .getByRole("link", { name: "Workspace Files", exact: true })
     .click();
   const settled = page.waitForResponse(
     (r) =>
@@ -2857,7 +2745,7 @@ test("composer thinking choices follow each model and clear the previous overrid
   expect(response.status()).toBe(201);
   const c = await response.json();
   await page.goto(
-    `/enterprise/organizations/${f.orgId}/projects/${f.projectId}?conversation=${c.id}&folder=all`,
+    `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}?conversation=${c.id}&folder=all`,
   );
   const thinking = picker(page, "Thinking level");
   const model = picker(page, "Conversation model");
@@ -2875,18 +2763,32 @@ test("composer thinking choices follow each model and clear the previous overrid
   await expect(thinking).toBeFocused();
   await choose(page, "Thinking level", "high");
   await expect(thinking).toHaveAttribute("data-value", "high");
-  await choose(page, "Conversation model", "mandatory-thinking-fixture");
-  await expect(thinking).toHaveAttribute("data-value", "");
-  await thinking.click();
-  await expect(page.getByRole("option")).toHaveText([
-    "Model default",
-    "Low",
-    "High",
-    "Max",
-  ]);
-  await page.keyboard.press("Escape");
+  // A confirmed PATCH must drive the controls even while canonical refresh waits.
+  let releaseRefresh, heldReads = 0;
+  const pendingRefresh = new Promise(resolve => { releaseRefresh = resolve; });
+  const detailPath = `**/enterprise/api/conversations/${c.id}`;
+  const holdRefresh = async route => {
+    if (route.request().method() === "GET") { heldReads++; await pendingRefresh; }
+    return route.continue();
+  };
+  await page.route(detailPath, holdRefresh);
+  try {
+    await choose(page, "Conversation model", "mandatory-thinking-fixture");
+    await expect.poll(() => heldReads).toBeGreaterThan(0);
+    await expect(model).toHaveAttribute("data-value", "mandatory-thinking-fixture");
+    await expect(thinking).toHaveAttribute("data-value", "");
+    await thinking.click();
+    await expect(page.getByRole("option")).toHaveText(["Model default", "Low", "High", "Max"]);
+    await page.keyboard.press("Escape");
+  } finally {
+    releaseRefresh();
+  }
   await choose(page, "Thinking level", "max");
   await expect(thinking).toHaveAttribute("data-value", "max");
+  expect((await (await page.request.get(`/enterprise/api/conversations/${c.id}`)).json()).pi.thinking).toBe("max");
+  await choose(page, "Thinking level", "");
+  await expect(thinking).toHaveAttribute("data-value", "");
+  expect((await (await page.request.get(`/enterprise/api/conversations/${c.id}`)).json()).pi.thinking).toBeUndefined();
   await choose(page, "Conversation model", "no-thinking-fixture");
   await expect(thinking).toHaveAttribute("data-value", "");
   await expect(thinking).toBeDisabled();
@@ -2918,7 +2820,7 @@ test("expanded Markdown survives a real local SSE background comment and canonic
     } : message);
     await route.fulfill({ response: result, json: body });
   });
-  await page.goto(`/enterprise/organizations/${f.orgId}/projects/${f.projectId}?conversation=${conversation.id}`);
+  await page.goto(`/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}?conversation=${conversation.id}`);
   await page.getByLabel("Message your agent").fill("Create the synthetic retained response");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await page.getByRole("button", { name: "Expand", exact: true }).click();
@@ -2934,4 +2836,39 @@ test("expanded Markdown survives a real local SSE background comment and canonic
   await expect(table).toBeVisible();
   await expect(table.getByRole("cell", { name: "Retained table", exact: true })).toBeVisible();
   await page.keyboard.press("Escape"); await expect(table).toHaveCount(0);
+});
+
+test("appearance belongs to the user's Personal settings across workspaces without changing teammates", async ({ page, browser }) => {
+  const f = await ensureFixture(page);
+  const teammate = await browser.newContext({ storageState: `${evidence}/org-admin-auth.json` });
+  try {
+    const original = (await (await page.request.get('/enterprise/api/me')).json()).user;
+    const teammateBefore = (await (await teammate.request.get(`${f.origin}/enterprise/api/me`)).json()).user;
+    const settingsPath = `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}/settings`;
+    await page.goto(settingsPath);
+    await expect(page.getByLabel('Default agent', { exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Theme', { exact: true })).toHaveCount(0);
+    await page.locator('.platform-header').getByRole('link', { name: 'Personal settings', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toHaveCount(1);
+    const mutations = [];
+    page.on('request', request => { if (['POST', 'PATCH', 'DELETE'].includes(request.method())) mutations.push(new URL(request.url()).pathname); });
+    await page.getByRole('radio', { name: 'Dark theme', exact: true }).check();
+    await page.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await expect(page.getByText('Profile updated.', { exact: true })).toBeVisible();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.getByRole('link', { name: 'Back to organization', exact: true }).click();
+    await expect(page).toHaveURL(new URL(settingsPath, f.origin).href);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.goto(`/enterprise/organizations/${f.orgId}/workspaces`);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    expect(mutations).toEqual(['/enterprise/api/me']);
+    const teammateAfter = (await (await teammate.request.get(`${f.origin}/enterprise/api/me`)).json()).user;
+    expect(teammateAfter.theme).toBe(teammateBefore.theme);
+    await page.locator('.platform-header').getByRole('link', { name: 'Personal settings', exact: true }).click();
+    await page.getByRole('radio', { name: `${original.theme[0].toUpperCase()}${original.theme.slice(1)} theme`, exact: true }).check();
+    await page.getByRole('button', { name: 'Save profile', exact: true }).click();
+    await expect(page.getByText('Profile updated.', { exact: true })).toBeVisible();
+  } finally { await teammate.close(); }
 });

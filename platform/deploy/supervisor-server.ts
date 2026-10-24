@@ -1,3 +1,4 @@
+import { MAX_INPUT_BYTES } from "../packages/runtime/src/attachments.js";
 import {
   createServer,
   type IncomingMessage,
@@ -32,12 +33,12 @@ export interface SupervisorDependencies {
   ready?: () => boolean;
   networkBoundary?: () => NetworkBoundary | Promise<NetworkBoundary>;
 }
-async function body(request: IncomingMessage) {
+async function body(request: IncomingMessage, limit = 2 * 1024 * 1024) {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 2 * 1024 * 1024) throw new Error("Request too large");
+    if (size > limit) throw new Error("Request too large");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
@@ -175,12 +176,12 @@ export function supervisorHandler(deps: SupervisorDependencies) {
           return reply(response, 409, {
             error: "steering_unavailable",
           });
-        const input = await body(request);
+        const input = await body(request, MAX_INPUT_BYTES);
         if (
           typeof input.id !== "string" ||
           !new RegExp(`^${ID}$`).test(input.id) ||
           typeof input.content !== "string" ||
-          input.content.length > 100000 ||
+          Buffer.byteLength(input.content) > 512 * 1024 ||
           !Number.isSafeInteger(input.sequence) ||
           typeof input.authorId !== "string" ||
           typeof input.authorName !== "string"
@@ -228,7 +229,7 @@ export function supervisorHandler(deps: SupervisorDependencies) {
       }
       match = path.match(new RegExp(`^/v1/runs/(${ID})/attach$`));
       if (request.method === "POST" && (path === "/v1/runs" || match)) {
-        const input = await body(request),
+        const input = await body(request, MAX_INPUT_BYTES),
           controller = new AbortController();
         if (
           match &&

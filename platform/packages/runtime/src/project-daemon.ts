@@ -17,7 +17,8 @@ import {
 import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, posix } from "node:path";
-import { identity, MAX_LINE } from "./validation.js";
+import { identity } from "./validation.js";
+import { MAX_INPUT_BYTES } from "./attachments.js";
 import { safeRelative, openDirectory } from "./sandbox.js";
 import { prepareSandbox } from "./execution-sandbox.js";
 import { RuntimeError, type RuntimeRequest } from "./types.js";
@@ -102,7 +103,7 @@ async function relay(
           let size = 0;
           req.on("data", (chunk) => {
             size += chunk.length;
-            if (size > 16 * 1024 * 1024) upstream.destroy();
+            if (size > MAX_INPUT_BYTES) upstream.destroy();
           });
           upstream.on("error", () => {
             if (!res.headersSent) res.writeHead(502);
@@ -189,7 +190,7 @@ const server = netServer({ allowHalfOpen: true }, (socket) => {
   let pending = Buffer.alloc(0);
   const receive = (chunk: Buffer) => {
     pending = Buffer.concat([pending, chunk]);
-    if (pending.length > MAX_LINE) {
+    if (pending.length > MAX_INPUT_BYTES) {
       socket.destroy();
       return;
     }

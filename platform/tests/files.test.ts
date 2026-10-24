@@ -134,10 +134,8 @@ test("project files are immediately usable, mutable, versioned and isolated", as
       files.readFileVersion(f.ctx, f.other, first.id),
       /not found/u,
     );
-    await assert.rejects(
-      files.uploadFile(f.ctx, f.reader, scope, "bad.txt", Buffer.from("no")),
-      /read-only/u,
-    );
+    const sharedWrite = await files.uploadFile(f.ctx, f.reader, scope, "shared.txt", Buffer.from("collaborator"));
+    assert.equal((await files.readFileVersion(f.ctx, f.member, sharedWrite.id)).bytes.toString(), "collaborator");
     assert.equal(
       (await files.listFiles(f.ctx, f.reader, scope, "Evidence")).length,
       1,

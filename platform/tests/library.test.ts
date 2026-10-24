@@ -32,7 +32,7 @@ async function publish(
     },
   );
 }
-test("reports default to current project access; creator controls organization/public visibility and admin can override", async (t) => {
+test("reports default to current workspace access; members control visibility and revoked members cannot edit", async (t) => {
   const f = await platformFixture(t),
     a = await publish(f, {
       version: 1,
@@ -60,7 +60,7 @@ test("reports default to current project access; creator controls organization/p
         visibility: "public",
       })
     ).statusCode,
-    403,
+    404,
   );
   assert.equal(
     (
@@ -296,7 +296,7 @@ test("safe contract rejects HTML, CSS, URL, scripts, executable live publishing 
     409, // The restored publication route requires an explicit current draft revision.
   );
 });
-test("report sources cannot cross projects/organizations; library share revocation and creator removal revoke current data", async (t) => {
+test("report sources cannot cross workspaces/organizations; library share revocation blocks sources and creator removal preserves shared reports", async (t) => {
   const f = await platformFixture(t),
     other = await uploadFile(
       f.ctx,
@@ -391,7 +391,7 @@ test("report sources cannot cross projects/organizations; library share revocati
   );
   assert.equal(
     (await f.request(undefined, "GET", staticReport.json().url)).statusCode,
-    404,
+    200,
   );
 });
 test("image resources repeat visibility checks and reject SVG active content and symlink source swaps", async (t) => {

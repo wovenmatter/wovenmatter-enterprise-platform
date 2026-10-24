@@ -99,6 +99,11 @@ test("uncertain submission survives reload with the same identity and is scoped 
   assert.equal(loadPendingMessage(key, storage), undefined);
   storage.setItem(key, '{"id":"<script>","content":null}');
   assert.equal(loadPendingMessage(key, storage), undefined);
+  const attached = { ...pending, content: "", attachments: [{ kind: "note" as const, id: "note-fixture", title: "Note fixture" }] };
+  savePendingMessage(key, attached, storage);
+  assert.deepEqual(loadPendingMessage(key, storage), attached);
+  storage.setItem(key, JSON.stringify({ ...attached, attachments: [{ kind: "file", id: "../private", title: "Invalid" }] }));
+  assert.equal(loadPendingMessage(key, storage), undefined, "A damaged receipt must never replay with its attachments silently removed");
 });
 test("untrusted Markdown blocks executable and scheme-relative destinations while retaining protected source URLs", () => {
   for (const url of [
@@ -157,4 +162,11 @@ test("an acknowledgement after navigation clears only its own draft and receipt"
     loadConversationDraft("draft", storage)?.content,
     pending.content,
   );
+  const attachments = [{ kind: "note" as const, id: "note-first", title: "First" }];
+  const changed = [{ kind: "note" as const, id: "note-next", title: "Next" }];
+  const attached = { ...pending, content: "", attachments };
+  savePendingMessage("pending", attached, storage);
+  saveConversationDraft("draft", "", "message", storage, changed);
+  settleConversationInput("pending", "draft", attached, storage);
+  assert.deepEqual(loadConversationDraft("draft", storage)?.attachments, changed, "Acknowledging an attachment-only message preserves a different unsent selection");
 });

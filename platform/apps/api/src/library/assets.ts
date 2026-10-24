@@ -79,10 +79,12 @@ export async function manageAsset(
   edit = false,
 ) {
   await ctx.requireOrgMember(user, a.org_id);
-  if (user.id !== a.creator_id) await ctx.requireOrgAdmin(user, a.org_id);
-  if (a.project_id)
+  if (a.project_id) {
     await ctx.requireProject(user, a.project_id, edit ? "write" : "read");
-  else if (edit) await ctx.requireLibraryFull(user, a.org_id);
+  } else {
+    if (user.id !== a.creator_id) await ctx.requireOrgAdmin(user, a.org_id);
+    if (edit) await ctx.requireLibraryFull(user, a.org_id);
+  }
 }
 async function access(ctx: AppContext, a: StoredAsset, user?: User) {
   if (!a.published_version) {

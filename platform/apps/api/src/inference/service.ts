@@ -1432,11 +1432,11 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
     harness: string,
     connectionId?: string,
   ) {
-    if (harness !== "pi")
+    if (!["pi", "codex", "claude_code", "grok_build", "opencode"].includes(harness))
       throw new InferenceError(
         400,
         "invalid_harness",
-        "Sessions use Pi Durable.",
+        "Choose an available native harness.",
       );
     if (connectionId)
       throw new InferenceError(
@@ -1453,6 +1453,9 @@ CREATE INDEX inference_gateway_tokens_run ON inference_gateway_tokens(run_id);
         "model_unavailable",
         "This model is not available in the organization inference pool.",
       );
+    // Native clients retain their own wire protocol. The pinned organization
+    // inference proxy translates that protocol to the selected provider; provider
+    // names are not a native-harness allowlist.
   }
   async usage(orgId: string) {
     if (!(await this.options.registry.resolve(orgId)))

@@ -128,9 +128,9 @@ test("thread participant picker includes implicit project admins but excludes ot
   const ids = picker.json().items.map((u: { id: string }) => u.id);
   for (const name of ["owner", "admin", "full"])
     assert.ok(ids.includes(f.users[name].id));
-  assert.equal(ids.includes(f.users.read.id), false);
+  assert.equal(ids.includes(f.users.read.id), true);
   assert.equal(ids.includes(f.users.other.id), false);
-  assert.equal((await f.request("admin", "GET", path)).statusCode, 404);
+  assert.equal((await f.request("admin", "GET", path)).statusCode, 200);
   await f.db.run(
     "DELETE FROM organization_memberships WHERE user_id=? AND org_id=?",
     [f.users.read.id, f.orgA],
@@ -384,11 +384,11 @@ test("failed schedule revocation remains pending and retries after the transient
   );
 });
 
-test("project access comes from the user grant and administrators can manage it", async (t) => {
+test("workspace membership grants full access and administrators can revoke it", async (t) => {
   const f = await platformFixture(t);
   await f.db.run("UPDATE projects SET access='read' WHERE id=?", [f.projectA]);
   for (const actor of ["owner", "admin", "full", "read"]) {
-    const expected = actor === "read" ? "read" : "write";
+    const expected = "write";
     assert.equal(
       (await f.ctx.requireProject(f.users[actor], f.projectA)).access,
       expected,
@@ -467,10 +467,7 @@ test("project access comes from the user grant and administrators can manage it"
   const { resolveProjectMounts } = await import(
     "../apps/api/src/files/sharing.js"
   );
-  await assert.rejects(
-    resolveProjectMounts(f.ctx, f.users.read, f.projectA, "write"),
-    { code: "read_only" },
-  );
+  assert.equal((await resolveProjectMounts(f.ctx, f.users.read, f.projectA, "write"))[0].readOnly, false);
   assert.equal(
     (await resolveProjectMounts(f.ctx, f.users.read, f.projectA, "read"))[0]
       .readOnly,

@@ -4,7 +4,7 @@ The root MIT license covers Woven Matter's original application code. It does no
 
 ## Locked npm dependencies
 
-[The npm inventory](third-party/npm-inventory.tsv) records all 472 registry package occurrences (469 distinct package/version pairs) in the root lockfile, including development packages and optional platform variants. Versions, archive URLs and declared licenses come from those lockfiles; archive integrity hashes remain in the lockfiles. A declared license is metadata, not proof that a particular distribution contains every required notice.
+[The npm inventory](third-party/npm-inventory.tsv) records all 526 registry package occurrences (523 distinct package/version pairs) in the root lockfile, including development packages and optional platform variants. Versions, archive URLs and declared licenses come from that lockfile; archive integrity hashes remain in the lockfile. Regenerate these files with `node platform/tools/collect-npm-notices.mjs`, or verify them against the current installation with `--check`. A declared license is metadata, not proof that a particular distribution contains every required notice.
 
 [Collected npm notices](third-party/npm-NOTICES.txt) preserve the license/notice files supplied by the installed Linux x64 packages. This is a supplemental collection: some packages omit a top-level license, and optional packages for other architectures were not installed. [The coverage list](third-party/notice-coverage.tsv) identifies these omissions. Keep the original package contents and their embedded notices as well. Reassess the exact contents of each release image and platform variant before redistribution. This source repository does not vendor node_modules or native binaries.
 
@@ -18,6 +18,10 @@ The root MIT license covers Woven Matter's original application code. It does no
 | Lucide React                                                   | 0.468.0                | ISC; its license also preserves Feather/MIT attribution       |
 | @earendil-works/pi-durable, pi-ai, pi-coding-agent, chord       | 1.1.0                 | MIT; [upstream license](third-party/Pi-LICENSE.txt)           |
 | @anthropic-ai/claude-agent-sdk and its native packages         | 0.3.284                | Anthropic terms; not MIT and not an Apache license grant      |
+| @agentclientprotocol/codex-acp, claude-agent-acp              | 1.13.1, 0.81.2         | Apache-2.0; their bundled native SDKs retain their own terms   |
+| @openai/codex and native platform packages                    | 0.156.1                | Apache-2.0; original license and notices retained             |
+| @xai-official/grok and native platform packages               | 1.0.67                 | Apache-2.0 declared; retain original package notices          |
+| @opencode/cli and native platform packages                    | 2.1.2                  | MIT declared; retain original package notices                |
 | Playwright                                                     | 1.63.0                 | Apache-2.0; browser distributions have additional notices     |
 | TypeScript                                                     | 7.0.2                  | Apache-2.0                                                    |
 | Vite, @vitejs/plugin-react                                     | 8.3.5, 6.1.1           | MIT; Vite's license file includes bundled third-party notices |
@@ -47,3 +51,5 @@ The application icons are existing WovenMatter brand artwork, not third-party ic
 ## Embedded WovenMatter agent
 
 The embedded default-agent modules derive from [WovenMatter PR #105](https://github.com/wovenmatter/wovenmatter/pull/105) and merged source commit 5542b83ab2e11cc3c24037552883e2c6814bd596, under the same MIT application license. The Claude admission implementation retains its [Hermes source notice and license](platform/packages/runtime/src/embedded/default-agent/src/claude-hermes-LICENSE.txt). Enterprise adaptations and behavioral parity are documented in [the port guide](platform/docs/PI_DURABLE_PORT.md).
+
+The native session/configuration/interaction/archive adapters also derive from WovenMatter commit `04fe05090e107df92c498a4563b742978c91d933`, under the same application license. Their source mapping and Enterprise adaptations are documented in [organization workspace native parity](platform/runtime/ORGANIZATION_WORKSPACE_PARITY.md). The independent Claude ACP adapter includes its pinned Claude SDK 0.3.280 alongside the existing Pi SDK 0.3.284; both retain Anthropic's terms and notices.

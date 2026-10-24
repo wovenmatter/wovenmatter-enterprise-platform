@@ -150,6 +150,7 @@ export type Model = {
   name: string;
   provider: string;
   thinkingLevels?: string[];
+  defaultThinkingLevel?: string;
 };
 export type Run = {
   id: string;
@@ -163,6 +164,7 @@ export type Run = {
   completedAt?: string | null;
 };
 export type Conversation = {
+  tools?: { notes: boolean; history: boolean; usage: boolean; calendar: boolean; library: boolean };
   folderId: string | null;
   workingDirectory: string | null;
   workspaceLocked: boolean;
@@ -188,7 +190,7 @@ export type Conversation = {
 export type List<T> = { items: T[] };
 export const date = (value?: string) =>
   value
-    ? new Intl.DateTimeFormat(undefined, {
+    && Number.isFinite(new Date(value).getTime()) ? new Intl.DateTimeFormat(undefined, {
         dateStyle: "medium",
         timeStyle: "short",
       }).format(new Date(value))
