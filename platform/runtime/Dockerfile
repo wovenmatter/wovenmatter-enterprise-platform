@@ -17,7 +17,9 @@ COPY platform/apps/web/package.json ./platform/apps/web/package.json
 COPY platform/packages/runtime/package.json ./platform/packages/runtime/package.json
 RUN npm install --global npm@12.2.0 && npm ci --no-audit --no-fund --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
 COPY platform/runtime/install-native.mjs /opt/install-native.mjs
-RUN node /opt/install-native.mjs /opt/runtime/node_modules
+COPY platform/tools/prepare-pi-package.mjs /opt/prepare-pi-package.mjs
+RUN node /opt/prepare-pi-package.mjs /opt/runtime/node_modules \
+ && node /opt/install-native.mjs /opt/runtime/node_modules
 
 FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe
 RUN test "$(dpkg --print-architecture)" = amd64 \

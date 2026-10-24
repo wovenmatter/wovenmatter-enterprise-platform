@@ -7783,7 +7783,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 
 
-===== body-parser@2.3.0 / LICENSE =====
+===== body-parser@2.4.0 / LICENSE =====
 (The MIT License)
 
 Copyright (c) 2014 Jonathan Ong <me@jongleberry.com>
@@ -9535,7 +9535,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 For more information, please refer to <http://unlicense.org>
 
 
-===== fast-uri@3.1.8 / LICENSE =====
+===== fast-uri@3.1.9 / LICENSE =====
 Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae
 Copyright (c) 2021-present The Fastify team <https://github.com/fastify/fastify#team>
 All rights reserved.
@@ -9568,7 +9568,7 @@ The complete list of contributors can be found at:
 - https://github.com/garycourt/uri-js/graphs/contributors
 
 
-===== fast-uri@4.2.1 / LICENSE =====
+===== fast-uri@4.2.3 / LICENSE =====
 Copyright (c) 2011-2021, Gary Court until https://github.com/garycourt/uri-js/commit/a1acf730b4bba3f1097c9f52e7d9d3aba8cdcaae
 Copyright (c) 2021-present The Fastify team <https://github.com/fastify/fastify#team>
 All rights reserved.
@@ -9625,7 +9625,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-===== fastify@5.12.5 / LICENSE =====
+===== fastify@5.12.6 / LICENSE =====
 MIT License
 
 Copyright (c) 2016-present The Fastify team <https://github.com/fastify/fastify#team>
@@ -11416,7 +11416,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-===== ip-address@10.7.2 / LICENSE =====
+===== ip-address@10.7.4 / LICENSE =====
 Copyright (C) 2011 by Beau Gunderson
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -14569,7 +14569,7 @@ SOFTWARE.
 
 
 
-===== nodemailer@10.0.12 / LICENSE =====
+===== nodemailer@10.1.4 / LICENSE =====
 Copyright (c) 2011-2023 Andris Reinman
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -15851,7 +15851,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
-===== qs@6.16.0 / LICENSE.md =====
+===== qs@6.16.1 / LICENSE.md =====
 BSD 3-Clause License
 
 Copyright (c) 2014, Nathan LaFreniere and other [contributors](https://github.com/ljharb/qs/graphs/contributors)
@@ -17828,7 +17828,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 
-===== undici@8.10.2 / LICENSE =====
+===== undici@8.12.2 / LICENSE =====
 MIT License
 
 Copyright (c) Matteo Collina and Undici contributors
@@ -20331,7 +20331,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 
-===== zod@4.6.5 / LICENSE =====
+===== zod@4.6.6 / LICENSE =====
 MIT License
 
 Copyright (c) 2025 Colin McDonnell

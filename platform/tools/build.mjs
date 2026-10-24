@@ -1,5 +1,8 @@
 import { cp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { preparePiPackage } from "./prepare-pi-package.mjs";
+
+await preparePiPackage();
 
 // Deleted or moved sources must not survive as stale runnable code or tests.
 await rm(new URL("../dist/", import.meta.url), { recursive: true, force: true });
