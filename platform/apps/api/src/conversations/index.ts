@@ -24,6 +24,10 @@ export async function registerConversations(
   ctx: AppContext,
   service: ConversationService,
 ) {
+  app.get("/enterprise/api/projects/:projectId/agent-settings", async r => service.agentSettings(await ctx.requireUser(r), params(r).projectId!));
+  app.patch("/enterprise/api/projects/:projectId/agent-settings", async r => service.updateAgentSettings(await ctx.requireUser(r), params(r).projectId!, body(r)));
+  app.get("/enterprise/api/conversations/:conversationId/native", async r => service.nativeStatus(await ctx.requireUser(r), params(r).conversationId!));
+  app.post("/enterprise/api/conversations/:conversationId/native/respond", async r => service.nativeRespond(await ctx.requireUser(r), params(r).conversationId!, body(r)));
   app.get("/enterprise/api/projects/:projectId/folders", async (r) =>
     listFolders(ctx, await ctx.requireUser(r), params(r).projectId!),
   );
@@ -203,8 +207,8 @@ export async function registerConversations(
       }>("SELECT org_id FROM projects WHERE id=?", [c.project_id]);
       return {
         items: await ctx.db.all(
-          "SELECT u.id,u.name,u.email FROM users u WHERE u.enabled=1 AND (u.role='owner' OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u.id AND m.org_id=? AND (m.role='admin' OR EXISTS(SELECT 1 FROM project_members p WHERE p.user_id=u.id AND p.project_id=? AND (?='read' OR p.access='write'))))) ORDER BY u.name,u.email",
-          [project!.org_id, c.project_id, c.mode],
+          "SELECT u.id,u.name,u.email FROM users u WHERE u.enabled=1 AND (u.role='owner' OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u.id AND m.org_id=? AND (m.role='admin' OR EXISTS(SELECT 1 FROM project_members p WHERE p.user_id=u.id AND p.project_id=?)))) ORDER BY u.name,u.email",
+          [project!.org_id, c.project_id],
         ),
       };
     },

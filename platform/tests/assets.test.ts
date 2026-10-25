@@ -87,7 +87,7 @@ test("organization assets need no project; drafts and previews stay private unti
   );
 });
 
-test("asset ownership, full/read permissions and cross-organization boundaries apply to every draft operation", async (t) => {
+test("workspace drafts are shared with all members and retain cross-organization boundaries", async (t) => {
   const f = await platformFixture(t),
     base = `/enterprise/api/organizations/${f.orgA}/assets`;
   assert.equal(
@@ -103,7 +103,7 @@ test("asset ownership, full/read permissions and cross-organization boundaries a
         draft: true,
       })
     ).statusCode,
-    403,
+    201,
   );
   const r = await f.request("full", "POST", base, {
     name: "Project draft",
@@ -113,7 +113,7 @@ test("asset ownership, full/read permissions and cross-organization boundaries a
   assert.equal(r.statusCode, 201, r.body);
   const a = r.json(),
     path = `/enterprise/api/assets/${a.id}`;
-  for (const actor of ["read", "other"]) {
+  for (const actor of ["other"]) {
     assert.ok(
       [403, 404].includes((await f.request(actor, "GET", path)).statusCode),
     );
@@ -133,7 +133,7 @@ test("asset ownership, full/read permissions and cross-organization boundaries a
         ),
       );
   }
-  assert.equal((await f.request("read", "GET", base)).json().items.length, 0);
+  assert.equal((await f.request("read", "GET", base)).json().items.length, 2);
   await f.db.run(
     "UPDATE project_members SET access='read' WHERE project_id=? AND user_id=?",
     [f.projectA, f.users.full.id],
@@ -145,15 +145,15 @@ test("asset ownership, full/read permissions and cross-organization boundaries a
         expectedRevision: 1,
       })
     ).statusCode,
-    403,
+    200,
   );
   assert.equal(
     (
-      await f.request("full", "POST", path + "/publish", {
-        expectedRevision: 1,
+      await f.request("read", "POST", path + "/publish", {
+        expectedRevision: 2,
       })
     ).statusCode,
-    403,
+    200,
   );
   await f.db.run(
     "DELETE FROM organization_memberships WHERE org_id=? AND user_id=?",

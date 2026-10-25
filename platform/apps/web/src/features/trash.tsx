@@ -38,7 +38,7 @@ export function DeletedProjectsPage() {
       setNotice(
         result.path
           ? `Files recovered to Library / ${result.path}`
-          : "Project restored.",
+          : "Workspace restored.",
       );
       resource.reload();
     } catch (e) {
@@ -54,8 +54,8 @@ export function DeletedProjectsPage() {
         label="Back to organization settings"
       />
       <PageHeader
-        title="Deleted projects"
-        description="Restore projects or recover their files within 30 days of deletion."
+        title="Deleted workspaces"
+        description="Restore workspaces or recover their files within 30 days of deletion."
       />
       <ErrorNotice
         message={error || resource.error}
@@ -69,7 +69,7 @@ export function DeletedProjectsPage() {
           <table>
             <thead>
               <tr>
-                <th>Project</th>
+                <th>Workspace</th>
                 <th>Deleted</th>
                 <th>Recover until</th>
                 <th>Actions</th>
@@ -109,8 +109,8 @@ export function DeletedProjectsPage() {
           </table>
         </div>
       ) : (
-        <Empty title="No deleted projects">
-          Deleted projects remain recoverable here for 30 days.
+        <Empty title="No deleted workspaces">
+          Deleted workspaces remain recoverable here for 30 days.
         </Empty>
       )}
     </section>

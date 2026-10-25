@@ -91,6 +91,8 @@ export async function purgeExpiredProject(ctx: AppContext, id: string) {
       for (const [parent, name] of [
         [join(ctx.config.stateDir, "workspaces", "projects"), row.id],
         [join(ctx.config.stateDir, "agent-sessions", row.org_id), row.id],
+        [join(ctx.config.stateDir, "workspace-datasets"), row.id],
+        [join(ctx.config.stateDir, "workspace-library"), row.id],
       ]) {
         await mkdir(parent, {
           recursive: true,
@@ -130,6 +132,13 @@ export async function purgeExpiredProject(ctx: AppContext, id: string) {
         [id],
       );
       await ctx.db.batch([
+        ...["workspace_library_items", "workspace_library_messages", "workspace_library_blobs"].map(table => ({
+          sql: `DELETE FROM ${table} WHERE project_id=?`, params: [id],
+        })),
+        ...["workspace_task_runs", "workspace_task_state", "workspace_content_versions"].map(table => ({
+          sql: `DELETE FROM ${table} WHERE content_id IN (SELECT id FROM workspace_content WHERE project_id=?)`, params: [id],
+        })),
+        { sql: "DELETE FROM workspace_content WHERE project_id=?", params: [id] },
         {
           sql: "DELETE FROM workspace_file_shares WHERE project_id=? OR file_id IN (SELECT id FROM workspace_files WHERE project_id=?)",
           params: [id, id],

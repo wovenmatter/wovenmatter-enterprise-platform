@@ -47,7 +47,14 @@ const ConversationsPage = lazy(() =>
     default: m.ConversationsPage,
   })),
 );
-export function ProjectsPage() {
+const NotesPage = lazy(() => import("./workspace-content").then(m => ({ default: m.NotesPage })));
+const CalendarPage = lazy(() => import("./workspace-content").then(m => ({ default: m.CalendarPage })));
+const UsagePage = lazy(() => import("./workspace-content").then(m => ({ default: m.UsagePage })));
+const WorkspaceLibraryPage = lazy(() => import("./workspace-library").then(m => ({ default: m.WorkspaceLibraryPage })));
+const DatabasesPage = lazy(() => import("./workspace-databases").then(m => ({ default: m.DatabasesPage })));
+const WorkspaceSettings = lazy(() => import("./workspace-settings").then(m => ({ default: m.WorkspaceSettings })));
+const ConnectionsPage = lazy(() => import("./connections").then(m => ({ default: m.ConnectionsPage })));
+export function ProjectsPage({ canSwitchOrganization = false }: { canSwitchOrganization?: boolean }) {
   const { org, isAdmin, orgBase } = useWorkspace();
   const projects = useResource<List<Project>>(
     `/enterprise/api/organizations/${org.id}/projects`,
@@ -60,15 +67,14 @@ export function ProjectsPage() {
   return (
     <section>
       <PageHeader
-        title="Projects"
-        actions={
-          isAdmin ? (
-            <button className="primary" onClick={() => setCreating(true)}>
-              <Icon icon={Plus} size={14} weight="control" />
-              New project
-            </button>
-          ) : null
-        }
+        title="Workspaces"
+        actions={<>
+          {canSwitchOrganization ? <Link to="/organizations">Switch organization</Link> : null}
+          {isAdmin ? <button className="primary" onClick={() => setCreating(true)}>
+            <Icon icon={Plus} size={14} weight="control" />
+            New workspace
+          </button> : null}
+        </>}
       />
       <ErrorNotice message={projects.error} onRetry={projects.reload} />
       {projects.loading && !projects.data ? (
@@ -79,8 +85,7 @@ export function ProjectsPage() {
             <table>
               <thead>
                 <tr>
-                  <th>Project</th>
-                  <th>Access</th>
+                  <th>Workspace</th>
                   <th>Status</th>
                   <th>Created</th>
                 </tr>
@@ -91,7 +96,7 @@ export function ProjectsPage() {
                     <td>
                       <Link
                         className="item-link"
-                        to={`${orgBase}/projects/${p.id}`}
+                        to={`${orgBase}/workspaces/${p.id}`}
                       >
                         <Icon icon={Folder} size={16} />
                         <div>
@@ -103,9 +108,6 @@ export function ProjectsPage() {
                       </Link>
                     </td>
                     <td>
-                      {p.access === "write" ? "Full access" : "Read-only"}
-                    </td>
-                    <td>
                       <Status value={p.status} />
                     </td>
                     <td>{date(p.createdAt)}</td>
@@ -115,24 +117,24 @@ export function ProjectsPage() {
             </table>
           ) : (
             <Empty
-              title="No projects yet"
+              title="No workspaces yet"
               action={
                 isAdmin ? (
                   <button className="primary" onClick={() => setCreating(true)}>
-                    Create project
+                    Create workspace
                   </button>
                 ) : null
               }
             >
               {isAdmin
-                ? "Create a project to bring your team, files, and conversations together."
-                : "Your administrator can add you to a project."}
+                ? "Create a workspace to bring your team, files, and conversations together."
+                : "Your administrator can add you to a workspace."}
             </Empty>
           )}
         </div>
       )}
       {creating ? (
-        <Modal title="New project" onClose={() => setCreating(false)}>
+        <Modal title="New workspace" onClose={() => setCreating(false)}>
           <ProjectForm
             onCancel={() => setCreating(false)}
             onSave={async (body) => {
@@ -143,7 +145,7 @@ export function ProjectsPage() {
               setCreating(false);
               projects.reload();
               workspaceChanged();
-              navigate(`${orgBase}/projects/${p.id}`);
+              navigate(`${orgBase}/workspaces/${p.id}`);
             }}
           />
         </Modal>
@@ -169,7 +171,7 @@ function ProjectForm({
   >(user.role === "owner" ? "/enterprise/api/hosts" : null);
   return (
     <AsyncForm
-      submitLabel={project ? "Save changes" : "Create project"}
+      submitLabel={project ? "Save changes" : "Create workspace"}
       onCancel={onCancel}
       onSubmit={async (data) =>
         onSave({
@@ -190,7 +192,7 @@ function ProjectForm({
             label="Workspace host"
             hint={
               project
-                ? "Stored projects retain their assigned host."
+                ? "Stored workspaces retain their assigned host."
                 : "Choose an override or use the organization default."
             }
           >
@@ -216,7 +218,7 @@ function ProjectForm({
           </Field>
         </>
       ) : null}
-      <Field label="Project name">
+      <Field label="Workspace name">
         <input
           autoFocus
           name="name"
@@ -258,7 +260,7 @@ export function ProjectPage() {
   )
     return <Loading />;
   if (!project.data)
-    return <ErrorNotice message={project.error || "Project unavailable."} />;
+    return <ErrorNotice message={project.error || "Workspace unavailable."} />;
   const p = project.data;
   return (
     <section className="project-page">
@@ -270,7 +272,7 @@ export function ProjectPage() {
       {p.status !== "ready" && p.status !== "active" ? (
         <div className="notice">
           <Status value={p.status} />
-          <span>Project setup is managed in the background.</span>
+          <span>Workspace setup is managed in the background.</span>
           <button className="text-button" onClick={project.reload}>
             <Icon icon={RefreshCw} size={12} weight="control" />
             Refresh status
@@ -298,35 +300,33 @@ export function ProjectPage() {
         <Routes>
           <Route index element={<ConversationsPage key={p.id} project={p} />} />
           <Route path="files" element={<FilesPage key={p.id} project={p} />} />
-          <Route path="members" element={<ProjectMembers project={p} />} />
+          <Route path="members" element={isAdmin ? <ProjectMembers project={p} /> : <ErrorNotice message="Organization administrator access required." />} />
+          <Route path="notes" element={<NotesPage project={p} />} />
+          <Route path="artifacts" element={<NotesPage key="artifacts" project={p} kind="artifact" />} />
+          <Route path="calendar" element={<CalendarPage project={p} />} />
+          <Route path="tasks" element={<CalendarPage key="tasks" project={p} tasksOnly />} />
+          <Route path="library" element={<WorkspaceLibraryPage project={p} />} />
+          <Route path="databases" element={<DatabasesPage project={p} />} />
+          <Route path="usage" element={<UsagePage project={p} />} />
+          <Route path="connections" element={isAdmin ? <ConnectionsPage projectId={p.id} /> : <ErrorNotice message="Organization administrator access required." />} />
           <Route
             path="settings"
-            element={
-              isAdmin ? (
-                <ProjectSettings
-                  project={p}
-                  refresh={project.reload}
-                  onDelete={() => setDeleting(true)}
-                />
-              ) : (
-                <ErrorNotice message="Organization administrator access required." />
-              )
-            }
+            element={<WorkspaceSettings project={p}>{isAdmin ? <ProjectSettings project={p} refresh={project.reload} onDelete={() => setDeleting(true)} /> : null}</WorkspaceSettings>}
           />
         </Routes>
       </Suspense>
       {deleting ? (
         <Confirm
-          title="Delete project?"
+          title="Delete workspace?"
           onClose={() => setDeleting(false)}
           onConfirm={async () => {
             await api(`/enterprise/api/projects/${p.id}`, {
               method: "DELETE",
             });
-            navigate(`${orgBase}/projects`);
+            navigate(`${orgBase}/workspaces`);
           }}
         >
-          This removes the project and revokes its members’ access. Save any
+          This removes the workspace and revokes its members’ access. Save any
           files you need before continuing.
         </Confirm>
       ) : null}
@@ -344,7 +344,7 @@ function ProjectSettings({
 }) {
   return (
     <section className="subpage settings-page">
-      <PageHeader title="Project settings" />
+
       <Card title="General">
         <ProjectForm
           project={project}
@@ -357,13 +357,13 @@ function ProjectSettings({
         />
       </Card>
       <Card
-        title="Delete project"
-        detail="Removes the project and revokes its members’ access. Deleted projects can be restored for 30 days."
+        title="Delete workspace"
+        detail="Removes the workspace and revokes its members’ access. Deleted workspaces can be restored for 30 days."
       >
         <div className="card-actions">
           <button type="button" className="destructive" onClick={onDelete}>
             <Icon icon={Trash2} size={14} />
-            Delete project
+            Delete workspace
           </button>
         </div>
       </Card>
@@ -384,11 +384,11 @@ export function ProjectMembers({ project }: { project: Project }) {
   );
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Member>();
-  const [error, setError] = useState("");
   return (
     <section className="subpage">
       <PageHeader
-        title="Project members"
+        title="Workspace members"
+        description="Every member can use all workspace content and conversations."
         actions={
           isAdmin ? (
             <button className="primary" onClick={() => setAdding(true)}>
@@ -398,7 +398,7 @@ export function ProjectMembers({ project }: { project: Project }) {
           ) : null
         }
       />
-      <ErrorNotice message={members.error || error} onRetry={members.error ? members.reload : undefined} />
+      <ErrorNotice message={members.error} onRetry={members.error ? members.reload : undefined} />
       {members.loading && !members.data ? (
         <Loading />
       ) : members.error && !members.data ? null : (
@@ -409,7 +409,6 @@ export function ProjectMembers({ project }: { project: Project }) {
                 <tr>
                   <th>Name</th>
                   <th>Email</th>
-                  <th>Access</th>
                   {isAdmin ? (
                     <th>
                       <span className="sr-only">Actions</span>
@@ -422,37 +421,6 @@ export function ProjectMembers({ project }: { project: Project }) {
                   <tr key={m.id}>
                     <td>{m.name}</td>
                     <td>{m.email}</td>
-                    <td>
-                      {isAdmin ? (
-                        <select
-                          aria-label={`Access for ${m.name}`}
-                          value={m.access}
-                          onChange={async (e) => {
-                            setError("");
-                            try {
-                              await send(
-                                `/enterprise/api/projects/${project.id}/members/${m.id}`,
-                                {
-                                  access: e.target.value,
-                                },
-                                "PATCH",
-                              );
-                              members.reload();
-                              workspaceChanged();
-                            } catch (e) {
-                              setError((e as Error).message);
-                            }
-                          }}
-                        >
-                          <option value="read">Read-only</option>
-                          <option value="write">Full access</option>
-                        </select>
-                      ) : m.access === "write" ? (
-                        "Full access"
-                      ) : (
-                        "Read-only"
-                      )}
-                    </td>
                     {isAdmin ? (
                       <td>
                         <button
@@ -468,21 +436,21 @@ export function ProjectMembers({ project }: { project: Project }) {
               </tbody>
             </table>
           ) : (
-            <Empty title="No project members">
-              Add people from your organization to work in this project.
+            <Empty title="No workspace members">
+              Add people from your organization to work in this workspace.
             </Empty>
           )}
         </div>
       )}
       {adding ? (
-        <Modal title="Add project member" onClose={() => setAdding(false)}>
+        <Modal title="Add workspace member" onClose={() => setAdding(false)}>
           <AsyncForm
             submitLabel="Add member"
             onCancel={() => setAdding(false)}
             onSubmit={async (d) => {
               await send(`/enterprise/api/projects/${project.id}/members`, {
                 userId: d.get("userId"),
-                access: d.get("access"),
+                access: "write",
               });
               members.reload();
               setAdding(false);
@@ -506,19 +474,13 @@ export function ProjectMembers({ project }: { project: Project }) {
                   ))}
               </select>
             </Field>
-            <Field label="Access">
-              <select name="access" defaultValue="write">
-                <option value="read">Read-only</option>
-                <option value="write">Full access</option>
-              </select>
-            </Field>
             <ErrorNotice message={people.error} />
           </AsyncForm>
         </Modal>
       ) : null}
       {removing ? (
         <Confirm
-          title="Remove project member?"
+          title="Remove workspace member?"
           label="Remove member"
           onClose={() => setRemoving(undefined)}
           onConfirm={async () => {
@@ -532,7 +494,7 @@ export function ProjectMembers({ project }: { project: Project }) {
             setRemoving(undefined);
           }}
         >
-          {removing.name || removing.email} will lose access to this project and
+          {removing.name || removing.email} will lose access to this workspace and
           its conversations.
         </Confirm>
       ) : null}
@@ -695,7 +657,6 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
                 email: d.get("email"),
                 name: d.get("name"),
                 role: d.get("role"),
-                libraryAccess: d.get("libraryAccess"),
               });
               members.reload();
               setInvite(false);
@@ -712,12 +673,6 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
             </Field>
             <Field label="Email">
               <input name="email" type="email" required />
-            </Field>
-            <Field label="Library access">
-              <select name="libraryAccess" defaultValue="read">
-                <option value="read">Read-only</option>
-                <option value="write">Full access</option>
-              </select>
             </Field>
             <Field label="Role">
               <select name="role">
@@ -737,8 +692,7 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
                 `/enterprise/api/organizations/${org.id}/members/${edit.id}`,
                 {
                   role: d.get("role"),
-                  libraryAccess: d.get("libraryAccess"),
-                  enabled: d.get("enabled") === "on",
+                    enabled: d.get("enabled") === "on",
                 },
                 "PATCH",
               );
@@ -753,15 +707,6 @@ export function MembersPage({ nested = false }: { nested?: boolean }) {
               <select name="role" defaultValue={edit.role}>
                 <option value="member">Member</option>
                 <option value="admin">Administrator</option>
-              </select>
-            </Field>
-            <Field label="Library access">
-              <select
-                name="libraryAccess"
-                defaultValue={edit.libraryAccess ?? "read"}
-              >
-                <option value="read">Read-only</option>
-                <option value="write">Full access</option>
               </select>
             </Field>
             <Switch name="enabled" defaultChecked={edit.enabled}>
@@ -830,7 +775,7 @@ export function SettingsPage() {
               <ErrorNotice message={hosts.error} />
               <Field
                 label="Default workspace host"
-                hint="Applies to new projects. Existing projects retain their host."
+                hint="Applies to new workspaces. Existing workspaces retain their host."
               >
                 <select
                   name="defaultHostId"
@@ -861,19 +806,19 @@ export function SettingsPage() {
       <Card title="Management">
         <div className="destination-list">
           <DestinationRow
-            to={`${orgBase}/settings/deleted-projects`}
+            to={`${orgBase}/settings/deleted-workspaces`}
             icon={Trash2}
-            title="Deleted projects"
-            detail="Restore projects or recover files within 30 days."
+            title="Deleted workspaces"
+            detail="Restore workspaces or recover files within 30 days."
           />
           <DestinationRow
-            to={`${orgBase}/settings/members`}
+            to={`${orgBase}/members`}
             icon={Users}
             title="Members"
             detail="Invite people, update roles, and send password resets."
           />
           <DestinationRow
-            to={`${orgBase}/settings/connections`}
+            to={`${orgBase}/connections`}
             icon={Cable}
             title="Connections"
             detail="Manage inference accounts available to the organization."

@@ -1,3 +1,5 @@
+import { migrateConversationAttachments, attachmentReferences, storedAttachments, resolveAttachments, attachmentContext, runtimeAttachments } from "./attachments.js";
+import { migrateConversationTools, serializeConversationTools, toolPrompt } from "./conversation-tools.js";
 import { initializeFiles } from "../files/storage.js";
 import {
   workspaceSchema,
@@ -26,6 +28,7 @@ import { join } from "node:path";
 import type { RuntimeEvent } from "@wovenmatter-enterprise/runtime";
 import { AppError, type AppContext, type User } from "../context.js";
 import { schema } from "./schema.js";
+import { migrateNativeHarnesses, nativeOptions } from "./native-schema.js";
 import {
   conversationView,
   messageView,
@@ -128,13 +131,14 @@ function executionLimit(value: unknown, name: string): number {
 const hidden = () =>
   new AppError(404, "conversation_not_found", "Conversation not found.");
 function fixedHarness(value: unknown): Harness {
-  if (value !== undefined && value !== null && value !== "" && value !== "pi")
-    throw new AppError(409, "fixed_harness", "Sessions use Pi Durable.");
-  return "pi";
+  if (value === undefined || value === null || value === "") return "pi";
+  if (!["pi", "codex", "claude_code", "grok_build", "opencode"].includes(String(value)))
+    throw new AppError(400, "invalid_harness", "Choose an available native harness.");
+  return value as Harness;
 }
 function selectedMode(value: unknown): Mode {
-  if (value === "read" || value === "write") return value;
-  throw new AppError(400, "invalid_mode", "Mode must be read or write.");
+  if (value === undefined || value === "read" || value === "write") return "write";
+  throw new AppError(400, "invalid_mode", "Workspace chats have full access.");
 }
 type Commit = (statements: Statement[]) => Promise<unknown>;
 interface Running {
@@ -154,6 +158,19 @@ interface Running {
   promise?: Promise<void>;
 }
 export class ConversationService {
+  onMessageAccepted?: (user: User, projectId: string, messageId: string) => Promise<void>;
+  onNativeLibraryBatch?: (user: User, projectId: string, messageId: string, batch: Record<string, unknown>) => Promise<void>;
+  private async captureLibrary(run: RunRow, messageId: string, batch?: Record<string, unknown>) {
+    if (!run.project_id || run.asset_id) return;
+    try {
+      const author = await this.ctx.db.get<{author_id: string | null}>("SELECT author_id FROM conversation_messages WHERE id=?", [messageId]);
+      const user = await this.user(author?.author_id ?? run.user_id);
+      const thread = await this.requireConversation(user, run.conversation_id);
+      await this.requireThreadAuthority(user, thread);
+      if (batch) await this.onNativeLibraryBatch?.(user, run.project_id, messageId, batch);
+      else await this.onMessageAccepted?.(user, run.project_id, messageId);
+    } catch { /* Retention must not roll back accepted input or a terminal receipt. The Library retries from its durable catalog. */ }
+  }
   private running = new Map<string, Running>();
   private pumping = new Map<string, Promise<void>>();
   private timer?: ReturnType<typeof setInterval>;
@@ -222,6 +239,9 @@ CREATE TRIGGER conversation_fixed_mode BEFORE UPDATE OF mode ON conversations WH
       "conversation-pi-options-v1",
       "ALTER TABLE conversations ADD COLUMN pi_options TEXT NOT NULL DEFAULT '{}';",
     );
+    await migrateNativeHarnesses(this.ctx);
+    await migrateConversationAttachments(this.ctx);
+    await migrateConversationTools(this.ctx);
   }
   private async initializeWorkspaceSchema() {
     await this.ctx.db.migrate(
@@ -313,7 +333,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   async requireConversation(
     user: User,
     id: string,
-    manage = false,
+    _manage = false,
   ): Promise<ConversationRow> {
     const c = await this.ctx.db.get<ConversationRow>(
       "SELECT * FROM conversations WHERE id=? AND deleted_at IS NULL",
@@ -332,13 +352,6 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     } catch {
       throw hidden();
     }
-    if (c.creator_id !== user.id) {
-      const membership = await this.ctx.db.get(
-        "SELECT 1 FROM conversation_members WHERE conversation_id=? AND user_id=?",
-        [id, user.id],
-      );
-      if (!membership || manage) throw hidden();
-    }
     return c;
   }
   private async requireThreadAuthority(user: User, c: ConversationRow) {
@@ -347,8 +360,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   async list(user: User, projectId: string, trash = false) {
     const project = await this.ctx.requireProject(user, projectId);
     const rows = await this.ctx.db.all<ConversationRow>(
-      "SELECT c.* FROM conversations c WHERE c.project_id=? AND c.asset_id IS NULL AND (c.deleted_at IS NOT NULL)=? AND (c.creator_id=? OR EXISTS(SELECT 1 FROM conversation_members m WHERE m.conversation_id=c.id AND m.user_id=?)) ORDER BY c.updated_at DESC",
-      [projectId, Number(trash), user.id, user.id],
+      "SELECT c.* FROM conversations c WHERE c.project_id=? AND c.asset_id IS NULL AND (c.deleted_at IS NOT NULL)=? ORDER BY c.updated_at DESC",
+      [projectId, Number(trash)],
     );
     return {
       items: await Promise.all(
@@ -386,7 +399,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     );
     return run ? runView(run) : null;
   }
-  private async defaultModel(user: User, orgId: string) {
+  private async defaultModel(user: User, orgId: string, _harness: Harness = "pi") {
     const catalog = await this.dependencies.inference.models?.(orgId);
     if (!catalog?.length) return "";
     if (
@@ -414,23 +427,28 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   }
   async create(user: User, projectId: string, input: Record<string, unknown>) {
     const project = await this.ctx.requireProject(user, projectId);
-    const mode =
-      input.mode === undefined ? project.access : selectedMode(input.mode);
+    const defaults = await this.agentSettings(user, projectId);
+    const selected = fixedHarness(input.harness ?? defaults.defaultHarness);
+    const configured = defaults.agents[selected] ?? {};
+    input = {...input, harness: selected, ...(input.model === undefined && configured.model ? {model: configured.model} : {}),
+      ...(input.pi === undefined && selected === "pi" ? {pi: Object.fromEntries(Object.entries(configured).filter(([key]) => ["thinking", "codeMode", "subagentConcurrency"].includes(key)))} : {}),
+      ...(input.native === undefined && selected !== "pi" ? {native: {...(configured.thinking ? {thinking: configured.thinking} : {}), ...(configured.permission ? {permission: configured.permission} : {})}} : {})};
+    const mode = selectedMode(input.mode);
     await this.ctx.requireProject(user, projectId, mode);
     const model =
         input.model === undefined
-          ? await this.defaultModel(user, project.orgId)
+          ? await this.defaultModel(user, project.orgId, selected)
           : optionalModel(input.model),
       harness = fixedHarness(input.harness),
-      title = field(input.title ?? "New conversation", "Title", 200);
+      title = field(input.title ?? "New chat", "Title", 200);
     const folder =
       input.folderId == null
         ? null
         : await requireFolder(this.ctx, projectId, input.folderId);
     const options = piOptions(input.pi);
-    await this.validateThinking(project.orgId, model, options);
+    if (harness === "pi") await this.validateThinking(project.orgId, model, options);
     // Provisioning projects have no placed runtime yet; pin on their first usable turn.
-    if (project.status === "ready" && this.dependencies.runtime.sdkCatalog)
+    if (harness === "pi" && project.status === "ready" && this.dependencies.runtime.sdkCatalog)
       options.sdkGeneration = (
         await this.runtimeSDKCatalog(projectId)
       ).defaultGeneration;
@@ -445,11 +463,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         harness,
         connectionId,
       );
+    const toolSettings = serializeConversationTools(input.tools);
     const id = randomUUID(),
       timestamp = now();
     await this.ctx.db.batch([
       {
-        sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,pi_options,folder_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO conversations(id,org_id,project_id,creator_id,title,mode,harness,model,connection_id,created_at,updated_at,pi_options,folder_id,native_options,tool_settings) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         params: [
           id,
           project.orgId,
@@ -464,6 +483,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           timestamp,
           JSON.stringify(options),
           folder?.id ?? null,
+          JSON.stringify(nativeOptions(input.native)),
+          toolSettings,
         ],
       },
       {
@@ -488,7 +509,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         mode = input.mode === undefined ? c.mode : selectedMode(input.mode),
         model =
           input.model === undefined ? c.model : optionalModel(input.model),
-        harness = fixedHarness(input.harness),
+        harness = input.harness == null ? c.harness : fixedHarness(input.harness),
         connectionId =
           input.connectionId === undefined
             ? c.connection_id
@@ -501,6 +522,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "fixed_mode",
           "Thread access is fixed at creation. Create a new thread to use a different mode.",
         );
+      if (harness !== c.harness && await this.ctx.db.get("SELECT 1 FROM conversation_runs WHERE conversation_id=? LIMIT 1", [id]))
+        throw new AppError(409, "fixed_harness", "This chat keeps its native harness and history. Start a new chat to use another harness.");
       await this.requireThreadAuthority(user, c);
       if (model)
         await this.dependencies.inference.validateSelection(
@@ -527,11 +550,12 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           : supplied;
       const nextPi = { ...previousPi, ...piOptions(updates) };
       if (clearThinking) delete nextPi.thinking;
-      await this.validateThinking(c.org_id, model, nextPi);
+      if (harness === "pi") await this.validateThinking(c.org_id, model, nextPi);
+      const native = JSON.stringify({...JSON.parse(c.native_options ?? "{}"), ...nativeOptions(input.native)});
       const options = JSON.stringify(nextPi);
       const timestamp = now();
       const changed = await this.ctx.db.run(
-        "UPDATE conversations SET title=?,mode=?,harness=?,model=?,connection_id=?,updated_at=?,pi_options=? WHERE id=? AND pi_options=? AND runtime_generation=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling'))",
+        "UPDATE conversations SET title=?,mode=?,harness=?,model=?,connection_id=?,updated_at=?,pi_options=?,native_options=? WHERE id=? AND pi_options=? AND runtime_generation=? AND NOT EXISTS(SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling'))",
         [
           title,
           mode,
@@ -540,6 +564,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           connectionId,
           timestamp,
           options,
+          native,
           id,
           c.pi_options ?? "{}",
           c.runtime_generation ?? 0,
@@ -660,7 +685,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       "SELECT * FROM conversations WHERE id=? AND deleted_at IS NOT NULL AND asset_id IS NULL",
       [id],
     );
-    if (!c || c.creator_id !== user.id) throw hidden();
+    if (!c) throw hidden();
     await this.ctx.requireProject(user, c.project_id!, c.mode);
     await this.ctx.db.run(
       "UPDATE conversations SET deleted_at=NULL,updated_at=? WHERE id=?",
@@ -678,8 +703,8 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       role: string;
       enabled: number;
     }>(
-      "SELECT u.id,u.name,u.email,u.role,u.enabled FROM conversation_members m JOIN users u ON u.id=m.user_id WHERE m.conversation_id=? ORDER BY m.created_at",
-      [id],
+      "SELECT u.id,u.name,u.email,u.role,u.enabled FROM users u WHERE u.enabled=1 AND (u.role='owner' OR EXISTS(SELECT 1 FROM organization_memberships m WHERE m.user_id=u.id AND m.org_id=? AND (m.role='admin' OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=? AND pm.user_id=u.id)))) ORDER BY u.name,u.email",
+      [c.org_id, c.project_id],
     );
     const items = [];
     for (const row of rows) {
@@ -904,7 +929,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   async messages(user: User, id: string, before?: string, compact = false) {
     await this.requireConversation(user, id);
     const rows = await this.ctx.db.all<MessageRow>(
-      `SELECT m.id,m.conversation_id,m.run_id,m.role,m.author_id,m.citations,m.created_at,m.kind,
+      `SELECT m.id,m.conversation_id,m.run_id,m.role,m.author_id,m.citations,m.created_at,m.kind,m.attachments,
       ${compact ? "CASE WHEN m.role='assistant' AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN substr(m.content,1,500) ELSE m.content END" : "m.content"} content,
       ${compact ? "CASE WHEN m.role='assistant' AND length(m.content)>500 AND EXISTS(SELECT 1 FROM conversation_activity a WHERE a.run_id=m.run_id) THEN 1 ELSE 0 END" : "0"} content_truncated,
       ${compact ? "(SELECT COUNT(*) FROM conversation_activity a WHERE a.run_id=m.run_id AND a.deleted=0)" : "NULL"} activity_count,
@@ -950,7 +975,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   admit(user: User, id: string, input: Record<string, unknown>) {
     return this.serial(id, async () => {
       const c = await this.requireConversation(user, id);
-      const content = field(input.content, "Message", 100_000);
+      if (input.tools !== undefined) throw new AppError(400, "invalid_input", "Change tools with the conversation Tools control before sending.");
+      const references = attachmentReferences(input.attachments);
+      const content = references.length && input.content === "" ? "" : field(input.content, "Message", 100_000);
       const requestId = field(input.requestId, "Request ID", 100);
       if (!/^[a-zA-Z0-9_-]{8,100}$/.test(requestId))
         throw new AppError(
@@ -968,15 +995,17 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "Choose Message or Comment.",
         );
       const kind = input.kind === "comment" ? "comment" : "message";
+      if (kind === "comment" && references.length) throw new AppError(400, "invalid_attachment", "Send attachments as a Message so the agent receives their native content.");
       const existing = await this.ctx.db.get<any>(
-        "SELECT i.*,m.content,m.author_id,m.kind FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.conversation_id=? AND i.request_id=?",
+        "SELECT i.*,m.content,m.author_id,m.kind,m.attachments FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.conversation_id=? AND i.request_id=?",
         [id, requestId],
       );
       if (existing) {
         if (
           existing.author_id !== user.id ||
           existing.content !== content ||
-          existing.kind !== kind
+          existing.kind !== kind ||
+          JSON.stringify(storedAttachments(existing.attachments).map(({kind, id}) => ({kind, id}))) !== JSON.stringify(references)
         )
           throw new AppError(
             409,
@@ -987,10 +1016,21 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       }
       // Recover an exact existing receipt without admitting new authority.
       await this.requireThreadAuthority(user, c);
+      const attachments = await resolveAttachments(this.ctx, user, c, references);
+      if (Buffer.byteLength(content + attachmentContext(attachments)) > 400 * 1024)
+        throw new AppError(413, "attachment_context_too_large", "The message and note snapshots exceed the 400 KiB native input allowance. Attach shorter notes or send them separately.");
       const current = await this.ctx.db.get<RunRow>(
         "SELECT * FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling') ORDER BY rowid LIMIT 1",
         [id],
       );
+      if (kind === "message" && current && current.status !== "running" && attachments.some(item => item.kind === "file")) {
+        const queued = await this.ctx.db.get<{ count: number; bytes: number }>(`SELECT COUNT(*) count,COALESCE(SUM(json_extract(a.value,'$.size')),0) bytes
+          FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id JOIN json_each(m.attachments) a
+          WHERE i.run_id=? AND i.delivery='pending' AND json_extract(a.value,'$.kind')='file'`, [current.id]);
+        const files = attachments.filter(item => item.kind === "file");
+        if (Number(queued?.count ?? 0) + files.length > 8 || Number(queued?.bytes ?? 0) + files.reduce((sum, item) => sum + (item.size ?? 0), 0) > 50 * 1024 * 1024)
+          throw new AppError(413, "attachment_queue_full", "Wait for the queued message to start before sending more files. Each native input supports 8 files and 50 MiB.");
+      }
       if (kind === "message" && current?.status === "cancelling")
         throw new AppError(
           409,
@@ -1049,7 +1089,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             ]
           : []),
         {
-          sql: "INSERT INTO conversation_messages(id,conversation_id,run_id,role,author_id,content,created_at,kind) VALUES(?,?,?,?,?,?,?,?)",
+          sql: "INSERT INTO conversation_messages(id,conversation_id,run_id,role,author_id,content,created_at,kind,attachments) VALUES(?,?,?,?,?,?,?,?,?)",
           params: [
             messageId,
             id,
@@ -1059,6 +1099,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             content,
             timestamp,
             kind,
+            JSON.stringify(attachments),
           ],
         },
         ...(!current && runId
@@ -1169,7 +1210,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   private drainSteering(id: string, runId: string) {
     return this.serial(id, async () => {
       const inputs = await this.ctx.db.all<any>(
-        "SELECT i.*,m.content,m.author_id,u.name AS author_name FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id JOIN users u ON u.id=m.author_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
+        "SELECT i.*,m.content,m.attachments,m.author_id,u.name AS author_name FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id JOIN users u ON u.id=m.author_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
         [runId],
       );
       for (const input of inputs) {
@@ -1200,7 +1241,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
               sequence: input.sequence,
               authorId: input.author_id,
               authorName: input.author_name,
-              content: input.content,
+              content: input.content + attachmentContext(storedAttachments(input.attachments)),
+              attachments: thread.project_id ? await runtimeAttachments(this.ctx, author, thread.project_id, storedAttachments(input.attachments)) : [],
+              ...(input.native_response ? {nativeResponse: JSON.parse(input.native_response)} : {}),
             });
           }
         } catch (e) {
@@ -1211,7 +1254,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           ).code;
           const rejected =
             e instanceof AppError ||
-            ["steering_unavailable", "run_ended", "steering_rejected"].includes(
+            ["steering_unavailable", "run_ended", "steering_rejected", "native_response_invalid", "native_interaction_expired"].includes(
               code ?? "",
             );
           delivery = rejected ? "rejected" : "uncertain";
@@ -1230,6 +1273,10 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             error,
           }),
         ]);
+        if (delivery === "accepted") {
+          const acceptedRun = await this.ctx.db.get<RunRow>("SELECT * FROM conversation_runs WHERE id=?", [runId]);
+          if (acceptedRun) await this.captureLibrary(acceptedRun, input.message_id);
+        }
       }
     });
   }
@@ -1241,6 +1288,73 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         [id, after],
       )
     ).map(eventView);
+  }
+  async nativeStatus(user: User, id: string) {
+    const c = await this.requireConversation(user, id);
+    const settings = await this.ctx.db.get<{data: string}>("SELECT data FROM conversation_events WHERE conversation_id=? AND type='native.settings' ORDER BY id DESC LIMIT 1", [id]);
+    const run = await this.ctx.db.get<RunRow>(`SELECT * FROM conversation_runs WHERE conversation_id=? AND status IN ${active} ORDER BY rowid DESC LIMIT 1`, [id]);
+    const pending = new Map<string, unknown>();
+    if (run) for (const event of await this.ctx.db.all<{type: string; data: string}>("SELECT type,data FROM conversation_events WHERE run_id=? AND type IN ('native.interaction','native.interaction_resolved') ORDER BY id", [run.id])) {
+      const value = JSON.parse(event.data);
+      if (event.type === "native.interaction") pending.set(value.id, value); else pending.delete(value.id);
+    }
+    const view = settings ? JSON.parse(settings.data) : null;
+    if (view && c.harness === "opencode") {
+      const modelId = (value: unknown) => typeof value === "string" && value.startsWith("enterprise/") ? value.slice("enterprise/".length) : value;
+      view.model = modelId(view.model);
+      view.models = (view.models ?? []).filter((item: any) => String(item.id).startsWith("enterprise/")).map((item: any) => ({...item, id: modelId(item.id)}));
+    }
+    return {harness: c.harness, runId: run?.id ?? null, configured: nativeOptions(JSON.parse(c.native_options ?? "{}")), settings: view, interactions: [...pending.values()]};
+  }
+  async agentSettings(user: User, projectId: string): Promise<{defaultHarness: Harness; agents: Partial<Record<Harness, {model?: string; thinking?: string; permission?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number}>>}> {
+    await this.ctx.requireProject(user, projectId);
+    const row = await this.ctx.db.get<{settings: string}>("SELECT settings FROM workspace_agent_settings WHERE project_id=?", [projectId]);
+    return row ? JSON.parse(row.settings) : {defaultHarness: "pi", agents: {}};
+  }
+  async updateAgentSettings(user: User, projectId: string, input: Record<string, unknown>) {
+    const project = await this.ctx.requireProject(user, projectId);
+    await this.ctx.requireOrgAdmin(user, project.orgId);
+    if (Object.keys(input).some(key => !["defaultHarness", "agents"].includes(key))) throw new AppError(400, "invalid_native_settings", "Unknown agent setting.");
+    const previous = await this.agentSettings(user, projectId);
+    const defaultHarness = input.defaultHarness === undefined ? previous.defaultHarness : fixedHarness(input.defaultHarness);
+    const agents = input.agents === undefined ? previous.agents : input.agents;
+    if (!agents || typeof agents !== "object" || Array.isArray(agents)) throw new AppError(400, "invalid_native_settings", "Provide native agent settings.");
+    for (const [id, value] of Object.entries(agents)) {
+      const harness = fixedHarness(id);
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new AppError(400, "invalid_native_settings", "Provide native agent settings.");
+      const {model, ...native} = value;
+      if (harness === "pi") piOptions(native); else nativeOptions(native);
+      if (model) await this.dependencies.inference.validateSelection(project.orgId, field(model, "Model", 240), harness);
+    }
+    await this.ctx.db.run("INSERT INTO workspace_agent_settings(project_id,settings,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET settings=excluded.settings,updated_at=excluded.updated_at,updated_by=excluded.updated_by", [projectId, JSON.stringify({defaultHarness, agents}), now(), user.id]);
+    await this.ctx.audit(user, project.orgId, "workspace.agent_settings.updated", projectId, {});
+    return this.agentSettings(user, projectId);
+  }
+  async nativeRespond(user: User, id: string, input: Record<string, unknown>) {
+    const admitted = await this.serial(id, async () => {
+      const c = await this.requireConversation(user, id, true);
+      await this.requireThreadAuthority(user, c);
+      const requestId = field(input.requestId, "Request identity", 128);
+      const interactionId = field(input.interactionId, "Interaction", 256);
+      const response = {interactionId, ...(input.cancelled === true ? {cancelled: true} : {}), ...(typeof input.optionID === "string" ? {optionID: field(input.optionID, "Option", 256)} : {}), ...(input.answers !== undefined ? {answers: input.answers} : {})};
+      if (response.answers !== undefined && (!response.answers || typeof response.answers !== "object" || Array.isArray(response.answers) || JSON.stringify(response.answers).length > 100000 || Object.values(response.answers).some(v => !Array.isArray(v) || v.some(x => typeof x !== "string"))))
+        throw new AppError(400, "invalid_native_response", "Choose an offered response.");
+      const existing = await this.ctx.db.get<any>("SELECT * FROM conversation_inputs WHERE conversation_id=? AND request_id=?", [id, requestId]);
+      if (existing) {
+        if (existing.native_response !== JSON.stringify(response)) throw new AppError(409, "request_conflict", "This request identity was already used.");
+        return {messageId: existing.message_id, runId: existing.run_id};
+      }
+      const status = await this.nativeStatus(user, id);
+      if (!status.runId || !status.interactions.some((item: any) => item.id === interactionId)) throw new AppError(409, "native_interaction_expired", "This native request is no longer active.");
+      const messageId = randomUUID();
+      await this.ctx.db.batch([
+        {sql: "INSERT INTO conversation_messages(id,conversation_id,run_id,role,author_id,content,citations,created_at,kind) VALUES(?,?,?,'user',?,'','[]',?,'native_response')", params: [messageId, id, status.runId, user.id, now()]},
+        {sql: "INSERT INTO conversation_inputs(conversation_id,request_id,message_id,run_id,delivery,native_response) VALUES(?,?,?,?,'pending',?)", params: [id, requestId, messageId, status.runId, JSON.stringify(response)]},
+      ]);
+      return {messageId, runId: status.runId};
+    });
+    await this.drainSteering(id, admitted.runId);
+    return this.ctx.db.get("SELECT delivery,error FROM conversation_inputs WHERE message_id=?", [admitted.messageId]);
   }
   async runs(user: User, id: string) {
     await this.requireConversation(user, id);
@@ -1666,7 +1780,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       run.harness,
       run.connection_id ?? undefined,
     );
-    await this.validateThinking(
+    if (run.harness === "pi") await this.validateThinking(
       run.org_id,
       run.model,
       piOptions(JSON.parse(conversation.pi_options ?? "{}"), true),
@@ -1700,17 +1814,18 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         "Access was revoked before execution.",
       );
     const prior = await this.ctx.db.get<RunRow>(
-      "SELECT * FROM conversation_runs WHERE conversation_id=? AND id<>? AND native_session_id IS NOT NULL AND mode=? ORDER BY rowid DESC LIMIT 1",
-      [run.conversation_id, run.id, run.mode],
+      "SELECT * FROM conversation_runs WHERE conversation_id=? AND id<>? AND native_session_id IS NOT NULL AND harness=? ORDER BY rowid DESC LIMIT 1",
+      [run.conversation_id, run.id, run.harness],
     );
     const resumeId = prior?.native_session_id ?? undefined;
     const message = (await this.ctx.db.get<MessageRow>(
       "SELECT * FROM conversation_messages WHERE id=?",
       [run.user_message_id],
     ))!;
+    const inputFiles: Awaited<ReturnType<typeof runtimeAttachments>> = [];
     let prompt = await this.serial(run.conversation_id, async () => {
       const candidates = await this.ctx.db.all<any>(
-        "SELECT i.message_id,m.content,m.author_id FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
+        "SELECT i.message_id,m.content,m.attachments,m.author_id FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.run_id=? AND i.delivery='pending' ORDER BY i.sequence",
         [run.id],
       );
       const pending = [];
@@ -1722,6 +1837,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             run.conversation_id,
           );
           await this.requireThreadAuthority(author, thread);
+          if (thread.project_id) inputFiles.push(...await runtimeAttachments(this.ctx, author, thread.project_id, storedAttachments(candidate.attachments)));
           pending.push(candidate);
         } catch {
           await this.ctx.db.run(
@@ -1731,20 +1847,21 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         }
       }
       const history = await this.ctx.db.all<MessageRow>(
-        "SELECT m.* FROM conversation_messages m LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? AND m.content<>'' AND (m.run_id IS NULL OR m.run_id<>?) AND (i.delivery IS NULL OR i.delivery IN ('comment','accepted')) ORDER BY m.rowid",
+        "SELECT m.* FROM conversation_messages m LEFT JOIN conversation_inputs i ON i.message_id=m.id WHERE m.conversation_id=? AND (m.content<>'' OR m.attachments<>'[]') AND (m.run_id IS NULL OR m.run_id<>?) AND (i.delivery IS NULL OR i.delivery IN ('comment','accepted')) ORDER BY m.rowid",
         [run.conversation_id, run.id],
       );
       const context = history
         .filter((m) => !resumeId || m.kind === "comment")
         .map(
           (m) =>
-            `${m.kind === "comment" ? "Comment" : m.role}${m.author_id ? ` (${m.author_id})` : ""}: ${m.content}`,
+            `${m.kind === "comment" ? "Comment" : m.role}${m.author_id ? ` (${m.author_id})` : ""}: ${m.content}${attachmentContext(storedAttachments(m.attachments))}`,
         )
         .join("\n\n");
       execution.initialMessages = pending.map((m) => m.message_id);
-      return `${context ? `Conversation context (data):\n${context}\n\n` : ""}${pending.length ? pending.map((m) => `User (${m.author_id}): ${m.content}`).join("\n\n") : message.content}`;
+      return `${context ? `Conversation context (data):\n${context}\n\n` : ""}${pending.length ? pending.map((m) => `User (${m.author_id}): ${m.content}${attachmentContext(storedAttachments(m.attachments))}`).join("\n\n") : message.content + attachmentContext(storedAttachments(message.attachments))}`;
     });
     if (assetContext) prompt += "\n\n" + assetContext.prompt;
+    else prompt += toolPrompt(conversation.tool_settings);
     const manifest = run.asset_id
       ? await this.dependencies.assets!.manifest(user, run.asset_id)
       : ((await this.dependencies.files.captureProjectManifest?.(
@@ -1792,7 +1909,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       "sessions",
       run.conversation_id,
       run.harness,
-      run.mode,
+      conversation.native_storage_mode ?? run.mode,
     );
     // The trusted supervisor creates private native storage; the API cannot traverse it.
     let terminal = false;
@@ -1812,10 +1929,10 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       run.org_id,
       run.model,
     );
-    const configuredPi = piOptions(
+    const configuredPi = run.harness === "pi" ? piOptions(
       JSON.parse(conversation.pi_options ?? "{}"),
       true,
-    );
+    ) : undefined;
     if (
       configuredPi &&
       !configuredPi.sdkGeneration &&
@@ -1913,6 +2030,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         connectionId: run.connection_id ?? undefined,
         harness: run.harness,
         model: run.model,
+        native: nativeOptions(JSON.parse(conversation.native_options ?? "{}")),
         ...(configuredPi
           ? {
               pi: {
@@ -1924,8 +2042,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
                 ),
               },
             }
-          : {}),
+          : piRoute ? {pi: piRoute} : {}),
         prompt,
+        attachments: inputFiles,
         access: run.mode,
         mounts: mounts.map((m) => ({
           source: m.source,
@@ -1933,6 +2052,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           access: m.readOnly ? "read" : "write",
         })),
         sessionDirectory,
+        sessionStorageAccess: conversation.native_storage_mode ?? run.mode,
         workingDirectory: workingDirectory.path,
         gateway,
         ...(resumeId
@@ -1967,6 +2087,17 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     const { run } = execution;
     switch (event.type) {
       case "native_update": {
+        if (event.update.sessionUpdate === "woven_usage") {
+          const totalTokens = (event.update.usage as {totalTokens?: unknown} | undefined)?.totalTokens;
+          await commit(Number.isSafeInteger(totalTokens) && Number(totalTokens) >= 0 ? [eventInsert(run.conversation_id, run.id, "native.usage", {totalTokens})] : []);
+          break;
+        }
+        if (["woven_native_settings", "woven_interaction", "woven_interaction_resolved"].includes(String(event.update.sessionUpdate))) {
+          const kind = event.update.sessionUpdate;
+          await commit([eventInsert(run.conversation_id, run.id, kind === "woven_native_settings" ? "native.settings" : kind === "woven_interaction" ? "native.interaction" : "native.interaction_resolved",
+            kind === "woven_native_settings" ? event.update.settings : kind === "woven_interaction" ? event.update.interaction : {id: event.update.id})]);
+          break;
+        }
         const metadata = event.update._meta as
           Record<string, unknown> | undefined;
         const fragmentedSnapshot =
@@ -2001,10 +2132,17 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
                 }),
               ]),
         ]);
+        if (event.update.sessionUpdate === "agent_message_chunk" &&
+          ["image", "audio", "video", "file"].includes(String((event.update.content as { type?: unknown } | undefined)?.type))) {
+          await this.captureLibrary(run, run.assistant_message_id, {
+            records: [{ runID: run.id, payload: event.update }],
+          });
+        }
         break;
       }
       case "native_records":
         await commit(captureNativeBatch(run, event.batch));
+        await this.captureLibrary(run, run.assistant_message_id, event.batch);
         break;
       case "assistant_snapshot":
         await commit([
@@ -2036,6 +2174,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             delivery: "accepted",
           }),
         ]);
+        for (const id of execution.initialMessages ?? []) await this.captureLibrary(run, id);
         break;
       case "started":
         await commit([
@@ -2273,6 +2412,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       [run.id],
     );
     await this.captureOutputReferences(run);
+    await this.captureLibrary(run, run.assistant_message_id);
     await commit([
       {
         sql: "UPDATE conversation_runs SET status=?,error_code=?,error_message=?,completed_at=? WHERE id=? AND status IN ('queued','dispatching','running','cancelling')",

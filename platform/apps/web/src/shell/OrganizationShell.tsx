@@ -1,20 +1,21 @@
-import { lazy, type ReactNode } from "react";
+import { lazy } from "react";
 import {
   Navigate,
   Route,
   Routes,
   useNavigate,
+  useLocation,
   useParams,
 } from "react-router-dom";
 import type { Organization, User } from "../api";
-import { BackLink, ErrorNotice } from "../components/ui";
+import { ErrorNotice } from "../components/ui";
 import {
   ProjectsPage,
   ProjectPage,
   MembersPage,
   SettingsPage,
 } from "../features/projects";
-import { WorkspaceContext, useWorkspace } from "../workspace";
+import { WorkspaceContext } from "../workspace";
 
 const DeletedProjectsPage = lazy(() =>
   import("../features/trash").then((m) => ({ default: m.DeletedProjectsPage })),
@@ -36,10 +37,12 @@ const LibraryPage = lazy(() =>
 
 export function OrganizationShell({
   user,
+  onUserChange,
   organizations,
   refreshOrganizations,
 }: {
   user: User;
+  onUserChange: (user: User) => void;
   organizations: Organization[];
   refreshOrganizations: () => void;
 }) {
@@ -54,31 +57,34 @@ export function OrganizationShell({
       key={org.id}
       value={{
         user,
+        onUserChange,
         org,
         isAdmin,
         libraryFull: org.libraryAccess === "write",
         refreshOrganizations,
         selectOrganization: (nextOrgId) =>
-          navigate(`/organizations/${nextOrgId}/projects`),
+          navigate(`/organizations/${nextOrgId}/workspaces`),
         orgBase,
       }}
     >
       <Routes>
-        <Route path="projects" element={<ProjectsPage />} />
-        <Route path="projects/:projectId/*" element={<ProjectPage />} />
+        <Route path="workspaces" element={<ProjectsPage canSwitchOrganization={organizations.length > 1} />} />
+        <Route path="settings/deleted-projects" element={<Navigate to={`${orgBase}/settings/deleted-workspaces`} replace />} />
+        <Route path="projects/*" element={<OrganizationLegacyRedirect />} />
+        <Route path="workspaces/:projectId/*" element={<ProjectPage />} />
         <Route
           path="files"
-          element={<Navigate to={`${orgBase}/library`} replace />}
+          element={<LibraryPage key={org.id} />}
         />
         <Route path="source/:fileId" element={<SourcePage />} />
-        <Route path="library" element={<LibraryPage key={org.id} />} />
+        <Route path="library" element={<Navigate to={`${orgBase}/files`} replace />} />
         <Route
           path="members"
           element={
             isAdmin ? (
-              <Navigate to={`${orgBase}/settings/members`} replace />
+              <MembersPage />
             ) : (
-              <Navigate to={`${orgBase}/projects`} replace />
+              <Navigate to={`${orgBase}/workspaces`} replace />
             )
           }
         />
@@ -86,9 +92,9 @@ export function OrganizationShell({
           path="connections"
           element={
             isAdmin ? (
-              <Navigate to={`${orgBase}/settings/connections`} replace />
+              <ConnectionsPage key={org.id} />
             ) : (
-              <Navigate to={`${orgBase}/projects`} replace />
+              <Navigate to={`${orgBase}/workspaces`} replace />
             )
           }
         />
@@ -98,17 +104,17 @@ export function OrganizationShell({
             isAdmin ? (
               <SettingsPage />
             ) : (
-              <Navigate to={`${orgBase}/projects`} replace />
+              <Navigate to={`${orgBase}/workspaces`} replace />
             )
           }
         />
         <Route
-          path="settings/deleted-projects"
+          path="settings/deleted-workspaces"
           element={
             isAdmin ? (
               <DeletedProjectsPage />
             ) : (
-              <Navigate to={`${orgBase}/projects`} replace />
+              <Navigate to={`${orgBase}/workspaces`} replace />
             )
           }
         />
@@ -116,9 +122,9 @@ export function OrganizationShell({
           path="settings/members"
           element={
             isAdmin ? (
-              <MembersPage nested />
+              <Navigate to={`${orgBase}/members`} replace />
             ) : (
-              <Navigate to={`${orgBase}/projects`} replace />
+              <Navigate to={`${orgBase}/workspaces`} replace />
             )
           }
         />
@@ -126,39 +132,22 @@ export function OrganizationShell({
           path="settings/connections"
           element={
             isAdmin ? (
-              <SettingsNested title="Connections">
-                <ConnectionsPage key={org.id} />
-              </SettingsNested>
+              <Navigate to={`${orgBase}/connections`} replace />
             ) : (
-              <Navigate to={`${orgBase}/projects`} replace />
+              <Navigate to={`${orgBase}/workspaces`} replace />
             )
           }
         />
         <Route
           path="*"
-          element={<Navigate to={`${orgBase}/projects`} replace />}
+          element={<Navigate to={`${orgBase}/workspaces`} replace />}
         />
       </Routes>
     </WorkspaceContext.Provider>
   );
 }
 
-function SettingsNested({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  const { orgBase } = useWorkspace();
-  return (
-    <div className="settings-nested">
-      <BackLink
-        to={`${orgBase}/settings`}
-        label="Back to organization settings"
-      />
-      <span className="sr-only">{title}</span>
-      {children}
-    </div>
-  );
+function OrganizationLegacyRedirect() {
+  const location = useLocation();
+  return <Navigate to={location.pathname.replace(/\/projects(?=\/|$)/, "/workspaces") + location.search} replace />;
 }

@@ -1,118 +1,31 @@
-import { Link, NavLink, useParams } from "react-router-dom";
-import {
-  Folder,
-  LibraryBig,
-  PanelLeftClose,
-  Plus,
-  Settings,
-} from "lucide-react";
+import { NavLink, useLocation, useParams } from "react-router-dom";
+import { Cable, Files, FolderOpen, Settings, Users } from "lucide-react";
 import type { Organization, User } from "../api";
 import { Icon } from "../components/controls";
 import { ProjectNavigation } from "./ProjectNavigation";
 
-export function AdministrationNav({
-  user,
-  organizations,
-  onCreate,
-}: {
-  user: User;
-  organizations: Organization[];
-  onCreate: () => void;
-}) {
-  return (
-    <nav aria-label="Administration navigation">
-      {user.role === "owner" ? (
-        <>
-          <button type="button" className="nav-link" onClick={onCreate}>
-            <Icon icon={Plus} size={13} />
-            <span>New organization</span>
-          </button>
-          {organizations.map((org) => (
-            <Link
-              key={org.id}
-              className="nav-link"
-              to={`/organizations/${org.id}/projects`}
-              title={org.name}
-            >
-              <Icon icon={Folder} size={13} />
-              <span className="organization-nav-name">{org.name}</span>
-            </Link>
-          ))}
-        </>
-      ) : (
-        <NavLink
-          to="/"
-          end
-          className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
-        >
-          <Icon icon={Folder} size={13} />
-          <span>Access</span>
-        </NavLink>
-      )}
-    </nav>
-  );
-}
-
-export function OrganizationNav({
-  user,
-  organizations,
-}: {
-  user: User;
-  organizations: Organization[];
-}) {
+export function OrganizationNav({ user, organizations }: { user: User; organizations: Organization[] }) {
   const { orgId = "" } = useParams();
-  const org = organizations.find((item) => item.id === orgId);
+  const location = useLocation();
+  const org = organizations.find(item => item.id === orgId);
   const isAdmin = user.role === "owner" || org?.role === "admin";
   const base = `/organizations/${orgId}`;
+  const inWorkspace = /\/workspaces\/[^/]+/.test(location.pathname);
   const links = [
-    { to: `${base}/library`, label: "Library", icon: LibraryBig },
-    ...(isAdmin
-      ? [
-          {
-            to: `${base}/settings`,
-            label: "Organization settings",
-            icon: Settings,
-          },
-        ]
-      : []),
+    { to: `${base}/workspaces`, label: "Workspaces", icon: FolderOpen },
+    { to: `${base}/files`, label: "Organization Files", icon: Files },
+    ...(isAdmin ? [
+      { to: `${base}/members`, label: "Members", icon: Users },
+      { to: `${base}/connections`, label: "Connections", icon: Cable },
+      { to: `${base}/settings`, label: "Settings", icon: Settings },
+    ] : []),
   ];
-  return (
-    <>
-      <div className="org-title org-title-plain">
-        <strong title={org?.name}>{org?.name ?? "Organization"}</strong>
-        {user.role === "owner" ? (
-          <Link
-            to="/"
-            className="icon-button admin-back-link"
-            aria-label="Back to administration"
-            title="Back to administration"
-          >
-            <Icon icon={PanelLeftClose} size={16} weight="control" />
-          </Link>
-        ) : organizations.length > 1 ? (
-          <Link className="text-button" to="/">
-            Switch organization
-          </Link>
-        ) : null}
-      </div>
-      <ProjectNavigation
-        key={orgId}
-        orgId={orgId}
-        user={user}
-        isAdmin={isAdmin}
-      />
-      <nav aria-label="Main navigation" className="organization-navigation">
-        {links.map(({ to, label, icon: Glyph }) => (
-          <NavLink
-            key={to}
-            to={to}
-            className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}
-          >
-            <Icon icon={Glyph} size={13} />
-            <span>{label}</span>
-          </NavLink>
-        ))}
+  return <>
+    {!inWorkspace ? <>
+      <div className="org-title org-title-plain"><strong title={org?.name}>{org?.name ?? "Organization"}</strong></div>
+      <nav aria-label="Organization navigation" className="organization-navigation">
+        {links.map(({ to, label, icon }) => <NavLink key={to} to={to} className={({ isActive }) => `nav-link ${isActive ? "active" : ""}`}><Icon icon={icon} size={13} /><span>{label}</span></NavLink>)}
       </nav>
-    </>
-  );
+    </> : <ProjectNavigation key={orgId} orgId={orgId} user={user} isAdmin={isAdmin} />}
+  </>;
 }

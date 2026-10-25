@@ -200,7 +200,7 @@ export function FilesPage({
           <div>
             <h2>Files</h2>
             <p className="muted">
-              Store shared resources and make them available to projects.
+              Store shared resources and make them available to workspaces.
             </p>
           </div>
           <div className="actions">
@@ -210,11 +210,11 @@ export function FilesPage({
         </div>
       ) : (
         <PageHeader
-          title={project ? "Project files" : "Organization files"}
+          title={project ? "Workspace Files" : "Organization Files"}
           description={
             project
-              ? "Files available to this project and its agents."
-              : "Store shared resources and make them available to projects."
+              ? "Files available to this workspace and its agents."
+              : "Store shared resources and make them available to workspaces."
           }
           actions={actions}
         />
@@ -289,7 +289,6 @@ export function FilesPage({
                   <th>Name</th>
                   <th className="numeric">Size</th>
                   <th>Updated</th>
-                  <th>Access</th>
                   <th>
                     <span className="sr-only">Actions</span>
                   </th>
@@ -308,7 +307,7 @@ export function FilesPage({
                           <span>
                             {f.name}
                             {f.sharedFrom ? (
-                              <small>Shared with this project</small>
+                              <small>Organization Files source</small>
                             ) : null}
                             {f.needsAttention ? (
                               <small className="danger">
@@ -329,7 +328,7 @@ export function FilesPage({
                           <span>
                             {f.name}
                             {f.sharedFrom ? (
-                              <small>Shared with this project</small>
+                              <small>Organization Files source</small>
                             ) : null}
                             {f.needsAttention ? (
                               <small className="danger">
@@ -342,9 +341,6 @@ export function FilesPage({
                     </td>
                     <td className="numeric">{f.kind === "file" ? bytes(f.size) : "—"}</td>
                     <td>{date(f.updatedAt)}</td>
-                    <td>
-                      {f.access === "write" ? "Full access" : "Read-only"}
-                    </td>
                     <td>
                       <div className="row-actions">
                         {f.kind === "file" ? (
@@ -370,7 +366,7 @@ export function FilesPage({
                           {!project && libraryFull ? (
                             <>
                               <MenuItem onSelect={() => open(f, "sharing")}>
-                                Share with projects
+                                Share with workspaces
                               </MenuItem>
                               <MenuItem onSelect={() => open(f, "grants")}>
                                 People with access
@@ -502,7 +498,7 @@ export function FilesPage({
             </Field>
             <Field label="Destination">
               <select name="destination" defaultValue={project?.id ?? ""}>
-                <option value="">Organization files</option>
+                <option value="">Organization Files</option>
                 {projects.data?.items
                   .filter((p) => p.access === "write")
                   .map((p) => (
@@ -568,14 +564,14 @@ function FileSharing({
   );
   const [error, setError] = useState("");
   return (
-    <Modal title="Shared with projects" onClose={onClose}>
+    <Modal title="Shared with workspaces" onClose={onClose}>
       <p className="muted">
-        Projects access the same underlying files. Changes stay consistent.
+        Share this Organization Files source for workspace reference. Manage source changes in Organization Files.
       </p>
       <ErrorNotice message={resource.error || error} />
       <div className="row-list">
       {resource.data && !resource.data.items.length ? (
-        <p className="muted">Not shared with any project yet.</p>
+        <p className="muted">Not shared with any workspace yet.</p>
       ) : null}
       {resource.data?.items.map((s) => (
         <div className="setting-row" key={s.projectId}>
@@ -585,7 +581,7 @@ function FileSharing({
                 projects.find((p) => p.id === s.projectId)?.name ||
                 s.projectId}
             </strong>
-            <small>{s.access === "write" ? "Full access" : "Read-only"}</small>
+
           </div>
           <button
             className="text-button danger"
@@ -609,19 +605,19 @@ function FileSharing({
       ))}
       </div>
       <AsyncForm
-        submitLabel="Share with project"
+        submitLabel="Share with workspace"
         onSubmit={async (d) => {
           await send(`/enterprise/api/files/${file.id}/shares`, {
             projectId: d.get("projectId"),
-            access: d.get("access"),
+            access: "read",
           });
           resource.reload();
         }}
       >
-        <Field label="Project">
+        <Field label="Workspace">
           <select name="projectId" required defaultValue="">
             <option value="" disabled>
-              Select a project
+              Select a workspace
             </option>
             {projects
               .filter(
@@ -632,12 +628,6 @@ function FileSharing({
                   {p.name}
                 </option>
               ))}
-          </select>
-        </Field>
-        <Field label="Access">
-          <select name="access">
-            <option value="read">Read-only</option>
-            <option value="write">Full access</option>
           </select>
         </Field>
       </AsyncForm>
@@ -674,7 +664,7 @@ function FileGrants({
                 g.name ||
                 g.userId}
             </strong>
-            <small>{g.access === "write" ? "Full access" : "Read-only"}</small>
+
           </div>
           <button
             className="text-button danger"
@@ -705,7 +695,7 @@ function FileGrants({
         onSubmit={async (d) => {
           await send(`/enterprise/api/files/${file.id}/grants`, {
             userId: d.get("userId"),
-            access: d.get("access"),
+            access: "read",
           });
           grants.reload();
         }}
@@ -722,12 +712,6 @@ function FileGrants({
                   {u.name || u.email}
                 </option>
               ))}
-          </select>
-        </Field>
-        <Field label="Access">
-          <select name="access">
-            <option value="read">Read-only</option>
-            <option value="write">Full access</option>
           </select>
         </Field>
       </AsyncForm>

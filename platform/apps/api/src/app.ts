@@ -21,6 +21,7 @@ import {
   requireProjectRuntime,
 } from "./projects/trash.js";
 import { registerProjects } from "./projects/index.js";
+import { registerWorkspaceContent } from "./workspace-content/index.js";
 import {
   createJobWorker,
   registerJobs,
@@ -213,7 +214,7 @@ export async function buildApp(
         .header("x-frame-options", "DENY")
         .header(
           "permissions-policy",
-          "camera=(), microphone=(), geolocation=()",
+          "camera=(), microphone=(self), geolocation=()",
         );
       reply.header(
         "content-security-policy",
@@ -336,6 +337,7 @@ export async function buildApp(
     return operation;
   };
   await registerConversations(app, ctx, conversations);
+  const workspaceContent = await registerWorkspaceContent(app, ctx, conversations, options.jobs !== false, inference);
   await registerAssetAgents(app, ctx, assetAgents, inference);
   const handlers: Record<string, JobHandler> = {
     "project.provision": {
@@ -435,6 +437,9 @@ export async function buildApp(
   app.get("/enterprise/healthz", async () => ({
     status: "ok",
   }));
+  app.get("/enterprise/version", async (_request, reply) => reply.header("cache-control", "no-store").send({
+    revision: /^[0-9a-f]{40}$/.test(process.env.WME_REVISION ?? "") ? process.env.WME_REVISION : "development",
+  }));
   app.get("/enterprise/readyz", async () => {
     await db.get("SELECT 1");
     return {
@@ -460,7 +465,7 @@ export async function buildApp(
       if (
         portalHosts.test(request.headers.host ?? "") &&
         request.method === "GET" &&
-        /^\/enterprise\/(?:login|organizations|projects|personal-settings|activate|forgot-password|reset-password)(?:[/?]|$)/.test(
+        /^\/enterprise\/(?:login|organizations|projects|workspaces|accounts|platform-settings|personal-settings|activate|forgot-password|reset-password)(?:[/?]|$)/.test(
           request.url,
         )
       )
@@ -529,5 +534,6 @@ export async function buildApp(
     assetAgents,
     inference,
     jobs,
+    workspaceContent,
   };
 }

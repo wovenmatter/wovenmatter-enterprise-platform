@@ -2,6 +2,30 @@ import { parentPort, workerData } from "node:worker_threads";
 import { DatabaseSync } from "node:sqlite";
 import { chmodSync } from "node:fs";
 const db = new DatabaseSync(workerData.filename);
+// Desktop WorkspaceSQLiteTextFunctions at f885d281: history windows count
+// Unicode scalars and preserve embedded NUL, unlike SQLite length/substr(TEXT).
+function textOffset(value: string, count: number, start = 0) {
+  let index = start;
+  for (let consumed = 0; consumed < count && index < value.length; consumed++)
+    index += value.codePointAt(index)! > 0xffff ? 2 : 1;
+  return index;
+}
+const textValue = (value: unknown) => value instanceof Uint8Array ? Buffer.from(value).toString("utf8") : String(value);
+db.function("wme_text_length", { deterministic: true }, value => {
+  if (value === null) return null;
+  let count = 0;
+  for (const _scalar of textValue(value)) count++;
+  return count;
+});
+db.function("wme_text_substr", { deterministic: true }, (value, position, width) => {
+  if (value === null || position === null || width === null) return null;
+  const start = Number(position), characters = Number(width);
+  if (!Number.isSafeInteger(start) || start < 1 || !Number.isSafeInteger(characters) || characters < 0) return null;
+  const content = textValue(value), begin = textOffset(content, start - 1);
+  // node:sqlite TEXT conversion also stops at NUL; carry windows as UTF-8
+  // blobs and decode them only after the worker has returned bounded bytes.
+  return Buffer.from(content.slice(begin, textOffset(content, characters, begin)), "utf8");
+});
 db.exec(
   "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL;",
 );

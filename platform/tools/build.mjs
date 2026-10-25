@@ -1,5 +1,8 @@
 import { cp, rm } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { preparePiPackage } from "./prepare-pi-package.mjs";
+
+await preparePiPackage();
 
 // Deleted or moved sources must not survive as stale runnable code or tests.
 await rm(new URL("../dist/", import.meta.url), { recursive: true, force: true });
@@ -7,10 +10,20 @@ const result = spawnSync(process.execPath, [
   "node_modules/typescript/bin/tsc", "-p", "platform/tsconfig.json",
 ], { stdio: "inherit" });
 if (result.error) throw result.error;
-if ((result.status ?? 1) === 0)
+if ((result.status ?? 1) === 0) {
   await cp(
     new URL("../packages/runtime/src/embedded/default-agent/", import.meta.url),
     new URL("../dist/packages/runtime/src/embedded/default-agent/", import.meta.url),
     { recursive: true },
   );
+  await cp(
+    new URL("../apps/api/src/workspace-content/database-catalog.py", import.meta.url),
+    new URL("../dist/apps/api/src/workspace-content/database-catalog.py", import.meta.url),
+  );
+  await cp(
+    new URL("../packages/runtime/src/embedded/native-harnesses/", import.meta.url),
+    new URL("../dist/packages/runtime/src/embedded/native-harnesses/", import.meta.url),
+    { recursive: true },
+  );
+}
 process.exitCode = result.status ?? 1;

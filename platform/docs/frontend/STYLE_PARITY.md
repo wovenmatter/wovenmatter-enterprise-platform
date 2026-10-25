@@ -75,7 +75,7 @@ geometry, tokens, hierarchy and interaction states are the parity target.
 | ID | Difference | Reason |
 | --- | --- | --- |
 | A01 | One rail with organization → project → folder ownership and one Pi Durable agent. | Enterprise authorization model; no native multi-agent runtime. |
-| A02 | Drawer below 760 instead of 904; fixed 256 rail plus fluid pane. | Proven 855-wide layout and browser drawer behavior. |
+| A02 | Workspace rails remain 256px with 8px insets/gaps. At904px Split retains both rails and a360px center;640–903px shows one inline page with visible access to the other. Below 640px a contained overlay leaves the center bounded. One stable title-level hide/reopen control per group moves horizontally; no extra toolbar row or workspace X. | User-requested browser adaptation supersedes native compact 320px rail sizing, center translation and dimming. See `ORGANIZATION_WORKSPACES_PARITY.md` for thresholds, source anchors and saved-preference behavior. |
 | A03 | Fixed Full access / Read-only authority badge, never a writable permission picker. | Session authority is immutable server-side. |
 | A04 | Central organization accounts with numeric priority and observed usage. | Credentials are organization-owned; only presentation maps to native groups. |
 | A05 | Library keeps files, grants, shares, versions and published assets. | Enterprise product scope. |
@@ -117,15 +117,16 @@ outside Git in the requested implementation evidence, not in this source matrix.
 
 ## Sidebar iteration after preview testing
 
-The narrow header places its navigation trigger first in DOM and visual order,
-matching the left drawer. Desktop rail placement is unchanged. Escape returns
+Organization-only narrow navigation places its menu first in the header. Workspace
+rails now use in-surface edge controls and the native 904px boundary as recorded
+in `ORGANIZATION_WORKSPACES_PARITY.md`. Escape returns
 focus to the trigger and the drawer closes after route selection.
 
 An empty or filtered Recents list keeps its canonical empty label during
 background polling. Previously that label disappeared on every refresh,
 moving the following navigation rows by about 39 pixels. Authorization failures
 still clear retained conversation data through the existing resource hook.
-Browser regressions cover 390/760/761-pixel breakpoints, keyboard return,
+Browser regressions cover organization menu and workspace 903/904 boundaries, keyboard return,
 empty/filtered/populated polling, stable selection and disclosure state,
 retryable failures, and access loss.
 

@@ -8,7 +8,8 @@ import {
   type RuntimeEvent,
   type SteeringInput,
 } from "./types.js";
-import { identity, MAX_LINE, MAX_OUTPUT, validateEvent } from "./validation.js";
+import { identity, MAX_LINE, MAX_OUTPUT, validateEvent, validateInputText } from "./validation.js";
+import { validateAttachments } from "./attachments.js";
 
 export interface WorkspaceWorker {
   processId?: number;
@@ -241,6 +242,8 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
     if (run.terminal) this.prune();
   }
   async admit(request: RuntimeRequest) {
+    validateInputText(request.prompt);
+    validateAttachments(request.attachments);
     identity(request.runId);
     identity(request.conversationId);
     const generation = request.generation ?? 0;
@@ -290,8 +293,11 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
       request.connectionId,
       request.access,
       request.prompt,
+      request.attachments,
       request.resumeId,
       request.pi,
+      request.native,
+      request.sessionStorageAccess,
       request.gateway,
       request.egressProxyUrl,
       generation,
@@ -516,6 +522,8 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
     };
   }
   async steer(id: string, attachment: string, input: SteeringInput) {
+    validateInputText(input.content, true);
+    validateAttachments(input.attachments);
     const run = this.run(id),
       hash = digest(input),
       key = id + ":" + identity(input.id);
@@ -555,7 +563,7 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
             run.inputs[input.id] = {
               hash,
               state:
-                code === "steering_rejected" || code === "steering_unavailable"
+                ["steering_rejected", "steering_unavailable", "native_response_invalid", "native_interaction_expired"].includes(code)
                   ? "rejected"
                   : "uncertain",
               code,

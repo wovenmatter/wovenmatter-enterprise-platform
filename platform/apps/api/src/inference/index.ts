@@ -1,3 +1,4 @@
+import { MAX_INPUT_BYTES } from "../../../../packages/runtime/src/attachments.js";
 import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.js";
@@ -54,7 +55,16 @@ export async function registerInferenceRoutes(
     for (const controller of activeRequests) controller.abort();
     await service.closeOAuth();
   });
-  const base = "/enterprise/api/organizations/:orgId/inference";
+  // Resolve workspace aliases to the same isolated organization pool before schema validation.
+  app.addHook("preValidation", async request => {
+    const parameters = request.params as Record<string, string>;
+    if (request.url.startsWith("/enterprise/api/projects/") && parameters?.projectId && request.url.includes("/inference")) {
+      const user = await ctx.requireUser(request);
+      const project = await ctx.requireProject(user, parameters.projectId);
+      parameters.orgId = project.orgId;
+    }
+  });
+  for (const base of ["/enterprise/api/organizations/:orgId/inference", "/enterprise/api/projects/:projectId/inference"]) {
   async function admin(request: FastifyRequest) {
     const user = await ctx.requireUser(request);
     const { orgId } = request.params as OrgParams;
@@ -230,6 +240,8 @@ export async function registerInferenceRoutes(
     return service.usage((request.params as OrgParams).orgId);
   });
 
+  }
+
   const gateway = "/enterprise/api/runtime/inference/:projectId";
   // The foundation excludes ONLY this bearer-authenticated prefix from browser CSRF.
   // Nothing under this prefix forwards management requests or browser cookies.
@@ -245,7 +257,7 @@ export async function registerInferenceRoutes(
       method: path === "/v1/models" ? "GET" : "POST",
       url: `${gateway}${path}`,
       config: { internalInference: true },
-      bodyLimit: 8 * 1024 * 1024,
+      bodyLimit: MAX_INPUT_BYTES,
       handler: async (request, reply) => {
         const projectId = (request.params as { projectId: string }).projectId;
         const auth = request.headers.authorization;

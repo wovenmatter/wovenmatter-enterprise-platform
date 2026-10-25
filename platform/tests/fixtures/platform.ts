@@ -7,11 +7,14 @@ import { buildApp } from "../../apps/api/src/app.js";
 import { newSession } from "../../apps/api/src/auth/session.js";
 import { mapUser } from "../../apps/api/src/context.js";
 import type { Runtime } from "../../packages/runtime/src/types.js";
+import type { Database } from "../../apps/api/src/db/index.js";
 export async function platformFixture(
   t: TestContext,
   options: {
     stateDir?: string;
     runtime?: Runtime;
+    database?: Database;
+    startConversations?: boolean;
   } = {},
 ) {
   const stateDir =
@@ -83,12 +86,15 @@ export async function platformFixture(
     },
     {
       runtime,
+      database: options.database,
+      startConversations: options.startConversations,
       jobs: false,
       webRoot: join(stateDir, "no-web"),
     },
   );
   t.after(async () => {
     await system.app.close();
+    if (options.database) await options.database.close();
     await rm(stateDir, {
       recursive: true,
       force: true,

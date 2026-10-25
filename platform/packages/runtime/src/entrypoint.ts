@@ -8,6 +8,7 @@ import {
   type NativeSessionState,
 } from "./native.js";
 import { runPi } from "./sdk.js";
+import { runNative } from "./native-harnesses.js";
 import { SteeringChannel } from "./steering.js";
 import {
   RuntimeError,
@@ -15,7 +16,8 @@ import {
   type RuntimeEvent,
 } from "./types.js";
 import { verifyMountEvidence } from "./mount-evidence.js";
-import { MAX_LINE, validateContainerRequest } from "./validation.js";
+import { validateContainerRequest, validateInputText } from "./validation.js";
+import { MAX_INPUT_BYTES, validateAttachments } from "./attachments.js";
 import { backgroundService } from "./background.js";
 import { runtimeEnvironment, egressEnvironment } from "./native.js";
 process.umask(0o027);
@@ -57,6 +59,7 @@ async function turn(request: ContainerRequest) {
   };
   try {
     await verifyMountEvidence(request.mountEvidence!);
+    await writeFile("/session/.wme-workspace.json", JSON.stringify(request.gateway), { mode: 0o600 });
     if (request.assetId)
       await writeFile(
         "/session/.wme-asset.json",
@@ -81,7 +84,7 @@ async function turn(request: ContainerRequest) {
       prepared = true;
     }
     await emit({ type: "started" });
-    await runPi(
+    await (request.harness === "pi" ? runPi : runNative)(
       request,
       emit,
       current.controller.signal,
@@ -107,7 +110,7 @@ async function turn(request: ContainerRequest) {
 }
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on("line", (line) => {
-  if (Buffer.byteLength(line) > MAX_LINE) process.exit(1);
+  if (Buffer.byteLength(line) > MAX_INPUT_BYTES) process.exit(1);
   try {
     const data = JSON.parse(line);
     if (data.type === "turn") {
@@ -120,10 +123,11 @@ lines.on("line", (line) => {
       !current ||
       current.id !== data.runId ||
       typeof data.input?.content !== "string" ||
-      data.input.content.length > 100000 ||
       !Number.isSafeInteger(data.input.sequence)
     )
       throw new Error("Invalid input");
+    validateInputText(data.input.content, true);
+    validateAttachments(data.input.attachments);
     void current.channel
       .submit(data.input)
       .then(

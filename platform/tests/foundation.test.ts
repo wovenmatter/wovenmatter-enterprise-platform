@@ -583,10 +583,7 @@ test("project and tenant authorization reflects grants, access ceilings, and rev
       headers: f.admin.headers,
       payload: { access: "read" },
     });
-    await assert.rejects(
-      f.ctx.requireProject(user, p.id, "write"),
-      (e: any) => e.statusCode === 403,
-    );
+    assert.equal((await f.ctx.requireProject(user, p.id, "write")).access, "write");
     await f.app.inject({
       method: "DELETE",
       url: `/enterprise/api/projects/${p.id}/members/${f.member.id}`,

@@ -10,6 +10,7 @@ import {
 } from "../context.js";
 import { hashToken } from "../auth/session.js";
 import { jobStatement } from "../jobs/index.js";
+import { registerAccounts } from "./accounts.js";
 const org = (r: any) => ({
   id: r.id,
   name: r.name,
@@ -27,6 +28,7 @@ export async function registerOrganizations(
   app: FastifyInstance,
   ctx: AppContext,
 ) {
+  await registerAccounts(app, ctx);
   async function organizationFor(
     user: import("../context.js").User,
     orgId: string,
@@ -187,7 +189,7 @@ export async function registerOrganizations(
     };
   }>("/enterprise/api/organizations/:orgId/members", async (request) => {
     const user = await ctx.requireUser(request);
-    await ctx.requireOrgMember(user, request.params.orgId);
+    await ctx.requireOrgAdmin(user, request.params.orgId);
     const rows = await ctx.db.all<any>(
       "SELECT u.*,m.org_id,m.role,m.library_access,password_hash IS NULL AS invitation_pending FROM organization_memberships m JOIN users u ON u.id=m.user_id WHERE m.org_id=? ORDER BY name,email",
       [request.params.orgId],
@@ -229,11 +231,15 @@ export async function registerOrganizations(
         "account_exists",
         "An account already exists for this email",
       );
-    // Only the administrator that established an unverified identity can renew its
-    // activation. A second organization must wait for the person to activate.
+    // Organization admins cannot take over another organization's unverified
+    // identity. Only the owner may renew a platform-wide pending invitation.
     if (
       existing &&
-      ((!existing.password_hash && existing.org_id !== orgId) ||
+      ((!existing.password_hash && user.role !== "owner" &&
+        (existing.org_id !== orgId || await ctx.db.get(
+          "SELECT 1 FROM organization_memberships WHERE user_id=? AND org_id<>?",
+          [existing.id, orgId],
+        ))) ||
         (existing.password_hash && !existing.enabled))
     )
       throw new AppError(
@@ -294,8 +300,8 @@ export async function registerOrganizations(
       ...(existing
         ? [
             {
-              sql: "UPDATE users SET name=name WHERE id=? AND password_hash IS NULL AND NOT EXISTS(SELECT 1 FROM organization_memberships WHERE user_id=? AND org_id<>?)",
-              params: [id, id, orgId],
+              sql: "UPDATE users SET name=name WHERE id=? AND password_hash IS NULL AND (?='owner' OR NOT EXISTS(SELECT 1 FROM organization_memberships WHERE user_id=? AND org_id<>?))",
+              params: [id, user.role, id, orgId],
               expectChanges: 1,
             },
           ]
@@ -310,8 +316,8 @@ export async function registerOrganizations(
         params: [orgId, id, desiredRole, libraryAccess, now],
       },
       {
-        sql: "DELETE FROM invitations WHERE user_id=? AND org_id=? AND accepted_at IS NULL",
-        params: [id, orgId],
+        sql: "DELETE FROM invitations WHERE user_id=? AND (org_id=? OR ?='owner') AND accepted_at IS NULL",
+        params: [id, orgId, user.role],
       },
       {
         sql: "INSERT INTO invitations VALUES (?,?,?,?,?,NULL,?)",
@@ -372,7 +378,7 @@ export async function registerOrganizations(
           "self_removal",
           "Ask another administrator to change your access",
         );
-      if (!enabled) {
+      if (body.enabled === false) {
         await removeMembership(orgId, userId);
       } else
         await ctx.db.run(

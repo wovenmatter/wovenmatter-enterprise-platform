@@ -5,6 +5,7 @@ import { safeContentUrl } from "./conversation-state";
 import { ErrorNotice, Loading } from "./components/ui";
 import { AuthPage, type Session } from "./features/auth";
 import { Shell } from "./shell/Shell";
+import { PlatformHeader } from "./shell/PlatformHeader";
 
 export function App() {
   const [session, setSession] = useState<Session>();
@@ -43,20 +44,23 @@ export function App() {
     if (target?.startsWith("/enterprise/") && safeContentUrl(target))
       window.location.assign(target);
   }
-  if (error)
-    return (
-      <main className="auth-page">
-        <ErrorNotice message={error} onRetry={() => window.location.reload()} />
-      </main>
-    );
-  if (!session) return <Loading />;
+  async function logout() {
+    await send("/enterprise/api/logout", {});
+    setCsrf(null);
+    setSession({ user: null, csrfToken: null });
+  }
   if (
-    !session.user ||
+    error || !session?.user ||
     location.pathname === "/activate" ||
     location.pathname === "/forgot-password" ||
     location.pathname === "/reset-password"
   )
-    return <AuthPage onSuccess={authenticated} />;
+    return <div className="app-shell auth-shell">
+      <PlatformHeader user={session?.user ?? null} logout={logout} />
+      {error ? <main className="auth-page"><ErrorNotice message={error} onRetry={() => window.location.reload()} /></main>
+        : !session ? <main className="auth-page"><Loading /></main>
+        : <AuthPage onSuccess={authenticated} />}
+    </div>;
   return (
     <Shell
       user={session.user}
@@ -64,11 +68,7 @@ export function App() {
         document.documentElement.dataset.theme = user.theme;
         setSession((s) => (s ? { ...s, user } : s));
       }}
-      logout={async () => {
-        await send("/enterprise/api/logout", {});
-        setCsrf(null);
-        setSession({ user: null, csrfToken: null });
-      }}
+      logout={logout}
     />
   );
 }

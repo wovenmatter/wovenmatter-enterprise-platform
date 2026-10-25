@@ -1,10 +1,21 @@
 import { Link, Navigate } from "react-router-dom";
-import { Folder, Plus } from "lucide-react";
-import type { Organization, User } from "../api";
-import { Empty, PageHeader } from "../components/ui";
+import { Folder, Plus, Settings, Users } from "lucide-react";
+import { date, type Organization, type User } from "../api";
+import { BackLink, DestinationRow, Empty, PageHeader } from "../components/ui";
 import { Icon } from "../components/controls";
 
-export function AdministrationPage({
+export function AdminLanding() {
+  return <section className="settings-page">
+    <PageHeader title="Admin" description="Manage the platform." />
+    <nav aria-label="Administration" className="card">
+      <DestinationRow to="/organizations" icon={Folder} title="Organizations" />
+      <DestinationRow to="/accounts" icon={Users} title="Accounts" />
+      <DestinationRow to="/platform-settings" icon={Settings} title="Platform settings" />
+    </nav>
+  </section>;
+}
+
+export function OrganizationsPage({
   user,
   organizations,
   onCreate,
@@ -14,11 +25,12 @@ export function AdministrationPage({
   onCreate: () => void;
 }) {
   if (user.role !== "owner" && organizations.length === 1)
-    return <Navigate to={`/organizations/${organizations[0]!.id}/projects`} replace />;
+    return <Navigate to={`/organizations/${organizations[0]!.id}/workspaces`} replace />;
   return (
     <section>
+      {user.role === "owner" ? <BackLink to="/" label="Back to Admin" /> : null}
       <PageHeader
-        title={user.role === "owner" ? "Administration" : "Your access"}
+        title={user.role === "owner" ? "Organizations" : "Your organizations"}
         description={
           user.role === "owner"
             ? "Manage every organization on the platform."
@@ -46,12 +58,12 @@ export function AdministrationPage({
               {organizations.map((org) => (
                 <tr key={org.id}>
                   <td>
-                    <Link className="item-link" to={`/organizations/${org.id}/projects`}>
+                    <Link className="item-link" to={`/organizations/${org.id}/workspaces`}>
                       <Icon icon={Folder} size={16} />
                       <strong>{org.name}</strong>
                     </Link>
                   </td>
-                  <td>{new Date(org.createdAt).toLocaleDateString()}</td>
+                  <td>{date(org.createdAt)}</td>
                 </tr>
               ))}
             </tbody>

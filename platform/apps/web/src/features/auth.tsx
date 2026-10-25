@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { send, type User } from "../api";
-import { Brand } from "../components/Brand";
 import { AsyncForm, Field, Success } from "../components/ui";
 
 export type Session = { user: User | null; csrfToken: string | null };
@@ -24,7 +23,6 @@ export function AuthPage({ onSuccess }: { onSuccess: (s: Session) => void }) {
   return (
     <main className="auth-page">
       <section className="auth-panel">
-        <Brand />
         <h1>{title}</h1>
         <p className="muted">
           {activate

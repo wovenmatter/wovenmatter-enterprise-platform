@@ -58,9 +58,9 @@ type OAuth = {
 const names = providerNames;
 const warning =
   "Using a Claude subscription through this third-party proxy may result in Anthropic restricting, suspending, or terminating your account. Continued access is not guaranteed.";
-export function ConnectionsPage() {
+export function ConnectionsPage({ projectId }: { projectId?: string } = {}) {
   const { org } = useWorkspace();
-  const base = `/enterprise/api/organizations/${org.id}/inference`;
+  const base = projectId ? `/enterprise/api/projects/${projectId}/inference` : `/enterprise/api/organizations/${org.id}/inference`;
   const accounts = useResource<{
     configured: boolean;
     items: Account[];
@@ -108,7 +108,7 @@ export function ConnectionsPage() {
     <section className="settings-page connections-page">
       <PageHeader
         title="Connections"
-        description="Manage the inference accounts available to your organization."
+        description={projectId ? "Manage the connections available to this workspace." : "Manage the inference accounts available to your organization."}
         actions={
           <>
             <button

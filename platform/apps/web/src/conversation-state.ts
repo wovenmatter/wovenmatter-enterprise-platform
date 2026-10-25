@@ -1,4 +1,11 @@
+export type DraftAttachment = { kind: "file" | "note" | "conversation"; id: string; title: string; size?: number };
+function draftAttachments(value: unknown): DraftAttachment[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 20 || value.some(item => !item || !["file", "note", "conversation"].includes(item.kind) || typeof item.id !== "string" || !/^[\w-]{1,128}$/.test(item.id) || typeof item.title !== "string" || item.title.length > 4096 || (item.size !== undefined && (typeof item.size !== "number" || !Number.isFinite(item.size) || item.size < 0)))) return undefined;
+  return value.map(({kind,id,title,size}) => ({kind,id,title,...(typeof size === "number" && size >= 0 ? {size} : {})}));
+}
 export type PendingMessage = {
+  attachments?: DraftAttachment[];
   id: string;
   content: string;
   kind?: "message" | "comment";
@@ -65,6 +72,7 @@ export function loadPendingMessage(
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== "object") return;
     const candidate = value as Partial<PendingMessage>;
+    if (candidate.attachments !== undefined && !draftAttachments(candidate.attachments)) return;
     if (
       typeof candidate.id !== "string" ||
       !/^[A-Za-z0-9_-]{8,100}$/.test(candidate.id)
@@ -78,6 +86,7 @@ export function loadPendingMessage(
     return {
       id: candidate.id,
       content: candidate.content,
+      ...(draftAttachments(candidate.attachments)?.length ? { attachments: draftAttachments(candidate.attachments) } : {}),
       ...(candidate.kind === "comment" ? { kind: "comment" as const } : {}),
     };
   } catch {
@@ -128,7 +137,7 @@ export function safeContentUrl(url: string): string | undefined {
 export function loadConversationDraft(
   key: string,
   storage = tabStorage(),
-): { content: string; kind: "message" | "comment" } | undefined {
+): { content: string; kind: "message" | "comment"; attachments?: DraftAttachment[] } | undefined {
   try {
     const value = JSON.parse(storage?.getItem(key) ?? "null");
     if (
@@ -137,7 +146,7 @@ export function loadConversationDraft(
       value.content.length <= 100000 &&
       ["message", "comment"].includes(value.kind)
     )
-      return { content: value.content, kind: value.kind };
+      return { content: value.content, kind: value.kind, ...(draftAttachments(value.attachments)?.length ? { attachments: draftAttachments(value.attachments) } : {}) };
   } catch {
     /* Restricted storage must not prevent composing. */
   }
@@ -147,9 +156,10 @@ export function saveConversationDraft(
   content: string,
   kind: "message" | "comment",
   storage = tabStorage(),
+  attachments?: DraftAttachment[],
 ) {
   try {
-    if (content) storage?.setItem(key, JSON.stringify({ content, kind }));
+    if (content || attachments?.length) storage?.setItem(key, JSON.stringify({ content, kind, ...(attachments?.length ? {attachments} : {}) }));
     else storage?.removeItem(key);
   } catch {
     /* The current draft remains available in memory. */
@@ -168,7 +178,8 @@ export function settleConversationInput(
   const draft = loadConversationDraft(draftKey, storage);
   if (
     draft?.content === pending.content &&
-    draft.kind === (pending.kind ?? "message")
+    draft.kind === (pending.kind ?? "message") &&
+    JSON.stringify(draft.attachments ?? []) === JSON.stringify(pending.attachments ?? [])
   )
     try {
       storage?.removeItem(draftKey);
