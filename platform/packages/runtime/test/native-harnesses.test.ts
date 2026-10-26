@@ -73,6 +73,9 @@ for(const harness of ['codex','claude_code','grok_build'] as const) {
       await channel.submit({id:'attached-steering',sequence:1,authorId:'u',authorName:'User',content:'Use attached files',attachments});
       await running;await channel.settle();
       const trace=await f.readTrace();
+      const session=trace.find(item=>item.method==="session/new");
+      assert.deepEqual(session.params.mcpServers,[{name:"woven",command:process.execPath,args:["/opt/runtime/src/workspace-mcp.js"],env:[]}]);
+      assert.equal(JSON.stringify(session.params.mcpServers).includes(input.gateway.token),false);
       const inputs=trace.filter(item=>item.method==='session/prompt'||item.method==='_session/steering');
       assert.equal(inputs.length,2);
       for(const item of inputs) {

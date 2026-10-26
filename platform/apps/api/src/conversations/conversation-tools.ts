@@ -28,7 +28,7 @@ export function readConversationTools(value?: string): ConversationTools {
 export function toolPrompt(value?: string) {
   const settings = readConversationTools(value);
   return "\n\nWorkspace tool settings for this conversation: " + conversationToolGroups.map(group => `${group.label}: ${settings[group.id] ? "enabled" : "disabled"}`).join("; ") + ". " +
-    "Use wme-workspace for authorized workspace operations. Notes also controls artifacts and managed databases; Calendar controls events and scheduled tasks. " +
+    "Use typed Woven MCP tools for authorized workspace operations. wme-workspace remains a compatibility fallback. Notes also controls artifacts and managed databases; Calendar controls events and scheduled tasks. " +
     'For conversation history, use wme-workspace list with {"kind":"conversation"}, or read with {"kind":"conversation","id":"CONVERSATION_ID","after":0,"limit":50}. ' +
     'Each result includes bounded message content. When nextOffset is present, read that exact message with {"kind":"conversation","id":"CONVERSATION_ID","messageId":"MESSAGE_ID","offset":NEXT_OFFSET,"characters":16000}; continue until nextOffset is null. ' +
     "Explicitly attached notes and conversations grant only scoped reads while their groups are disabled. They do not grant edits or broader discovery. " +

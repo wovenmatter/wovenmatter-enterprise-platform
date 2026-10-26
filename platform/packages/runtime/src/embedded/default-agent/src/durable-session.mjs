@@ -217,9 +217,10 @@ export async function openDurableSession(engine, id, requested) {
     const loader = new DefaultResourceLoader({ cwd, agentDir: engine.directory, settingsManager, noExtensions: true, noThemes: true });
     await loader.reload();
     let codemode;
-    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...searchTools(async () => (await engine.credentials.read('exa'))?.key), checklistTool];
+    const tools = [...createCodingTools(cwd), createGrepTool(cwd), createFindTool(cwd), createLsTool(cwd), ...(engine.enterpriseTools ?? searchTools(async () => (await engine.credentials.read('exa'))?.key)), checklistTool];
+    record.ordinaryTools = tools.map(tool => tool.name);
     createCodemodeExtension({ models: false })( { registerTool: tool => { codemode = tool; }, getSettings: () => ({ codemode: { mode: (toolScopes.getStore() ?? record).codeModeState.value } }), getAllTools: () => tools, appendEntry: (customType, data) => { toolScopes.getStore().pendingStoreWrites.push({ customType, data }); } });
-    const adapted = tools.map(tool => ({ ...tool, replay: ['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
+    const adapted = tools.map(tool => ({ ...tool, replay: tool.replay === 'safe' || ['read', 'grep', 'find', 'ls', 'web_search', 'web_read', checklistTool.name].includes(tool.name) ? 'safe' : 'unsafe', execute: async (args, api, ctx) => {
       const scope = await scopeFor(api.conversationId);
       const env = scope.cli.environment(process.env);
       for (const key of ['PI_SESSION_FILE', 'PI_SESSION_ID', 'PI_PROVIDER', 'PI_MODEL', 'PI_REASONING_LEVEL']) delete env[key];

@@ -1303,3 +1303,15 @@ test("runPi executes attached native subagent and retains reports", async (t) =>
     JSON.stringify(events),
   );
 });
+
+
+test("Pi invokes typed Woven MCP tools through its native tool loop and retains broker results",async t=>{
+  const directory=await mkdtemp(join(tmpdir(),"wme-pi-mcp-"));t.after(()=>rm(directory,{recursive:true,force:true}));
+  const g=gateway(t,[functionCallStream("woven_notes_list",{},"mcp-list"),textStream("MCP note verified","mcp-result")]),calls:{name:string;args:unknown}[]=[],events:RuntimeEvent[]=[];
+  await runEnterprisePi(request(g.baseUrl),event=>{events.push(event);},new AbortController().signal,undefined,undefined,{sessionDirectory:directory,cwd:directory,workspaceToolCall:async(name,args)=>{
+    calls.push({name,args});return {content:[{type:"text",text:"Synthetic note through current-run broker"}],structuredContent:{items:[{id:"note",title:"Fixture"}]}};
+  }});
+  assert.deepEqual(calls,[{name:"woven_notes_list",args:{}}]);assert.equal(events.at(-1)?.type,"completed");
+  assert.ok(g.requests.some(entry=>JSON.stringify(entry.body).includes("Synthetic note through current-run broker")));
+  assert.ok(g.requests.some(entry=>(entry.body as any).tools?.some((tool:any)=>tool.name==="woven_notes_list")));
+});

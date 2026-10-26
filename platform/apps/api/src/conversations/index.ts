@@ -24,6 +24,8 @@ export async function registerConversations(
   ctx: AppContext,
   service: ConversationService,
 ) {
+  app.get("/enterprise/api/organizations/:orgId/agent-settings", async r => service.organizationAgentSettings(await ctx.requireUser(r), (r.params as {orgId:string}).orgId));
+  app.patch("/enterprise/api/organizations/:orgId/agent-settings", async r => service.updateOrganizationAgentSettings(await ctx.requireUser(r), (r.params as {orgId:string}).orgId,body(r)));
   app.get("/enterprise/api/projects/:projectId/agent-settings", async r => service.agentSettings(await ctx.requireUser(r), params(r).projectId!));
   app.patch("/enterprise/api/projects/:projectId/agent-settings", async r => service.updateAgentSettings(await ctx.requireUser(r), params(r).projectId!, body(r)));
   app.get("/enterprise/api/conversations/:conversationId/native", async r => service.nativeStatus(await ctx.requireUser(r), params(r).conversationId!));

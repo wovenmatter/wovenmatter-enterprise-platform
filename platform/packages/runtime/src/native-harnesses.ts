@@ -163,7 +163,7 @@ export async function runNative(request: ContainerRequest, emit: EventSink, sign
       const initialized = await state.rpc.request("initialize", {protocolVersion: 1, clientCapabilities: {fs: {readTextFile: false, writeTextFile: false}, terminal: false, elicitation: {form: {}}}, clientInfo: {name: "WovenMatter Enterprise", version: "1"}});
       if (initialized.protocolVersion !== 1) throw failure("native_protocol_unsupported");
       state.steering = initialized._meta?.steering?.supported === true;
-      const params = {cwd: request.workingDirectory, mcpServers: [], ...(request.resumeId ? {sessionId: request.resumeId} : {}),
+      const params = {cwd: request.workingDirectory, mcpServers: request.assetId ? [] : [{name:"woven",command:process.execPath,args:["/opt/runtime/src/workspace-mcp.js"],env:[]}], ...(request.resumeId ? {sessionId: request.resumeId} : {}),
         ...(request.harness === "claude_code" ? {_meta: {systemPrompt: {append: agentInstructions}}} : {})};
       state.initial = await state.rpc.request(request.resumeId ? "session/load" : "session/new", params);
       // ACP LoadSessionResponse does not require sessionId. A successful load
@@ -244,7 +244,7 @@ export async function runNative(request: ContainerRequest, emit: EventSink, sign
       const result = await Promise.race([completion, rpc.closed]);
       await rpc.flush();
       const totalTokens = nativeRunTokens(result);
-      if (totalTokens !== undefined) await update({sessionUpdate: "woven_usage", usage: {totalTokens}});
+      if (totalTokens !== undefined) await update({sessionUpdate: "woven_usage", usage: {totalTokens,input:result?.usage?.inputTokens,output:result?.usage?.outputTokens,cacheRead:result?.usage?.cachedReadTokens,cacheWrite:result?.usage?.cachedWriteTokens}});
       await publish({type: "input_accepted"});
       if (result?.stopReason === "cancelled" && !signal.aborted) throw failure("native_cancelled");
     } finally { signal.removeEventListener("abort", cancel); }
@@ -264,6 +264,7 @@ async function runOpenCode(request: ContainerRequest, state: NativeState, signal
   const api = request.pi?.api ?? "openai-responses";
   const providerPackage = api === "anthropic-messages" ? "anthropic-compatible" : api === "openai-compatible" ? "openai-compatible" : "openai-compatible/responses";
   await writeFile(join(directory, "opencode.json"), JSON.stringify({update: "disable", model: "enterprise/" + request.model, instructions: ["/opt/runtime/AGENTS.md"],
+    mcp:request.assetId?{}:{woven:{type:"local",command:[process.execPath,"/opt/runtime/src/workspace-mcp.js"],enabled:true}},
     providers: {enterprise: {name: "Organization inference", env: ["WME_NATIVE_GATEWAY_TOKEN"], package: "@opencode/ai/providers/" + providerPackage,
       settings: {baseURL: request.gateway.baseUrl.replace(/\/$/, "") + "/v1", encoding: "none"}, models: {[request.model]: {name: request.model}}}}}), {mode: 0o600});
   const registrationPath = join(environment.XDG_STATE_HOME!, "opencode/service.json");

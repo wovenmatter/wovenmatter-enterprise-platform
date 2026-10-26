@@ -1,3 +1,6 @@
+import { personalPreferences } from "../preferences.js";
+import { registerConversationHTML, saveConversationHTML } from "./html.js";
+import { registerSearchAccounts, searchCredential, executeSearch } from "./search.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../context.js";
 import type { ConversationService } from "../conversations/service.js";
@@ -13,6 +16,8 @@ const params = (r: FastifyRequest) => r.params as { projectId: string; id: strin
 export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppContext, conversations: ConversationService, jobs: boolean, inference: InferenceService) {
   const service = new WorkspaceContent(ctx), scheduler = new WorkspaceScheduler(ctx, conversations);
   await service.initialize();
+  await registerSearchAccounts(app,ctx);
+  await registerConversationHTML(app,ctx,conversations);
   await registerConversationTools(app, ctx);
   conversations.onMessageAccepted = (user, projectId, messageId) => captureLibraryMessage(ctx, user, projectId, messageId);
   conversations.onNativeLibraryBatch = (user, projectId, messageId, batch) => captureLibraryNativeBatch(ctx, user, projectId, messageId, batch);
@@ -43,7 +48,7 @@ export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppCon
       .send(file.bytes);
   });
   app.post("/enterprise/api/projects/:projectId/workspace-library/:id/retry", async r => retryLibraryFile(ctx, await ctx.requireUser(r), params(r).projectId, params(r).id));
-  app.get("/enterprise/api/projects/:projectId/usage", async r => workspaceUsage(ctx, await ctx.requireUser(r), params(r).projectId));
+  app.get("/enterprise/api/projects/:projectId/usage", async r => workspaceUsage(ctx, await ctx.requireUser(r), params(r).projectId, r.query as Record<string,unknown>));
   app.post("/enterprise/api/runtime/inference/:projectId/workspace/:operation", { bodyLimit: 2 * 1024 * 1024, config: { internalInference: true } }, async r => {
     const token = /^Bearer ([^\s]+)$/.exec(r.headers.authorization ?? "")?.[1];
     if (!token) throw new AppError(401, "unauthorized", "A current workspace run is required.");
@@ -66,6 +71,9 @@ export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppCon
         await access.require("history", { kind: "conversation", id });
         return readToolConversation(ctx, user, projectId, id, input);
       }
+      const calendarWrite=async(kind:unknown)=>{
+        if(["event","task"].includes(String(kind)) && (await personalPreferences(ctx,user.id)).calendarAccess==="readOnly") throw new AppError(403,"calendar_read_only","Calendar access for this account's agent runs is read only.");
+      };
       if (operation === "list") {
         if (input.kind) await access.require(contentToolGroup(input.kind));
         const list = await service.list(user, projectId, input.kind);
@@ -75,12 +83,19 @@ export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppCon
         const row = await service.require(user, projectId, id);
         await access.require(contentToolGroup(row.kind), operation === "read" && row.kind === "note" ? { kind: "note", id } : undefined);
         if (operation === "read") return contentView(row);
+        if(["update","delete","restore"].includes(operation))await calendarWrite(row.kind);
         if (operation === "update") return service.update(user, projectId, id, input);
         if (operation === "delete") return service.remove(user, projectId, id, Number(input.expectedRevision));
         if (operation === "versions") return service.versions(user, projectId, id);
         return service.restore(user, projectId, id, input);
       }
-      if (operation === "create") { await access.require(contentToolGroup(input.kind)); return service.create(user, projectId, input); }
+      if (operation === "create") { await access.require(contentToolGroup(input.kind)); await calendarWrite(input.kind); return service.create(user, projectId, input); }
+      if (operation === "html") return saveConversationHTML(ctx,initial.conversationId!,scope.runId,input);
+      if (operation === "search") {
+        const settings=await conversations.agentSettings(user,projectId);
+        const selected=settings.agents.pi?.searchProvider ?? "exa";
+        return executeSearch(selected,await searchCredential(ctx,(await ctx.requireProject(user,projectId)).orgId,selected),input);
+      }
       if (operation === "library") { await access.require("library"); return workspaceLibrary(ctx, user, projectId); }
       if (operation === "usage") { await access.require("usage"); return workspaceUsage(ctx, user, projectId); }
       if (operation === "databases") { await access.require("notes"); return databaseOperation(ctx, user, projectId, input); }

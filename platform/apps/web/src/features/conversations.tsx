@@ -1,3 +1,4 @@
+import { DictationButton } from "./dictation";
 import { ComposerTools, defaultConversationTools, type ConversationTools } from "./composer-tools";
 import { ComposerAttachments, ComposerAttachmentChips, type ComposerAttachment } from "./composer-attachments";
 import { useNativeControls } from "./native-controls";
@@ -29,7 +30,6 @@ import {
   Cpu,
   Folder,
   MessageSquare,
-  Mic,
   FileText,
   Paperclip,
   Settings,
@@ -94,7 +94,7 @@ import {
   Status,
 } from "../components/ui";
 export type { Model, Conversation } from "../api";
-type AgentDefaults = { defaultHarness: string; agents: Record<string, { model?: string; thinking?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number }> };
+type AgentDefaults = { defaultHarness: string; personalTools?:ConversationTools; agents: Record<string, { model?: string; thinking?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number;tools?:ConversationTools;models?:string[];fallbackModels?:string[] }> };
 type WelcomePi = { thinking?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number };
 const thinkingLabel = (level: string) => level === "xhigh" ? "Extra high" : level.charAt(0).toUpperCase() + level.slice(1);
 type Message = {
@@ -284,21 +284,28 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
   folderId: string | null; onFolderChange: (id: string | null) => void;
   onStart: (harness: string, model: string, content: string, folderId: string | null, attachments: ComposerAttachment[], tools: ConversationTools, pi: WelcomePi) => Promise<void>;
 }) {
-  const { org } = useWorkspace();
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  const [tools, setTools] = useState(defaultConversationTools);
+  const { org,user } = useWorkspace();
+  const welcomeKey="welcome:"+user.id+":"+project.id+":"+initialAgent;
+  const [retainedDraft]=useState(()=>loadConversationDraft(welcomeKey));
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>(retainedDraft?.attachments??[]);
+  const [toolChoices, setTools] = useState<ConversationTools>();
   const [uploading, setUploading] = useState(false);
   const harness = initialAgent;
   const [modelChoice, setModelChoice] = useState<string>();
   // Undefined inherits workspace defaults; empty explicitly chooses model default.
   const [thinkingChoice, setThinkingChoice] = useState<string>();
   const { formRef, collapsed, setCollapsed } = useComposerLayout();
-  const [draft, setDraft] = useState(""), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const [draft, setDraft] = useState(retainedDraft?.content??""), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  useEffect(()=>{saveConversationDraft(welcomeKey,draft,"message",undefined,attachments);},[welcomeKey,draft,attachments]);
   const configured = defaults?.agents?.[harness] ?? {};
-  const available = models.filter(model => acceptsModel(harness, model.provider));
+  const tools=toolChoices??configured.tools??defaults?.personalTools??defaultConversationTools;
+  const catalog=models.filter(model=>acceptsModel(harness,model.provider));
+  const preferred=configured.model||(catalog.some(item=>item.id===defaultModel)?defaultModel!:catalog[0]?.id);
+  const available=harness==="pi"&&configured.models!==undefined?catalog.filter(model=>configured.models!.includes(model.id)||model.id===preferred||configured.fallbackModels?.includes(model.id)):catalog;
   // Match ConversationService.create: workspace agent, current personal default,
   // then the first authorized catalog item. Never hide an unavailable explicit/default choice.
-  const model = modelChoice ?? (configured.model || (available.some(item => item.id === defaultModel) ? defaultModel! : available[0]?.id ?? ""));
+  const inheritedModel=configured.model&&!available.some(item=>item.id===configured.model)?configured.fallbackModels?.find(id=>available.some(item=>item.id===id))??configured.model:configured.model;
+  const model = modelChoice ?? (inheritedModel || (available.some(item => item.id === defaultModel) ? defaultModel! : available[0]?.id ?? ""));
   const selectedModel = available.find(item => item.id === model);
   const levels = selectedModel?.thinkingLevels ?? [];
   const thinking = thinkingChoice ?? configured.thinking ?? "";
@@ -324,7 +331,7 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
     const pi: WelcomePi = { ...(configured.codeMode ? { codeMode: configured.codeMode } : {}),
       ...(configured.subagentConcurrency !== undefined ? { subagentConcurrency: configured.subagentConcurrency } : {}),
       ...(thinking ? { thinking } : {}) };
-    try { await onStart(harness, model, draft, folderId, attachments, tools, pi); }
+    try { await onStart(harness, model, draft, folderId, attachments, tools, pi); saveConversationDraft(welcomeKey,"","message"); }
     catch (e) { setError(errorMessage(e)); setBusy(false); }
   }
   return <div className="workspace-welcome"><h2 className="sr-only">{title}</h2>
@@ -340,7 +347,7 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
           <Picker label="Model" heading="Model" icon={Cpu} width={360} value={model} placeholder="Model" options={modelOptions} title={catalogReady && !available.length ? "No models are available. An administrator can connect a provider in Connections." : undefined} onChange={value => { setModelChoice(value); setThinkingChoice(""); }} disabled={busy || !catalogReady || Boolean(catalogError) || sessionMenuUnavailable(modelOptions, model)} />
           <Picker label="Thinking level" heading="Thinking Level" icon={Brain} value={harness === "pi" ? thinking : ""} placeholder="Thinking" valueLabel={!thinking && harness === "pi" ? (selectedModel?.defaultThinkingLevel ? thinkingLabel(selectedModel.defaultThinkingLevel) : "Thinking") : undefined} options={thinkingOptions} onChange={setThinkingChoice} disabled={busy || !catalogReady || Boolean(catalogError) || !selectedModel || sessionMenuUnavailable(thinkingOptions, thinking)} />
           <ComposerTools settings={tools} onChange={setTools} disabled={busy} />
-          <div className="composer-send-actions"><ComposerCollapse collapsed={collapsed} onChange={setCollapsed} /><ComposerMicrophone />
+          <div className="composer-send-actions"><ComposerCollapse collapsed={collapsed} onChange={setCollapsed} /><DictationButton disabled={busy} onTranscript={text=>setDraft(current=>current+(current?" ":"")+text)}/>
             <button className="send-button" aria-label="Send message" type="submit" disabled={busy || uploading || !ready || (!draft.trim() && !attachments.length)}><Icon icon={ArrowUp} size={16} weight="send" /></button>
           </div>
         </div>
@@ -358,10 +365,6 @@ function ConversationFolder({ folders, folderId, disabled, locked, workingDirect
     placeholder="All Workspaces" title={locked ? `The folder is fixed after the first message.${workingDirectory ? ` Working directory: ${workingDirectory}` : ""}` : "Choose a folder in this workspace"}
     options={[{ value: "", label: "All Workspaces" }, ...(folderId && !folders?.some(folder => folder.id === folderId) ? [{ value: folderId, label: "Unavailable folder", disabled: true }] : []), ...(folders?.map(folder => ({ value: folder.id, label: folder.name })) ?? [])]}
     disabled={disabled || locked} onChange={value => onChange(value || null)} />{children}</div>;
-}
-
-function ComposerMicrophone() {
-  return <button type="button" className="composer-microphone" disabled aria-label="Dictation coming later" title="Dictation coming later"><Icon icon={Mic} size={16} weight="control" /></button>;
 }
 
 function ComposerCollapse({ collapsed, onChange }: { collapsed: boolean; onChange: (value: boolean) => void }) {
@@ -1470,7 +1473,7 @@ export function Thread({
                 />
               </div>
               <ComposerCollapse collapsed={collapsed} onChange={setCollapsed} />
-              <ComposerMicrophone />
+              <DictationButton disabled={sending||uncertain||!canAct} onTranscript={text=>setDraft(current=>current+(current?" ":"")+text)}/>
               {active.length && !draft.trim() && !attachments.length && !uncertain ? (
                 <button
                   className="stop-button"
