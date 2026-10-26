@@ -5,6 +5,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createServer, request as httpRequest, type Server } from "node:http";
+import { connect as unixConnect } from "node:net";
 import { createHash } from "node:crypto";
 import { MAX_ATTACHMENT_BYTES, MAX_INPUT_BYTES, validateAttachments, prepareAttachments, attachmentPrompt, attachmentToolText, openCodeFiles } from "../src/attachments.js";
 import { MAX_PROMPT_BYTES, validateContainerRequest, validateInputText } from "../src/validation.js";
@@ -166,4 +167,20 @@ test("50 MiB immutable files cross trusted input, native image mapping and authe
     ownership?.mock.restore();
     if(ownership)syncBuiltinESMExports();
   }
+});
+
+test("session proxy advertises Basic challenges for browser HTTP and CONNECT without granting unauthenticated access",async t=>{
+ const directory=await mkdtemp(join(tmpdir(),"wme-browser-proxy-")),uid=process.getuid!(),gid=process.getgid!(),chown=fs.chown;
+ const ownership=uid===0?undefined:t.mock.method(fs,"chown",async(...args:Parameters<typeof fs.chown>)=>{await chown(args[0],uid,gid);});if(ownership)syncBuiltinESMExports();
+ const upstream=createServer((request,response)=>{assert.equal(request.headers["proxy-authorization"],"Basic "+Buffer.from("fixture-project:synthetic-upstream").toString("base64"));response.end("PROXY_OK");});
+ let broker:Awaited<ReturnType<typeof sessionBroker>>|undefined;
+ try{
+  await new Promise<void>(resolve=>upstream.listen(0,"127.0.0.1",resolve));
+  broker=await sessionBroker(directory,"fixture-project",{origin:"http://127.0.0.1:"+(upstream.address()as any).port,token:"synthetic-upstream"});
+  const call=(authorization?:string)=>new Promise<{status:number;challenge:unknown;body:string}>((resolve,reject)=>{const request=httpRequest({socketPath:join(directory,"egress.sock"),path:"http://public.fixture.invalid/page",headers:authorization?{"proxy-authorization":authorization}:{}},response=>{let body="";response.on("data",chunk=>body+=chunk);response.on("end",()=>resolve({status:response.statusCode!,challenge:response.headers["proxy-authenticate"],body}));});request.once("error",reject);request.end();});
+  const denied=await call();assert.equal(denied.status,407);assert.equal(denied.challenge,'Basic realm="workspace"');assert.equal(denied.body,"");
+  const allowed=await call("Basic "+Buffer.from("fixture-project:"+broker.token).toString("base64"));assert.equal(allowed.status,200);assert.equal(allowed.body,"PROXY_OK");
+  const connect=await new Promise<string>((resolve,reject)=>{const socket=unixConnect(join(directory,"egress.sock"));let text="";socket.once("connect",()=>socket.write("CONNECT public.fixture.invalid:443 HTTP/1.1\r\nHost: public.fixture.invalid:443\r\n\r\n"));socket.on("data",chunk=>text+=chunk);socket.once("end",()=>resolve(text));socket.once("error",reject);});
+  assert.match(connect,/^HTTP\/1.1 407/);assert.match(connect,/Proxy-Authenticate: Basic realm="workspace"/);
+ }finally{broker?.close();upstream.closeAllConnections();if(upstream.listening)await new Promise<void>(resolve=>upstream.close(()=>resolve()));await rm(directory,{recursive:true,force:true});ownership?.mock.restore();if(ownership)syncBuiltinESMExports();}
 });
