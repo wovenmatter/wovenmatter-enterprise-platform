@@ -149,3 +149,27 @@ test("running delivery receipts reach completion so recurring timers can admit t
  assert.equal((await f.db.get<any>("SELECT status FROM workspace_agent_deliveries WHERE id=?",[first.id])).status,"completed");
  assert.equal((await f.db.get<any>("SELECT COUNT(*) count FROM workspace_agent_deliveries WHERE kind='timer'")).count,2);
 });
+
+for(const kind of ["goal","timer"]as const)test("Stop does not deadlock the "+kind+" tool lane and fences its queued admission",async t=>{
+ const f=await fixture(t),now=new Date();let enter!:()=>void,release!:()=>void;
+ const entered=new Promise<void>(resolve=>{enter=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;}),original=f.conversations.admit.bind(f.conversations);
+ f.conversations.admit=(async(...args:any[])=>{enter();await gate;return (original as any)(...args);})as any;
+ if(kind==="goal")await f.automation.goal(f.users.full!,f.source.id,{action:"set",objective:"Explicit cancellable fixture"});
+ else await f.automation.timers(f.users.full!,f.source.id,{action:"create",text:"Cancellable fixture",at:now.toISOString(),requestID:randomUUID()});
+ const ticking=f.automation.tick(now);await entered;
+ let timeout:ReturnType<typeof setTimeout>|undefined;
+ try{await Promise.race([f.ctx.onConversationStopped!(f.source.id),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(new Error("Stop blocked on its own tool lane")),1000);})]);}finally{clearTimeout(timeout);release();}
+ await ticking;assert.equal((await f.db.get<any>("SELECT COUNT(*) count FROM conversation_inputs WHERE conversation_id=?",[f.source.id])).count,0);
+ if(kind==="goal")assert.equal((await f.automation.goal(f.users.full!,f.source.id)as any).goal.status,"paused");
+ else assert.equal((await f.automation.timers(f.users.full!,f.source.id,{action:"list"})).items[0].status,"paused");
+});
+
+test("editing a claimed timer fences the old queued instruction before native admission",async t=>{
+ const f=await fixture(t),now=new Date();let enter!:()=>void,release!:()=>void;const entered=new Promise<void>(resolve=>{enter=resolve;}),gate=new Promise<void>(resolve=>{release=resolve;}),original=f.conversations.admit.bind(f.conversations);
+ f.conversations.admit=(async(...args:any[])=>{enter();await gate;return (original as any)(...args);})as any;
+ await f.automation.timers(f.users.full!,f.source.id,{action:"create",text:"Old instruction",at:now.toISOString(),requestID:randomUUID()});
+ const tick=f.automation.tick(now);await entered;const timer=(await f.automation.timers(f.users.full!,f.source.id,{action:"list"})).items[0];
+ await f.automation.timers(f.users.full!,f.source.id,{action:"update",id:timer.id,revision:timer.revision,text:"New future instruction",at:new Date(Date.now()+60000).toISOString()});release();await tick;
+ assert.equal((await f.db.get<any>("SELECT COUNT(*) count FROM conversation_inputs WHERE conversation_id=?",[f.source.id])).count,0);
+ assert.equal((await f.automation.timers(f.users.full!,f.source.id,{action:"list"})).items[0].status,"active");
+});

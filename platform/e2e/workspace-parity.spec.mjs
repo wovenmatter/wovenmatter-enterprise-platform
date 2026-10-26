@@ -98,9 +98,16 @@ test("goals, timers, Executor grants and the shared browser controls expose actu
  await expect(dialog.getByText("An organization administrator can configure Executor in General settings.",{exact:true})).toBeVisible();
  await dialog.evaluate(node=>{node.scrollTop=0;});await expect(dialog.getByRole("button",{name:"Close dialog",exact:true})).toBeVisible();await shot(page,info,"automation-desktop");
  await page.getByRole("button",{name:"Close dialog",exact:true}).click();await expect(page.getByRole("button",{name:"Manage goal",exact:true})).toBeVisible();
+ const runsBefore=(await(await page.request.get("/enterprise/api/conversations/"+chat.id+"/runs")).json()).items.length,inputs=[];page.on("request",request=>{if(request.url().endsWith("/"+chat.id+"/browser")&&request.method()==="POST")inputs.push(request.postDataJSON());});
  await page.goto(f.path+"/browser?conversation="+chat.id);await expect(page.getByRole("heading",{name:"Browser",exact:true})).toBeVisible();
  await page.getByRole("button",{name:"New tab",exact:true}).click();await expect(page.getByRole("img",{name:"Current workspace browser page",exact:true})).toBeVisible();
  await page.getByRole("button",{name:"Read page",exact:true}).click();await expect(page.getByText("Synthetic isolated page: no external browser traffic",{exact:true})).toBeVisible();
+ for(const name of ["Back","Forward","Reload"])await page.getByRole("button",{name,exact:true}).click();
+ const viewer=page.getByRole("application",{name:"Interactive workspace browser",exact:true});
+ await page.getByRole("img",{name:"Current workspace browser page",exact:true}).click({position:{x:60,y:60}});await viewer.press("Control+a");await viewer.press("Control+r");await expect.poll(()=>inputs.filter(input=>input.action==="reload").length).toBeGreaterThanOrEqual(2);await viewer.press("Tab");await expect(viewer).toBeFocused();await viewer.press("Escape");await expect(page.getByRole("textbox",{name:"Browser URL",exact:true})).toBeFocused();
+ await page.getByRole("textbox",{name:"Text for focused page field",exact:true}).fill("Synthetic human text");await page.getByRole("button",{name:"Type text",exact:true}).click();await viewer.dispatchEvent("wheel",{deltaY:300,cancelable:true});
+ await expect.poll(()=>["back","forward","reload","mouse-down","mouse-up","press","paste","scroll"].every(action=>inputs.some(input=>input.action===action))).toBe(true);
+ expect((await(await page.request.get("/enterprise/api/conversations/"+chat.id+"/runs")).json()).items.length).toBe(runsBefore);
  await shot(page,info,"browser-synthetic-desktop");
  await page.setViewportSize({width:390,height:844});await shot(page,info,"browser-synthetic-mobile");expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
  await page.goto(f.path+"/settings/general");await expect(page.getByRole("heading",{name:"Connected apps · Executor",exact:true})).toBeVisible();await page.getByRole("button",{name:"Configure service",exact:true}).click();await expect(page.getByRole("combobox",{name:"Approved service origin",exact:true})).toBeVisible();await expect(page.getByText("A platform operator must approve a service origin before it can be configured.",{exact:true})).toBeVisible();await shot(page,info,"general-executor-mobile");

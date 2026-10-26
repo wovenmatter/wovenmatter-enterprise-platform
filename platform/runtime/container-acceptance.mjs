@@ -511,7 +511,13 @@ try {
   await runtime.browser(projectId,browserThread,{action:"navigate",tabId:browserTab,url:"http://native-proxy-fixture.invalid/pi",requestID:randomUUID()});
   const browserProxy=await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()});
   assert.match(browserProxy.structuredContent.snapshot,/synthetic-proxy-ok/,"Browser traffic must traverse production loopback egress relay");
+  for(const action of ["back","forward","reload"])await runtime.browser(projectId,browserThread,{action,tabId:browserTab,requestID:randomUUID()});
+  assert.match((await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()})).structuredContent.snapshot,/synthetic-proxy-ok/,"Human navigation remains in the same retained browser");
   await runtime.browser(projectId,browserThread,{action:"evaluate",tabId:browserTab,code:"document.body.innerHTML='<h1>Actual retained workspace browser</h1><button>0</button>';document.querySelector('button').onclick=()=>{const b=document.querySelector('button');b.textContent=String(Number(b.textContent)+1)}",requestID:randomUUID()});
+  await runtime.browser(projectId,browserThread,{action:"evaluate",tabId:browserTab,code:"const field=document.createElement('input');field.id='human-input';document.body.append(field);field.focus()",requestID:randomUUID()});
+  await runtime.browser(projectId,browserThread,{action:"paste",tabId:browserTab,text:"Synthetic human text",requestID:randomUUID()});
+  await runtime.browser(projectId,browserThread,{action:"press",tabId:browserTab,key:"Control+a",requestID:randomUUID()});
+  assert.equal((await runtime.browser(projectId,browserThread,{action:"copy",tabId:browserTab,requestID:randomUUID()})).structuredContent.text,"Synthetic human text");
   const browserClick={action:"click",tabId:browserTab,selector:"button",requestID:randomUUID()};
   await runtime.browser(projectId,browserThread,browserClick);await runtime.browser(projectId,browserThread,browserClick);
   const browserSnapshot=await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()});

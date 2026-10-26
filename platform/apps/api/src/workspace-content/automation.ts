@@ -8,7 +8,7 @@ import {AppError,objectBody,type AppContext,type User} from "../context.js";
 import type {ConversationService} from "../conversations/service.js";
 import {withConversationTools,readConversationTools} from "../conversations/conversation-tools.js";
 import {personalPreferences} from "../preferences.js";
-type Chat={id:string;project_id:string;creator_id:string;title:string;harness:string;model:string;native_options:string;tool_settings:string;deleted_at:string|null};
+type Chat={runtime_generation?:number;id:string;project_id:string;creator_id:string;title:string;harness:string;model:string;native_options:string;tool_settings:string;deleted_at:string|null};
 type Goal={id:string;objective:string;status:"active"|"paused"|"complete"|"blocked"|"budget_limited";tokenBudget?:number;turnBudget?:number;completedTurns:number;tokensUsed?:number;progressRevision:number;pendingProgressRevision:number;evidence?:string;createdAt:string;updatedAt:string;baseline:number;pendingDeliveryID?:string;runs:Record<string,{settled:boolean;tokens?:number;success?:boolean}>};
 const fail=(message:string,code="invalid_automation",status=400)=>new AppError(status,code,message);
 const text=(value:unknown,label:string,max=4096)=>{if(typeof value!=="string"||!value.trim()||value.length>max)throw fail(label+" must contain 1–"+max+" characters.");return value.trim();};
@@ -42,13 +42,23 @@ export class WorkspaceAutomation {
     try{const result=await action(id);await this.ctx.db.run("UPDATE workspace_automation_receipts SET status='complete',result=? WHERE source_id=? AND request_id=?",[json(result),source,id]);return result;}
     catch(error){await this.ctx.db.run("UPDATE workspace_automation_receipts SET status='uncertain' WHERE source_id=? AND request_id=?",[source,id]);throw error;}
   }
-  async delivery(user:User,source:string,target:string,instruction:string,kind:string,id:string=randomUUID(),comment=false){
-    await this.chat(user,source);await this.chat(user,target,(await this.chat(user,source)).project_id);
+  async delivery(user:User,source:string,target:string,instruction:string,kind:string,id:string=randomUUID(),comment=false,guard?:()=>Promise<void>){
+    const sourceChat=await this.chat(user,source),targetChat=await this.chat(user,target,sourceChat.project_id);
+    const coordination=kind==="session"?await this.ctx.db.get<{epoch:string}>("SELECT epoch FROM workspace_session_links WHERE source_id=? AND target_id=?",[source,target]):undefined;
     const old=await this.ctx.db.get<any>("SELECT * FROM workspace_agent_deliveries WHERE id=?",[id]);
     if(old)return old;
     await this.ctx.db.run("INSERT INTO workspace_agent_deliveries(id,source_id,target_id,created_by,kind,content,status,created_at) VALUES(?,?,?,?,?,?,'admitting',?)",[id,source,target,user.id,kind,instruction,timestamp()]);
     try{
-      const receipt=await this.conversations.admit(user,target,{requestId:id,content:instruction,kind:comment?"comment":"message"});
+      const receipt=await this.conversations.admit(user,target,{requestId:id,content:instruction,kind:comment?"comment":"message"},async()=>{
+        const currentSource=await this.chat(user,source),currentTarget=await this.chat(user,target,sourceChat.project_id);
+        if((currentSource.runtime_generation??0)!==(sourceChat.runtime_generation??0)||(currentTarget.runtime_generation??0)!==(targetChat.runtime_generation??0))throw fail("Execution ownership changed before delivery.");
+        if(kind==="goal"&&!await this.ctx.db.get("SELECT 1 FROM workspace_goals WHERE conversation_id=? AND json_extract(data,'$.status')='active' AND json_extract(data,'$.pendingDeliveryID')=?",[target,id]))throw fail("The goal was paused or replaced before delivery.");
+        if(kind==="timer"&&!readConversationTools(currentTarget.tool_settings).timers)throw fail("Timer tools were disabled before delivery.");
+        if(kind==="timer"&&!await this.ctx.db.get("SELECT 1 FROM workspace_session_timers WHERE conversation_id=? AND last_delivery_id=? AND status!='paused'",[target,id]))throw fail("The timer was paused or replaced before delivery.");
+        if(["session","notification"].includes(kind)&&!readConversationTools(currentSource.tool_settings).sessions)throw fail("Session tools were disabled before delivery.");
+        if(kind==="session"&&(!coordination||!await this.ctx.db.get("SELECT 1 FROM workspace_session_links WHERE source_id=? AND target_id=? AND epoch=?",[source,target,coordination.epoch])))throw fail("The coordination epoch changed before delivery.");
+        await guard?.();
+      });
       const status=receipt.message.delivery,runId=receipt.run?.id??null;
       await this.ctx.db.run("UPDATE workspace_agent_deliveries SET status=?,run_id=? WHERE id=?",[status,runId,id]);
       return {id,targetId:target,status,runId};
@@ -92,7 +102,7 @@ export class WorkspaceAutomation {
     if(!link||typeof input.epoch!=="string"||link.epoch!==input.epoch)throw fail("This coordination epoch is unavailable. Ask for access or inspect current status.","coordination_changed",403);
     if(action==="release"){await this.ctx.db.run("DELETE FROM workspace_session_links WHERE target_id=? AND source_id=? AND epoch=?",[target.id,sourceId,input.epoch]);return {released:true};}
     if(action==="notifications"){if(typeof input.enabled!=="boolean")throw fail("Choose true or false.");await this.ctx.db.run("UPDATE workspace_session_links SET notifications=? WHERE target_id=? AND epoch=?",[Number(input.enabled),target.id,input.epoch]);return {enabled:input.enabled};}
-    if(action==="send")return this.once(sourceId,input.requestID,"session.send",input,id=>this.delivery(user,sourceId,target.id,"Coordinator message ("+source.title+"): "+text(input.text,"Message",100000),"session",id));
+    if(action==="send")return this.once(sourceId,input.requestID,"session.send",input,id=>this.delivery(user,sourceId,target.id,"Coordinator message ("+source.title+"): "+text(input.text,"Message",100000),"session",id,false,async()=>{if(!await this.ctx.db.get("SELECT 1 FROM workspace_session_links WHERE source_id=? AND target_id=? AND epoch=?",[sourceId,target.id,input.epoch as string]))throw fail("The coordination epoch changed before delivery.");}));
     throw fail("Choose a supported session operation.");
   }
   async coordination(user:User,projectId:string){await this.ctx.requireProject(user,projectId);return {items:await this.ctx.db.all("SELECT q.id,q.source_id AS sourceId,q.target_id AS targetId,s.title AS sourceTitle,t.title AS targetTitle,q.purpose,q.state,q.created_at AS createdAt FROM workspace_coordination_requests q JOIN conversations s ON s.id=q.source_id JOIN conversations t ON t.id=q.target_id WHERE q.project_id=? AND q.state='pending' AND s.deleted_at IS NULL AND t.deleted_at IS NULL ORDER BY q.created_at",[projectId])};}
@@ -169,15 +179,16 @@ export class WorkspaceAutomation {
     for(const item of pending){const receipt=await this.ctx.db.get<any>("SELECT i.delivery,i.run_id,r.status FROM conversation_inputs i LEFT JOIN conversation_runs r ON r.id=i.run_id WHERE i.conversation_id=? AND i.request_id=?",[item.target_id,item.id]);await this.ctx.db.run("UPDATE workspace_agent_deliveries SET status=?,run_id=? WHERE id=?",[!receipt?"uncertain":receipt.delivery==="accepted"?receipt.status??"accepted":receipt.delivery,receipt?.run_id??item.run_id,item.id]);}
     const timers=await this.ctx.db.all<any>("SELECT * FROM workspace_session_timers WHERE status='active' AND next_at<=? ORDER BY next_at LIMIT 32",[now.toISOString()]);
     for(const timer of timers)await withConversationTools(this.ctx,timer.conversation_id,async()=>{
+      let claimedDelivery=false;
       try{
         const user=await this.conversations.user(timer.user_id),chat=await this.chat(user,timer.conversation_id);
         if(!readConversationTools(chat.tool_settings).timers)throw fail("Timer tools are disabled.");
         if(timer.last_delivery_id){const old=await this.ctx.db.get<any>("SELECT status FROM workspace_agent_deliveries WHERE id=?",[timer.last_delivery_id]);if(!old||["uncertain","rejected","failed","interrupted"].includes(old.status))throw fail("Previous timer delivery is uncertain or failed.");if(["admitting","pending","accepted","queued","dispatching","running","cancelling"].includes(old.status))return;}
         if(await this.ctx.db.get("SELECT 1 FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling')",[chat.id]))return;
         const deliveryId=randomUUID(),next=timer.interval_seconds?new Date(Date.parse(timer.next_at)+(Math.floor((now.getTime()-Date.parse(timer.next_at))/(timer.interval_seconds*1000))+1)*timer.interval_seconds*1000).toISOString():null;
-        const claimed=await this.ctx.db.run("UPDATE workspace_session_timers SET next_at=?,status=?,last_delivery_id=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND status='active'",[next,next?"active":"complete",deliveryId,timestamp(),timer.id,timer.revision]);if(!claimed.changes)return;
-        await this.delivery(user,chat.id,chat.id,"Scheduled timer: "+timer.instruction,"timer",deliveryId);
-      }catch{await this.ctx.db.run("UPDATE workspace_session_timers SET status='paused',revision=revision+1,updated_at=? WHERE id=?",[timestamp(),timer.id]);}
+        const claimed=await this.ctx.db.run("UPDATE workspace_session_timers SET next_at=?,status=?,last_delivery_id=?,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND status='active'",[next,next?"active":"complete",deliveryId,timestamp(),timer.id,timer.revision]);if(!claimed.changes)return;claimedDelivery=true;
+        await this.delivery(user,chat.id,chat.id,"Scheduled timer: "+timer.instruction,"timer",deliveryId,false,async()=>{if(!await this.ctx.db.get("SELECT 1 FROM workspace_session_timers WHERE id=? AND revision=? AND last_delivery_id=?",[timer.id,timer.revision+1,deliveryId]))throw fail("The timer changed before delivery.");});
+      }catch{await this.ctx.db.run("UPDATE workspace_session_timers SET status='paused',revision=revision+1,updated_at=? WHERE id=? AND revision=?",[timestamp(),timer.id,timer.revision+(claimedDelivery?1:0)]);}
     });
     const links=await this.ctx.db.all<any>("SELECT l.*,r.id run_id,r.status run_status,m.content result FROM workspace_session_links l JOIN conversation_runs r ON r.id=(SELECT rr.id FROM conversation_runs rr WHERE rr.conversation_id=l.target_id ORDER BY rr.created_at DESC LIMIT 1) LEFT JOIN conversation_messages m ON m.id=r.assistant_message_id WHERE l.notifications=1 AND r.status IN ('completed','failed','cancelled','interrupted') AND (l.last_notified_run IS NULL OR l.last_notified_run!=r.id)");
     for(const link of links)await withConversationTools(this.ctx,link.source_id,async()=>{
@@ -206,7 +217,7 @@ export class WorkspaceAutomation {
       if(goal.pendingDeliveryID){const receipt=await this.ctx.db.get<any>("SELECT status FROM workspace_agent_deliveries WHERE id=?",[goal.pendingDeliveryID]);if(!receipt||["uncertain","rejected","interrupted","failed","cancelled"].includes(receipt.status)){goal.status="blocked";goal.evidence="Goal continuation delivery is uncertain or failed.";await persist();return;}if(receipt.status!=="completed")return;if(goal.progressRevision<=goal.pendingProgressRevision){goal.status="blocked";goal.evidence="The turn ended without a new goal checkpoint. Inspect progress before resuming.";await persist();return;}}
       const deliveryId=randomUUID();goal.pendingDeliveryID=deliveryId;goal.pendingProgressRevision=goal.progressRevision;goal.updatedAt=timestamp();const saved=await persist();if(!saved.changes)return;
       try{await this.delivery(user,chat.id,chat.id,"Continue working on the persistent goal explicitly requested by the user: "+goal.objective+"\nReport a new evidence-based checkpoint with woven_goals_checkpoint. Mark complete only when achieved; block when user input is required. Current goal ID: "+goal.id+". Completed turns: "+goal.completedTurns+". Tokens used: "+(goal.tokensUsed??"unavailable")+". Never start a separate provider-native goal.","goal",deliveryId);}
-      catch{goal.status="blocked";goal.evidence="Goal delivery could not be confirmed. It was not replayed.";await this.ctx.db.run("UPDATE workspace_goals SET data=? WHERE conversation_id=?",[json(goal),chat.id]);}
+      catch{goal.status="blocked";goal.evidence="Goal delivery could not be confirmed. It was not replayed.";await this.ctx.db.run("UPDATE workspace_goals SET data=? WHERE conversation_id=? AND json_extract(data,'$.status')='active' AND json_extract(data,'$.id')=?",[json(goal),chat.id,goal.id]);}
     });
   }
 }
@@ -227,11 +238,10 @@ export async function registerWorkspaceAutomation(app:FastifyInstance,ctx:AppCon
   app.get("/enterprise/api/conversations/:conversationId/timers",async request=>service.timers(await ctx.requireUser(request),(request.params as {conversationId:string}).conversationId,{action:"list"}));
   app.post("/enterprise/api/conversations/:conversationId/timers",async request=>{const user=await ctx.requireUser(request),id=(request.params as {conversationId:string}).conversationId;await service.chat(user,id);return withConversationTools(ctx,id,()=>service.timers(user,id,objectBody(request.body)));});
   ctx.onConversationStopped=async id=>{
-    await withConversationTools(ctx,id,async()=>{
-      const row=await ctx.db.get<{data:string}>("SELECT data FROM workspace_goals WHERE conversation_id=?",[id]);
-      if(row){const goal=JSON.parse(row.data);if(goal.status==="active"){goal.status="paused";goal.evidence="Work was stopped by a workspace member.";goal.updatedAt=timestamp();await ctx.db.run("UPDATE workspace_goals SET data=? WHERE conversation_id=?",[JSON.stringify(goal),id]);}}
-      await ctx.db.run("UPDATE workspace_session_timers SET status='paused',revision=revision+1 WHERE conversation_id=? AND status='active'",[id]);
-    });
+    // Stop can originate inside this chat's tool lane. Atomic updates avoid
+    // reacquiring that lane; admission guards fence any already-queued wake.
+    await ctx.db.run("UPDATE workspace_goals SET data=json_set(data,'$.status','paused','$.evidence','Work was stopped by a workspace member.','$.updatedAt',?) WHERE conversation_id=? AND json_extract(data,'$.status')='active'",[timestamp(),id]);
+    await ctx.db.run("UPDATE workspace_session_timers SET status='paused',revision=revision+1,updated_at=? WHERE conversation_id=? AND (status='active' OR (status='complete' AND NOT EXISTS(SELECT 1 FROM workspace_agent_deliveries d WHERE d.id=last_delivery_id AND d.status IN ('completed','failed','rejected','interrupted','cancelled'))))",[timestamp(),id]);
   };
   if(jobs)service.start();app.addHook("onClose",()=>service.close());return service;
 }

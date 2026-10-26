@@ -78,7 +78,7 @@ Reviewed desktop main **75f6903a7aed988dd61d6084d23f51642e678435** on 2026-10-26
 | Goals | One persistent goal per chat | Explicit intent; same execution owner; fresh membership, checkpoint and budget gates; missing usage/failure blocks continuation |
 | Timers | Same-chat future instructions | Revision-fenced edits; missed intervals skip bursts; durable admission, pause on Stop/disable |
 | Browser | Chromium inside retained agent namespace | Existing UID/bwrap/seccomp/AppArmor/netnamespace; forced authenticated proxy, no CDP port; URL/file/redirect/private checks |
-| Browser human viewer | API → supervisor → retained worker IPC | Current membership/group; enable works without new native turn; disable/Stop denies immediately |
+| Browser human viewer | API → supervisor → retained worker IPC | Back/Forward/Reload, pointer/drag, modifier keys/Tab, paste/copy/text and scroll; debounced capture; current membership/group and Stop fencing; no new native turn |
 | Browser retry/cancel | Request UUID receipts and fresh screenshot frame IDs | Interrupted operations require state inspection; no automatic input replay |
 | Executor configure/inventory/defaults | Operator origin allowlist + org admin service key | Fixed-origin/redirect rejection; service manager app excluded; secrets never in runtime |
 | Executor search/skills/execute/status/cancel | Selected per-chat app profiles and upstream V2 managed MCP | Real synthetic HTTP/OAuth-machine-grant/MCP integration; no actual account UI operated |

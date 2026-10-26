@@ -51,9 +51,17 @@ export class WorkspaceBrowser {
     try{
       const scope=input.frame?page.frameLocator(String(input.frame)):page;
       const locator=()=>{if(typeof input.selector!=="string"||!input.selector||input.selector.length>4096)throw new Error("Provide a selector from the latest snapshot.");return scope.locator(input.selector);};
-      if(["click","hover"].includes(action)&&!input.selector){const frame=this.frames.get(String(input.frameId));if(!frame||frame.page!==page||Date.now()-frame.at>30000)throw new Error("Capture a fresh screenshot before coordinate input.");}
+      if(["click","hover","mouse-down","mouse-up"].includes(action)&&!input.selector){const frame=this.frames.get(String(input.frameId));if(!frame||frame.page!==page||Date.now()-frame.at>30000)throw new Error("Capture a fresh screenshot before coordinate input.");}
       switch(action){
         case "navigate":await this.navigate(page,input.url);break;
+        case "back":await page.goBack({waitUntil:"domcontentloaded"});break;
+        case "forward":await page.goForward({waitUntil:"domcontentloaded"});break;
+        case "reload":await page.reload({waitUntil:"domcontentloaded"});break;
+        case "mouse-down":await page.mouse.move(...point(input));await page.mouse.down({button:input.button??"left"});break;
+        case "mouse-up":await page.mouse.move(...point(input));await page.mouse.up({button:input.button??"left"});break;
+        case "paste":{const value=String(input.text??"");if(value.length>100000)throw new Error("Paste up to100,000 characters at a time.");await page.keyboard.insertText(value);break;}
+        case "copy":return text({id,text:(await page.evaluate(()=>{const field=document.activeElement;if(field instanceof HTMLInputElement||field instanceof HTMLTextAreaElement){if(field instanceof HTMLInputElement&&field.type==="password")return "";return field.value.slice(field.selectionStart??0,field.selectionEnd??0);}return window.getSelection()?.toString()??"";})).slice(0,100000)});
+
         case "focus":await page.bringToFront();break;
         case "close":await page.close();return text({closed:true});
         case "snapshot":return text({id,url:page.url(),title:await page.title(),snapshot:(await scope.locator("body").ariaSnapshot()).slice(0,100000)});
@@ -62,7 +70,7 @@ export class WorkspaceBrowser {
         case "fill":await locator().fill(String(input.text??""));break;
         case "type":if(input.selector)await locator().pressSequentially(String(input.text??""));else await page.keyboard.type(String(input.text??""));break;
         case "press":if(input.selector)await locator().press(String(input.key));else await page.keyboard.press(String(input.key));break;
-        case "scroll":await page.mouse.wheel(Number(input.x)||0,Number(input.y)||500);break;
+        case "scroll":await page.mouse.wheel(Number.isFinite(input.x)?Number(input.x):0,Number.isFinite(input.y)?Number(input.y):500);break;
         case "hover":if(input.selector)await locator().hover();else await page.mouse.move(...point(input));break;
         case "select":await locator().selectOption(String(input.value));break;
         case "check":await locator().setChecked(input.checked!==false);break;

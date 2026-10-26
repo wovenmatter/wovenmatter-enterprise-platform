@@ -978,6 +978,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       requestId: string;
       kind?: "message";
     },
+    guard?:()=>Promise<void>,
   ): Promise<
     Awaited<ReturnType<ConversationService["inputReceipt"]>> & {
       run: ReturnType<typeof runView>;
@@ -987,8 +988,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     user: User,
     id: string,
     input: Record<string, unknown>,
+    guard?:()=>Promise<void>,
   ): Promise<Awaited<ReturnType<ConversationService["inputReceipt"]>>>;
-  admit(user: User, id: string, input: Record<string, unknown>) {
+  admit(user: User, id: string, input: Record<string, unknown>,guard?:()=>Promise<void>) {
     return this.serial(id, async () => {
       const c = await this.requireConversation(user, id);
       if (input.tools !== undefined) throw new AppError(400, "invalid_input", "Change tools with the conversation Tools control before sending.");
@@ -1097,6 +1099,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         assistantId = randomUUID(),
         timestamp = now();
       const runId = kind === "comment" ? null : (current?.id ?? randomUUID());
+      await guard?.();
       await this.ctx.db.batch([
         ...(!c.project_id && c.asset_id && runId && !current
           ? [
