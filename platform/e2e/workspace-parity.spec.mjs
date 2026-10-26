@@ -1,8 +1,29 @@
 import { test,expect } from "@playwright/test";
 import {join} from "node:path";
+import {spawn} from "node:child_process";
+import {createServer} from "node:net";
+import {mkdir,stat} from "node:fs/promises";
 // Browser plugin not available. Real local API and synthetic pre-established owner session.
 // No user login, upstream provider, or live preview credentials are used.
-test.use({timezoneId:"America/New_York"});
+// These scenarios own a separate fixture process/database; they never seed or
+// mutate the baseline browser server, so file order and focused runs are safe.
+const primaryPort=Number(process.env.WME_E2E_PORT??4155),isolatedPort=primaryPort<65400?primaryPort+101:primaryPort-101;
+const isolatedOrigin="http://localhost:"+isolatedPort,isolatedOutput=join(process.env.WME_E2E_OUTPUT??"/tmp/wme-e2e-evidence","parity-isolated");
+let ownedFixture;
+test.use({timezoneId:"America/New_York",baseURL:isolatedOrigin,storageState:join(isolatedOutput,"auth.json")});
+test.beforeAll(async()=>{
+  // Refuse to borrow an unrelated listener or its authentication state.
+  const probe=createServer();await new Promise((resolve,reject)=>{probe.once("error",reject);probe.listen(isolatedPort,"127.0.0.1",resolve);});await new Promise(resolve=>probe.close(resolve));
+  await mkdir(isolatedOutput,{recursive:true,mode:0o700});
+  const launchedAt=Date.now();ownedFixture=spawn(process.execPath,["platform/e2e/server.mjs"],{cwd:process.cwd(),env:{...process.env,WME_E2E_FIXTURE:"1",WME_E2E_PORT:String(isolatedPort),WME_E2E_OUTPUT:isolatedOutput},stdio:"ignore"});
+  for(let attempt=0;attempt<150;attempt++){
+    if(ownedFixture.exitCode!==null)throw new Error("The isolated parity fixture could not start.");
+    try{const response=await fetch(isolatedOrigin+"/enterprise/healthz");if(response.ok&&(await stat(join(isolatedOutput,"auth.json"))).mtimeMs>=launchedAt-1000)return;}catch{/* Wait only for our newly launched synthetic fixture. */}
+    await new Promise(resolve=>setTimeout(resolve,100));
+  }
+  throw new Error("The isolated parity fixture did not become ready.");
+});
+test.afterAll(async()=>{if(!ownedFixture||ownedFixture.exitCode!==null)return;const stopped=new Promise(resolve=>ownedFixture.once("close",resolve));ownedFixture.kill("SIGTERM");let timer;try{await Promise.race([stopped,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("Fixture did not stop.")),10000);})]);}finally{clearTimeout(timer);if(ownedFixture.exitCode===null)ownedFixture.kill("SIGKILL");}});
 async function fixture(page,baseURL) {
   const session=await(await page.request.get("/enterprise/api/session")).json(),headers={origin:new URL(baseURL).origin,"x-csrf-token":session.csrfToken};
   const org=(await(await page.request.post("/enterprise/api/organizations",{headers,data:{name:"Workspace parity browser"}})).json());
@@ -16,7 +37,7 @@ async function identity(page,path) {
   await expect(page).toHaveURL(new RegExp(path.replace(/[.*+?^$()|[\]\\]/g,"\\$&")));
   await expect(page).toHaveTitle(/WovenMatter/);await expect(page.locator("main")).not.toHaveText("");await expect(page.locator("vite-error-overlay")).toHaveCount(0);
 }
-async function shot(page,info,name){await page.screenshot({path:join(info.outputDir,name+".png"),fullPage:true});}
+async function shot(page,info,name){await page.screenshot({path:join(info.outputDir,name+".png"),fullPage:true,animations:"disabled"});}
 
 test("settings destinations, persisted inheritance, General and cloud execution work on desktop and mobile",async({page,baseURL},info)=>{
   const f=await fixture(page,baseURL);await page.goto(f.path+"/settings");await identity(page,f.path+"/settings");
@@ -34,7 +55,7 @@ test("settings destinations, persisted inheritance, General and cloud execution 
   await page.goto(f.path+"/settings/background");await expect(page.getByRole("heading",{name:"Managed activity"})).toBeVisible();await expect(page.getByText("No managed activity in this workspace.",{exact:true})).toBeVisible();
   await page.setViewportSize({width:390,height:844});await page.goto(f.path+"/settings");await expect(page.locator("main").getByRole("heading",{name:"Settings",exact:true})).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);await shot(page,info,"settings-mobile");
   await page.goto(f.path+"/settings/pi");await page.getByRole("tab",{name:"Chat settings",exact:true}).click();await expect(page.getByRole("combobox",{name:"Code mode",exact:true})).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);const back=page.getByRole("link",{name:"Back to settings",exact:true}),opener=page.getByRole("button",{name:"Show navigation sidebar",exact:true});
-  if(await opener.isVisible()){const a=await back.boundingBox(),b=await opener.boundingBox();expect(a.y>=b.y+b.height||b.y>=a.y+a.height||a.x>=b.x+b.width||b.x>=a.x+a.width).toBe(true);await opener.click();await page.getByRole("button",{name:"Hide navigation sidebar",exact:true}).click();await expect(back).toBeVisible();}
+  if(await opener.isVisible()){const a=await back.boundingBox(),b=await opener.boundingBox();expect(a.y>=b.y+b.height||b.y>=a.y+a.height||a.x>=b.x+b.width||b.x>=a.x+a.width).toBe(true);await opener.click();await page.getByRole("button",{name:"Hide navigation sidebar",exact:true}).click();await expect(page.locator(".app-shell.sidebar-shell")).toHaveAttribute("data-drawer-open","false");await expect(page.getByRole("dialog",{name:"Navigation",exact:true})).toHaveCount(0);await expect(back).toBeVisible();}
   await shot(page,info,"pi-settings-mobile");expect(f.errors).toEqual([]);
 });
 

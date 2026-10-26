@@ -138,7 +138,7 @@ test('attachment-only unknown delivery preserves references through folder chang
 for (const width of [855, 1280]) test(`composer visual review at ${width}px`, async ({ page, baseURL }, info) => {
   const state = await setup(page, baseURL); await page.setViewportSize({ width, height: 769 });
   await page.goto(root); await choose(page, folder.name); await page.getByLabel('Message your agent').fill('Review the workspace material');
-  await expect(page.getByRole('button', { name: 'Dictation coming later', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Start dictation', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath(`composer-${width}.png`) });
   await page.getByRole('button', { name: 'Add files or photos', exact: true }).click();
   await expect(page.getByRole('menu')).toBeVisible();
