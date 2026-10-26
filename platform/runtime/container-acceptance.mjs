@@ -508,6 +508,9 @@ try {
   const browserBefore=await workspaceStatus();
   const browserOpen=await runtime.browser(projectId,browserThread,{action:"open",url:"about:blank",requestID:randomUUID()});
   const browserTab=browserOpen.structuredContent.id;
+  await runtime.browser(projectId,browserThread,{action:"navigate",tabId:browserTab,url:"http://native-proxy-fixture.invalid/pi",requestID:randomUUID()});
+  const browserProxy=await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()});
+  assert.match(browserProxy.structuredContent.snapshot,/synthetic-proxy-ok/,"Browser traffic must traverse production loopback egress relay");
   await runtime.browser(projectId,browserThread,{action:"evaluate",tabId:browserTab,code:"document.body.innerHTML='<h1>Actual retained workspace browser</h1><button>0</button>';document.querySelector('button').onclick=()=>{const b=document.querySelector('button');b.textContent=String(Number(b.textContent)+1)}",requestID:randomUUID()});
   const browserClick={action:"click",tabId:browserTab,selector:"button",requestID:randomUUID()};
   await runtime.browser(projectId,browserThread,browserClick);await runtime.browser(projectId,browserThread,browserClick);
