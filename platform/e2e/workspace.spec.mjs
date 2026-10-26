@@ -2855,7 +2855,7 @@ test("appearance belongs to the user's Personal settings across workspaces witho
     const teammateBefore = (await (await teammate.request.get(`${f.origin}/enterprise/api/me`)).json()).user;
     const settingsPath = `/enterprise/organizations/${f.orgId}/workspaces/${f.projectId}/settings`;
     await page.goto(settingsPath);
-    await expect(page.getByLabel('Default agent', { exact: true })).toBeVisible();
+    await expect(page.locator('main').getByRole('link', { name: /^Workspace/ })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('Theme', { exact: true })).toHaveCount(0);
     await page.locator('.platform-header').getByRole('link', { name: 'Settings', exact: true }).click();

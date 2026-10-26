@@ -23,6 +23,15 @@ export async function registerProjects(app: FastifyInstance, ctx: AppContext) {
     await ctx.requireOrgAdmin(user, p.orgId);
     return p;
   }
+  app.get("/enterprise/api/projects/:projectId/execution",async request=>{
+    const user=await ctx.requireUser(request),id=(request.params as {projectId:string}).projectId;
+    const project=await ctx.requireProject(user,id);
+    const [runs,tasks]=await Promise.all([
+      ctx.db.all("SELECT r.id,r.conversation_id AS conversationId,c.title,r.harness,r.status,r.created_at AS createdAt,r.started_at AS startedAt FROM conversation_runs r JOIN conversations c ON c.id=r.conversation_id WHERE r.project_id=? AND c.deleted_at IS NULL AND r.status IN ('queued','dispatching','running','cancelling') ORDER BY r.created_at DESC LIMIT 200",[id]),
+      ctx.db.all("SELECT c.id,c.title,s.next_at AS nextAt,s.last_status AS lastStatus,s.last_error AS lastError FROM workspace_content c LEFT JOIN workspace_task_state s ON s.content_id=c.id WHERE c.project_id=? AND c.kind='task' AND c.deleted_at IS NULL ORDER BY s.next_at LIMIT 200",[id]),
+    ]);
+    return {observedAt:new Date().toISOString(),status:project.status,architecture:"persistent-container",storage:"persistent-volume",runs,tasks};
+  });
   function rejectProjectAccess(body: Record<string, unknown>) {
     if (body.access !== undefined)
       throw new AppError(

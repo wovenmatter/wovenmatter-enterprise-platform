@@ -27,7 +27,9 @@ async function header(page, { owner = false, anonymous = false } = {}) {
   const top = page.locator('.platform-header');
   await expect(top).toHaveCount(1); await expect(top).toBeVisible();
   await expect(top.getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true })).toBeVisible();
-  await expect(top.getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true })).toHaveAttribute('href', await top.getByRole('link', { name: 'Organization', exact: true }).getAttribute('href'));
+  // The sole-organization destination resolves asynchronously. Compare the two
+  // current links together instead of capturing a pre-fetch href as a constant.
+  await expect.poll(async () => (await top.getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true }).getAttribute('href')) === (await top.getByRole('link', { name: 'Organization', exact: true }).getAttribute('href'))).toBe(true);
   await expect(page.locator('a a')).toHaveCount(0);
   await expect(top.locator('nav > a, nav > button')).toHaveText([
     ...(owner ? ['Admin'] : []), 'Organization', 'Settings', anonymous ? 'Sign in' : 'Sign out',

@@ -1,3 +1,5 @@
+import { workspaceTools } from "../workspace-tools.js";
+import { callWorkspaceTool } from "../workspace-mcp.js";
 import { createHash } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -30,6 +32,7 @@ type EngineRecord = {
 };
 
 export type EnterprisePiDependencies = {
+  workspaceToolCall?:typeof callWorkspaceTool;
   sessionDirectory?: string;
   cwd?: string;
   sdkCatalogDirectory?: string;
@@ -481,6 +484,10 @@ async function createEngine(
       ? [route.enterpriseProvider]
       : [],
     enterpriseInstructions: enterpriseInstructions(request),
+    enterpriseTools: request.assetId ? [] : workspaceTools.map(tool => ({
+      name:tool.name,label:tool.name,description:tool.description,parameters:tool.inputSchema,replay:tool.readOnly ? "safe" : "unsafe",
+      execute:async (_id: string,args: unknown,signal: AbortSignal)=>({...await (dependencies.workspaceToolCall??callWorkspaceTool)(tool.name,args,signal),details:{}}),
+    })),
     claude,
   });
   await engine.initialize();
@@ -627,6 +634,8 @@ export async function runEnterprisePi(
     );
     await native.settle();
     await steering?.settle();
+    const usage=result.usage as {inputTokens?:number;outputTokens?:number;cachedReadTokens?:number;cachedWriteTokens?:number}|undefined;
+    if(usage)await emit({type:"native_update",update:{sessionUpdate:"woven_usage",usage:{input:usage.inputTokens,output:usage.outputTokens,cacheRead:usage.cachedReadTokens,cacheWrite:usage.cachedWriteTokens,totalTokens:[usage.inputTokens,usage.outputTokens,usage.cachedReadTokens??0,usage.cachedWriteTokens??0].every(value=>Number.isSafeInteger(value)&&Number(value)>=0)?Number(usage.inputTokens)+Number(usage.outputTokens)+Number(usage.cachedReadTokens??0)+Number(usage.cachedWriteTokens??0):undefined}}});
     const stopReason = result.stopReason;
     if (stopReason === "cancelled") await emit({ type: "cancelled" });
     else await emit({ type: "completed" });

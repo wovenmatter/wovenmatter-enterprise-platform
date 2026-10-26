@@ -1,3 +1,5 @@
+import { personalPreferences, migratePreferences } from "../preferences.js";
+import { organizationAgentSettings, validateAgentDefaults, harness as settingsHarness, type AgentSettings } from "./agent-settings.js";
 import { migrateConversationAttachments, attachmentReferences, storedAttachments, resolveAttachments, attachmentContext, runtimeAttachments } from "./attachments.js";
 import { migrateConversationTools, serializeConversationTools, toolPrompt } from "./conversation-tools.js";
 import { initializeFiles } from "../files/storage.js";
@@ -240,6 +242,7 @@ CREATE TRIGGER conversation_fixed_mode BEFORE UPDATE OF mode ON conversations WH
       "ALTER TABLE conversations ADD COLUMN pi_options TEXT NOT NULL DEFAULT '{}';",
     );
     await migrateNativeHarnesses(this.ctx);
+    await migratePreferences(this.ctx);
     await migrateConversationAttachments(this.ctx);
     await migrateConversationTools(this.ctx);
   }
@@ -430,7 +433,15 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     const defaults = await this.agentSettings(user, projectId);
     const selected = fixedHarness(input.harness ?? defaults.defaultHarness);
     const configured = defaults.agents[selected] ?? {};
-    input = {...input, harness: selected, ...(input.model === undefined && configured.model ? {model: configured.model} : {}),
+    let inheritedModel=configured.model;
+    if (input.model===undefined && inheritedModel && selected==="pi" && configured.fallbackModels?.length) {
+      let admitted=false;
+      for (const candidate of [inheritedModel,...configured.fallbackModels]) {
+        try {await this.dependencies.inference.validateSelection(project.orgId,candidate,selected);inheritedModel=candidate;admitted=true;break;}catch(error){if(!(error instanceof AppError) || ![400,403,404,409].includes(error.statusCode))throw error;}
+      }
+      if(!admitted)throw new AppError(409,"model_unavailable","No configured model is currently available. Choose an available model.");
+    }
+    input = {...input, harness: selected, ...(input.model === undefined && inheritedModel ? {model: inheritedModel} : {}),
       ...(input.pi === undefined && selected === "pi" ? {pi: Object.fromEntries(Object.entries(configured).filter(([key]) => ["thinking", "codeMode", "subagentConcurrency"].includes(key)))} : {}),
       ...(input.native === undefined && selected !== "pi" ? {native: {...(configured.thinking ? {thinking: configured.thinking} : {}), ...(configured.permission ? {permission: configured.permission} : {})}} : {})};
     const mode = selectedMode(input.mode);
@@ -463,7 +474,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         harness,
         connectionId,
       );
-    const toolSettings = serializeConversationTools(input.tools);
+    const toolSettings = serializeConversationTools(input.tools ?? configured.tools ?? (await personalPreferences(this.ctx,user.id)).tools);
     const id = randomUUID(),
       timestamp = now();
     await this.ctx.db.batch([
@@ -995,6 +1006,9 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
           "Choose Message or Comment.",
         );
       const kind = input.kind === "comment" ? "comment" : "message";
+      const titlePreferences=await personalPreferences(this.ctx,user.id);
+      const automaticTitle=kind==="message" && c.title==="New chat" && titlePreferences.automaticTitles ? content.replace(/\\s+/g," ").trim().slice(0,70) : "";
+
       if (kind === "comment" && references.length) throw new AppError(400, "invalid_attachment", "Send attachments as a Message so the agent receives their native content.");
       const existing = await this.ctx.db.get<any>(
         "SELECT i.*,m.content,m.author_id,m.kind,m.attachments FROM conversation_inputs i JOIN conversation_messages m ON m.id=i.message_id WHERE i.conversation_id=? AND i.request_id=?",
@@ -1170,6 +1184,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             requestId,
           },
         ),
+        ...(automaticTitle ? [{sql:"UPDATE conversations SET title=? WHERE id=? AND title='New chat' AND (SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=? AND role='user')=1",params:[automaticTitle,id,id]}] : []),
       ]);
       setImmediate(() => {
         this.kick(id);
@@ -1306,29 +1321,62 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     }
     return {harness: c.harness, runId: run?.id ?? null, configured: nativeOptions(JSON.parse(c.native_options ?? "{}")), settings: view, interactions: [...pending.values()]};
   }
-  async agentSettings(user: User, projectId: string): Promise<{defaultHarness: Harness; agents: Partial<Record<Harness, {model?: string; thinking?: string; permission?: string; codeMode?: "on" | "only" | "off"; subagentConcurrency?: number}>>}> {
-    await this.ctx.requireProject(user, projectId);
-    const row = await this.ctx.db.get<{settings: string}>("SELECT settings FROM workspace_agent_settings WHERE project_id=?", [projectId]);
-    return row ? JSON.parse(row.settings) : {defaultHarness: "pi", agents: {}};
+  async agentSettings(user: User, projectId: string) {
+    const project = await this.ctx.requireProject(user, projectId);
+    const [shared,row] = await Promise.all([
+      organizationAgentSettings(this.ctx,user,project.orgId),
+      this.ctx.db.get<{settings:string}>("SELECT settings FROM workspace_agent_settings WHERE project_id=?",[projectId]),
+    ]);
+    const overrides = JSON.parse(row?.settings ?? "{}") as Partial<AgentSettings>;
+    return {defaultHarness:overrides.defaultHarness ?? shared.defaultHarness,agents:{...shared.agents,...overrides.agents},
+      overrides,shared,personalTools:(await personalPreferences(this.ctx,user.id)).tools,revision:row?.settings ?? null};
   }
   async updateAgentSettings(user: User, projectId: string, input: Record<string, unknown>) {
-    const project = await this.ctx.requireProject(user, projectId);
-    await this.ctx.requireOrgAdmin(user, project.orgId);
-    if (Object.keys(input).some(key => !["defaultHarness", "agents"].includes(key))) throw new AppError(400, "invalid_native_settings", "Unknown agent setting.");
-    const previous = await this.agentSettings(user, projectId);
-    const defaultHarness = input.defaultHarness === undefined ? previous.defaultHarness : fixedHarness(input.defaultHarness);
-    const agents = input.agents === undefined ? previous.agents : input.agents;
-    if (!agents || typeof agents !== "object" || Array.isArray(agents)) throw new AppError(400, "invalid_native_settings", "Provide native agent settings.");
-    for (const [id, value] of Object.entries(agents)) {
-      const harness = fixedHarness(id);
-      if (!value || typeof value !== "object" || Array.isArray(value)) throw new AppError(400, "invalid_native_settings", "Provide native agent settings.");
-      const {model, ...native} = value;
-      if (harness === "pi") piOptions(native); else nativeOptions(native);
-      if (model) await this.dependencies.inference.validateSelection(project.orgId, field(model, "Model", 240), harness);
+    const project = await this.ctx.requireProject(user,projectId);
+    await this.ctx.requireOrgAdmin(user,project.orgId);
+    if (Object.keys(input).some(key=>!["defaultHarness","agents","harness","settings","revision"].includes(key))) throw new AppError(400,"invalid_native_settings","Unknown agent setting.");
+    const previous = await this.agentSettings(user,projectId);
+    if (input.revision !== undefined && input.revision !== previous.revision) throw new AppError(409,"settings_changed","Settings changed. Refresh before saving.");
+    const next = {...previous.overrides,agents:{...previous.overrides.agents}};
+    if (input.defaultHarness !== undefined) {
+      if (input.defaultHarness === null) delete next.defaultHarness;
+      else next.defaultHarness = settingsHarness(input.defaultHarness);
     }
-    await this.ctx.db.run("INSERT INTO workspace_agent_settings(project_id,settings,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET settings=excluded.settings,updated_at=excluded.updated_at,updated_by=excluded.updated_by", [projectId, JSON.stringify({defaultHarness, agents}), now(), user.id]);
-    await this.ctx.audit(user, project.orgId, "workspace.agent_settings.updated", projectId, {});
-    return this.agentSettings(user, projectId);
+    if (input.harness !== undefined) {
+      const id = settingsHarness(input.harness);
+      if (input.settings === null) delete next.agents[id];
+      else next.agents[id] = validateAgentDefaults(id,input.settings);
+    } else if (input.agents !== undefined) {
+      if (!input.agents || typeof input.agents!=="object" || Array.isArray(input.agents)) throw new AppError(400,"invalid_native_settings","Provide agent defaults.");
+      next.agents = Object.fromEntries(Object.entries(input.agents).map(([id,value])=>[settingsHarness(id),validateAgentDefaults(settingsHarness(id),value)]));
+    }
+    await this.validateAgentModels(project.orgId,next as AgentSettings);
+    const changed = await this.ctx.db.run("INSERT INTO workspace_agent_settings(project_id,settings,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET settings=excluded.settings,updated_at=excluded.updated_at,updated_by=excluded.updated_by WHERE workspace_agent_settings.settings=?", [projectId,JSON.stringify(next),now(),user.id,previous.revision]);
+    if (!changed.changes) throw new AppError(409,"settings_changed","Settings changed. Refresh before saving.");
+    await this.ctx.audit(user,project.orgId,"workspace.agent_settings.updated",projectId,{});
+    return this.agentSettings(user,projectId);
+  }
+  private async validateAgentModels(orgId: string, settings: AgentSettings) {
+    for (const [id,value] of Object.entries(settings.agents)) {
+      for (const model of new Set([value.model,...value.models??[],...value.fallbackModels??[]].filter(Boolean))) await this.dependencies.inference.validateSelection(orgId,model!,settingsHarness(id));
+      if (id==="pi" && value.model) await this.validateThinking(orgId,value.model,value);
+    }
+  }
+  async organizationAgentSettings(user: User,orgId: string) { return organizationAgentSettings(this.ctx,user,orgId); }
+  async updateOrganizationAgentSettings(user: User,orgId: string,input: Record<string,unknown>) {
+    await this.ctx.requireOrgAdmin(user,orgId);
+    if (Object.keys(input).some(key=>!["harness","settings","defaultHarness","revision"].includes(key))) throw new AppError(400,"invalid_native_settings","Unknown agent setting.");
+    const previous = await organizationAgentSettings(this.ctx,user,orgId);
+    if (input.revision !== previous.revision) throw new AppError(409,"settings_changed","Settings changed. Refresh before saving.");
+    const next: AgentSettings = {defaultHarness:input.defaultHarness===undefined ? previous.defaultHarness : settingsHarness(input.defaultHarness),agents:{...previous.agents}};
+    if (input.harness !== undefined) {
+      const id = settingsHarness(input.harness);
+      if (input.settings === null) delete next.agents[id]; else next.agents[id]=validateAgentDefaults(id,input.settings);
+    }
+    await this.validateAgentModels(orgId,next);
+    const changed = await this.ctx.db.run("INSERT INTO organization_agent_settings(org_id,settings,revision,updated_by,updated_at) VALUES(?,?,1,?,?) ON CONFLICT(org_id) DO UPDATE SET settings=excluded.settings,revision=revision+1,updated_by=excluded.updated_by,updated_at=excluded.updated_at WHERE organization_agent_settings.revision=?", [orgId,JSON.stringify(next),user.id,now(),previous.revision]);
+    if (!changed.changes) throw new AppError(409,"settings_changed","Settings changed. Refresh before saving.");
+    return organizationAgentSettings(this.ctx,user,orgId);
   }
   async nativeRespond(user: User, id: string, input: Record<string, unknown>) {
     const admitted = await this.serial(id, async () => {
@@ -2088,8 +2136,11 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     switch (event.type) {
       case "native_update": {
         if (event.update.sessionUpdate === "woven_usage") {
-          const totalTokens = (event.update.usage as {totalTokens?: unknown} | undefined)?.totalTokens;
-          await commit(Number.isSafeInteger(totalTokens) && Number(totalTokens) >= 0 ? [eventInsert(run.conversation_id, run.id, "native.usage", {totalTokens})] : []);
+          const raw = event.update.usage as Record<string,unknown> | undefined;
+          const usage: Record<string,unknown> = Object.fromEntries(["totalTokens","input","output","cacheRead","cacheWrite"].filter(key=>Number.isSafeInteger(raw?.[key])&&Number(raw?.[key])>=0).map(key=>[key,raw![key]]));
+          const cost = (raw?.cost as {total?:unknown}|undefined)?.total;
+          if (typeof cost==="number" && Number.isFinite(cost) && cost>=0) usage.cost=cost;
+          await commit(Object.keys(usage).length ? [eventInsert(run.conversation_id,run.id,"native.usage",usage)] : []);
           break;
         }
         if (["woven_native_settings", "woven_interaction", "woven_interaction_resolved"].includes(String(event.update.sessionUpdate))) {

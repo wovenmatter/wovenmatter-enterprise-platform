@@ -236,6 +236,7 @@ export function AsyncForm({
   onCancel,
   className = "",
   danger = false,
+  disabled = false,
 }: {
   onSubmit: (data: FormData) => Promise<void>;
   children: ReactNode;
@@ -243,12 +244,13 @@ export function AsyncForm({
   onCancel?: () => void;
   className?: string;
   danger?: boolean;
+  disabled?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || disabled) return;
     const data = new FormData(e.currentTarget);
     setBusy(true);
     setError("");
@@ -262,7 +264,7 @@ export function AsyncForm({
   }
   return (
     <form className={`form ${className}`} onSubmit={submit}>
-      <fieldset disabled={busy}>{children}</fieldset>
+      <fieldset disabled={busy||disabled}>{children}</fieldset>
       <ErrorNotice message={error} />
       <div className="form-actions">
         {onCancel ? (
@@ -272,7 +274,7 @@ export function AsyncForm({
         ) : null}
         <button
           className={danger ? "destructive" : "primary"}
-          disabled={busy}
+          disabled={busy||disabled}
           type="submit"
         >
           {busy ? (

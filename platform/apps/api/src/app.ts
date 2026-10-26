@@ -12,6 +12,7 @@ import {
   type Database,
 } from "./db/index.js";
 import { createContext, AppError, type AppConfig } from "./context.js";
+import { registerPreferences } from "./preferences.js";
 import { registerAuth } from "./auth/index.js";
 import { registerOrganizations } from "./organizations/index.js";
 import { projectRuntimeSpec } from "./projects/runtime.js";
@@ -239,6 +240,7 @@ export async function buildApp(
   });
   await inference.initialize();
   await registerAuth(app, ctx);
+  await registerPreferences(app, ctx);
   await registerOrganizations(app, ctx);
   await registerProjects(app, ctx);
   await registerJobs(app, ctx);

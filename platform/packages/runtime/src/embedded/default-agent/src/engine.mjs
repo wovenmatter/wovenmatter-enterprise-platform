@@ -12,7 +12,8 @@ import { modelOption } from './model-presentation.mjs';
 import { SessionCLIContext } from './cli-context.mjs';
 
 export class DefaultAgentEngine {
-  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, enterpriseInstructions = '', enterpriseProviders = [] }) {
+  constructor({ cwd, directory, config = {}, credentials = {}, credentialAccounts = {}, vault, requestCredentials, claude, enterpriseInstructions = '', enterpriseProviders = [], enterpriseTools }) {
+    this.enterpriseTools = enterpriseTools;
     this.enterpriseProviders = Array.isArray(enterpriseProviders) ? enterpriseProviders : [];
     this.enterpriseProviderIds = new Set(this.enterpriseProviders.map(provider => provider?.id).filter(id => typeof id === 'string'));
     // These IDs come only from trusted runtime dependencies, never settings payloads.

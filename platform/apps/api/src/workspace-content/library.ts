@@ -57,12 +57,17 @@ export async function workspaceLibrary(ctx: AppContext, user: User, projectId: s
   return { items: items.sort((a, b) => String(b.sentAt).localeCompare(String(a.sentAt))).slice(0, 1000) };
 }
 
-export async function workspaceUsage(ctx: AppContext, user: User, projectId: string) {
+export async function workspaceUsage(ctx: AppContext, user: User, projectId: string, filters: Record<string,unknown> = {}) {
   await ctx.requireProject(user, projectId);
-  const rows = await ctx.db.all<any>(`SELECT r.harness,r.model,COUNT(*) runs,SUM(r.status='completed') completed,SUM(r.status IN ('failed','interrupted')) failed,
-    SUM(json_extract(e.data,'$.totalTokens')) totalTokens,COUNT(e.id) measuredRuns
-    FROM conversation_runs r LEFT JOIN conversation_events e ON e.id=(SELECT MAX(last.id) FROM conversation_events last WHERE last.run_id=r.id AND last.type='native.usage')
-    WHERE r.project_id=? GROUP BY r.harness,r.model ORDER BY COUNT(*) DESC`, [projectId]);
-  const items = rows.map(r => ({ ...r, inputTokens: null, outputTokens: null, cost: null }));
-  return { items, totals: items.reduce((a, b) => ({ runs: a.runs + b.runs, completed: a.completed + b.completed, failed: a.failed + b.failed }), { runs: 0, completed: 0, failed: 0 }) };
+  const where=["r.project_id=?"],parameters: string[]=[projectId];
+  for (const [key,column] of [["since","r.created_at>="],["until","r.created_at<="],["harness","r.harness="],["model","r.model="]]) {
+    const value=filters[key!];
+    if (typeof value==="string" && value && value.length<=240) {where.push(column+"?");parameters.push(value);}
+  }
+  const rows = await ctx.db.all<any>("SELECT r.harness,r.model,COUNT(*) runs,SUM(r.status='completed') completed,SUM(r.status IN ('failed','interrupted')) failed,"+
+    "SUM(u.totalTokens) totalTokens,SUM(u.inputTokens) inputTokens,SUM(u.outputTokens) outputTokens,SUM(u.cost) cost,SUM(COALESCE(u.measured,0)>0) measuredRuns "+
+    "FROM conversation_runs r LEFT JOIN (SELECT run_id,SUM(json_extract(data,'$.totalTokens')) totalTokens,SUM(json_extract(data,'$.input')) inputTokens,"+
+    "SUM(json_extract(data,'$.output')) outputTokens,SUM(json_extract(data,'$.cost')) cost,COUNT(*) measured "+
+    "FROM conversation_events WHERE type='native.usage' GROUP BY run_id) u ON u.run_id=r.id WHERE "+where.join(" AND ")+" GROUP BY r.harness,r.model ORDER BY COUNT(*) DESC",parameters);
+  return {items:rows,totals:rows.reduce((a,b)=>({runs:a.runs+b.runs,completed:a.completed+b.completed,failed:a.failed+b.failed}),{runs:0,completed:0,failed:0})};
 }

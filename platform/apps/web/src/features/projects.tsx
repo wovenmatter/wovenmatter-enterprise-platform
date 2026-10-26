@@ -264,7 +264,7 @@ export function ProjectPage() {
   const p = project.data;
   return (
     <section className="project-page">
-      {/\/(files|members|settings)$/.test(location.pathname) ? (
+      {/\/(files|members|settings(?:\/.*)?)$/.test(location.pathname) ? (
         <header className="project-pane-header">
           <h1>{p.name}</h1>
         </header>
@@ -310,7 +310,7 @@ export function ProjectPage() {
           <Route path="usage" element={<UsagePage project={p} />} />
           <Route path="connections" element={isAdmin ? <ConnectionsPage projectId={p.id} /> : <ErrorNotice message="Organization administrator access required." />} />
           <Route
-            path="settings"
+            path="settings/*"
             element={<WorkspaceSettings project={p}>{isAdmin ? <ProjectSettings project={p} refresh={project.reload} onDelete={() => setDeleting(true)} /> : null}</WorkspaceSettings>}
           />
         </Routes>

@@ -1,3 +1,4 @@
+import { ConversationHTML } from "./ConversationHTML";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Check,
@@ -443,7 +444,8 @@ export const ConversationRunWork = memo(function ConversationRunWork({
   const final = parts.find(
     (part) => part.kind === "text" && part.item.kind === "final",
   );
-  const work = parts.filter((part) => part !== final);
+  const visuals=parts.filter(part=>part.kind==="activity"&&part.item.kind==="html");
+  const work = parts.filter((part) => part !== final && !visuals.includes(part));
   const duration =
     startedAt && completedAt
       ? Math.max(
@@ -454,6 +456,8 @@ export const ConversationRunWork = memo(function ConversationRunWork({
   const render = (part: (typeof parts)[number]) =>
     part.kind === "text" ? (
       <TextActivity key={part.item.key} id={id} item={part.item} />
+    ) : part.kind === "activity" && part.item.kind==="html" ? (
+      <ConversationHTML key={part.item.key} conversationId={id} item={part.item}/>
     ) : part.kind === "activity" ? (
       <ActivityDetails
         key={part.item.key}
@@ -511,6 +515,7 @@ export const ConversationRunWork = memo(function ConversationRunWork({
               />
             ))
         : null}
+      {visuals.map(render)}
       {final ? render(final) : null}
     </div>
   );

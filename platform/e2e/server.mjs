@@ -201,6 +201,15 @@ const runtime = native?.runtime ?? {
       await emit({ type: "completed" });
       return;
     }
+    if(request.prompt.includes("[html-reply]")) {
+      const result=await system.app.inject({method:"POST",url:new URL(request.gateway.baseUrl).pathname+"/workspace/html",headers:{host:new URL(origin).host,authorization:"Bearer "+request.gateway.token},payload:{
+        title:"Interactive synthetic reply",height:240,requestID:request.runId,
+        html:"<style>body{padding:20px}button{padding:12px}</style><h2>Persistent visual reply</h2><button onclick=\"this.textContent='Interaction verified'\">Try interaction</button><a href='https://example.test/visual'>Example reference</a>",
+      }});
+      if(result.statusCode!==200)throw new Error("Synthetic HTML publication failed: "+result.statusCode);
+      await emit({type:"native_update",update:{sessionUpdate:"agent_message_chunk",content:{type:"text",text:"A persistent visual reply is ready."}}});
+      await emit({type:"completed"});return;
+    }
     if (request.assetId) {
       const operation = async (payload) => {
         const r = await system.app.inject({
