@@ -18,6 +18,7 @@ import {
   BarChart3,
   FileText,
   Files,
+  Globe,
   Folder,
   FolderOpen,
   MessageSquare,
@@ -398,6 +399,7 @@ function WorkspaceRail({
           { path: "library", label: "Library", icon: LibraryBig },
           { path: "databases", label: "Databases", icon: Database },
           { path: "files", label: "Workspace Files", icon: Files },
+          { path: "browser", label: "Browser", icon: Globe },
           { path: "usage", label: "Usage", icon: BarChart3 },
           { path: "settings", label: "Settings", icon: Settings },
         ].map(item => <NavLink key={item.path} className="nav-link" to={`${base}/${item.path}`}><Icon icon={item.icon} size={13} /><span>{item.label}</span></NavLink>)}

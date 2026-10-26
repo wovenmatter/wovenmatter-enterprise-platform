@@ -20,12 +20,13 @@ COPY platform/runtime/install-native.mjs /opt/install-native.mjs
 COPY platform/tools/prepare-pi-package.mjs /opt/prepare-pi-package.mjs
 RUN node /opt/prepare-pi-package.mjs /opt/runtime/node_modules \
  && node /opt/install-native.mjs /opt/runtime/node_modules
+RUN node /opt/runtime/node_modules/playwright-core/cli.js install chromium
 
 FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe
 RUN test "$(dpkg --print-architecture)" = amd64 \
  && apt-get update \
  && apt-get upgrade -y \
- && apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-venv poppler-utils unzip ripgrep bubblewrap apparmor-utils \
+ && apt-get install -y --no-install-recommends ca-certificates curl git python3 python3-venv poppler-utils unzip ripgrep bubblewrap apparmor-utils libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libdbus-1-3 libatspi2.0-0 libx11-6 libxcomposite1 libxdamage1 libxext6 libxfixes3 libxrandr2 libgbm1 libxkbcommon0 libasound2 libglib2.0-0 fonts-liberation libpango-1.0-0 libcairo2 \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 10001 agent \
  && useradd --uid 10001 --gid 10001 --home-dir /home/agent --shell /bin/bash agent \
@@ -38,6 +39,8 @@ RUN python3 -m venv /opt/document-tools \
  && /opt/document-tools/bin/pip install --no-cache-dir --no-deps -r /opt/document-requirements.txt \
  && /opt/document-tools/bin/pip check
 COPY --from=dependencies /opt/runtime/node_modules ./node_modules
+COPY --from=dependencies /root/.cache/ms-playwright /opt/playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 # The coordinator, supervisor and runner identify the same bundled SDK generation.
 COPY package-lock.json ./package-lock.json
 COPY --from=build /build/platform/dist/packages/runtime/src ./src

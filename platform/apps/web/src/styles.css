@@ -1854,6 +1854,10 @@ html[data-theme="dark"] .modal {
   backdrop-filter: blur(2px);
 }
 .modal-header {
+  position: sticky;
+  top: -24px;
+  z-index: 2;
+  background: var(--surface);
   display: flex;
   align-items: center;
   justify-content: space-between;

@@ -51,6 +51,10 @@ export async function parityFixture(page, { theme = 'green', emptyModels = false
     else if (path === '/hosts') result = list([{ id: 'local', name: 'Synthetic host' }]);
     else if (path.endsWith('/projects')) result = list([project]);
     else if (path === `/projects/${project.id}`) result = project;
+    else if(path.endsWith('/goal')) result={goal:null};
+    else if(path.endsWith('/timers')) result={items:[]};
+    else if(path.endsWith('/mcp-access')) result={endpoint:'https://fixture.invalid/mcp',items:[]};
+    else if(path.endsWith('/executor')) result={configured:false,apps:[],selectedProfiles:[],jobs:[],allowedOrigins:[],defaultProfiles:[]};
     else if (path.endsWith('/agent-settings')) result = { defaultHarness: 'pi', agents: {} };
     else if (path.includes('/workspace-content')) result = list([]);
     else if (path.endsWith('/folders')) result = list([folder]);

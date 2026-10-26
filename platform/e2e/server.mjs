@@ -29,6 +29,7 @@ const native = process.env.WME_E2E_AGENT_IMAGE
   : undefined;
 const webRoot = join(stateDir, "web");
 await cp(resolve("platform/apps/web/dist"), webRoot, { recursive: true });
+let syntheticBrowserImage;
 const runtime = native?.runtime ?? {
   async sdkCatalog() {
     return {
@@ -52,6 +53,21 @@ const runtime = native?.runtime ?? {
         },
       ],
     };
+  },
+  // Explicit synthetic browser transport for rendered controls; actual Chromium
+  // and namespace authority are covered by container-acceptance.mjs.
+  browserTabs:new Map(),
+  async browser(projectId,conversationId,input){
+    let tabs=this.browserTabs.get(conversationId)??[];
+    if(input.action==="tabs")return {structuredContent:{tabs}};
+    if(input.action==="open"){const id=randomUUID();tabs=[...tabs,{id,title:"Synthetic browser surface",url:input.url}];this.browserTabs.set(conversationId,tabs);return {structuredContent:{id}};}
+    if(input.action==="close"){this.browserTabs.set(conversationId,tabs.filter(tab=>tab.id!==input.tabId));return {structuredContent:{closed:true}};}
+    if(input.action==="navigate"){const tab=tabs.find(tab=>tab.id===input.tabId);if(tab)tab.url=input.url;}
+    if(input.action==="snapshot")return {structuredContent:{snapshot:"Synthetic isolated page: no external browser traffic"}};
+    if(input.action==="screenshot"){
+      syntheticBrowserImage??=(async()=>{const{chromium}=await import("playwright-core");const browser=await chromium.launch({headless:true});try{const page=await browser.newPage({viewport:{width:1280,height:800}});await page.setContent('<!doctype html><style>body{font:20px system-ui;background:#f3f7f4;color:#173d28;padding:70px}section{background:white;border:1px solid #b4cbbc;border-radius:20px;padding:48px}small{color:#58745e}button{background:#257448;color:white;padding:14px 24px;border:0;border-radius:8px;font:inherit}</style><section><small>DETERMINISTIC UI FIXTURE</small><h1>Synthetic shared workspace browser</h1><p>The human and agent share this isolated browser surface.</p><button>Example page action</button><p>No external website, account or provider is used.</p></section>');return (await page.screenshot({type:"jpeg",quality:70})).toString("base64");}finally{await browser.close();}})();
+      return {content:[{type:"image",mimeType:"image/jpeg",data:await syntheticBrowserImage}],structuredContent:{id:input.tabId,frameId:"synthetic-frame",width:1280,height:800}};}
+    return {structuredContent:{id:input.tabId}};
   },
   async ensureProject() {},
   async releaseAsset() {},

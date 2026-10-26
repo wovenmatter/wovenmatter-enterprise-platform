@@ -127,6 +127,9 @@ export function sandboxArguments(
     "--setenv",
     "LANG",
     "C.UTF-8",
+    "--setenv",
+    "PLAYWRIGHT_BROWSERS_PATH",
+    "/opt/playwright",
   ];
   // Runtime-owned paths are overlaid LAST. A malicious share target symlink may
   // never replace the launcher, its libraries, the current session, or its broker.

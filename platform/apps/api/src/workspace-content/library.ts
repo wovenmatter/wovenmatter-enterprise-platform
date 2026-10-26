@@ -69,5 +69,10 @@ export async function workspaceUsage(ctx: AppContext, user: User, projectId: str
     "FROM conversation_runs r LEFT JOIN (SELECT run_id,SUM(json_extract(data,'$.totalTokens')) totalTokens,SUM(json_extract(data,'$.input')) inputTokens,"+
     "SUM(json_extract(data,'$.output')) outputTokens,SUM(json_extract(data,'$.cost')) cost,COUNT(*) measured "+
     "FROM conversation_events WHERE type='native.usage' GROUP BY run_id) u ON u.run_id=r.id WHERE "+where.join(" AND ")+" GROUP BY r.harness,r.model ORDER BY COUNT(*) DESC",parameters);
+  if(!filters.harness||filters.harness==="title_generation"){
+    const titleWhere=["project_id=?"],titleParameters:string[]=[projectId];
+    for(const [key,column]of [["since","created_at>="],["until","created_at<="],["model","model="]]){const value=filters[key!];if(typeof value==="string"&&value&&value.length<=240){titleWhere.push(column+"?");titleParameters.push(value);}}
+    rows.push(...await ctx.db.all<any>("SELECT 'title_generation' harness,model,COUNT(*) runs,SUM(status='completed') completed,SUM(status IN ('unavailable','interrupted')) failed,SUM(json_extract(usage,'$.totalTokens')) totalTokens,SUM(json_extract(usage,'$.input')) inputTokens,SUM(json_extract(usage,'$.output')) outputTokens,NULL cost,SUM(usage IS NOT NULL) measuredRuns FROM conversation_title_jobs WHERE "+titleWhere.join(" AND ")+" GROUP BY model",titleParameters));
+  }
   return {items:rows,totals:rows.reduce((a,b)=>({runs:a.runs+b.runs,completed:a.completed+b.completed,failed:a.failed+b.failed}),{runs:0,completed:0,failed:0})};
 }

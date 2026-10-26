@@ -41,6 +41,8 @@ export interface AppContext {
   runtime?: import("../../../packages/runtime/src/types.js").Runtime;
   config: AppConfig;
   onAccessChanged?: () => Promise<void>;
+  onConversationStopped?:(id:string)=>Promise<void>;
+  onConversationToolsChanged?:(id:string,group:string,enabled:boolean)=>Promise<void>;
   getSessionId(request: FastifyRequest): Promise<string | null>;
   isSessionActive(sessionId: string, userId: string): Promise<boolean>;
   requireUser(request: FastifyRequest): Promise<User>;

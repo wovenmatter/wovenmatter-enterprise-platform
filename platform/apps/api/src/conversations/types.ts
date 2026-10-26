@@ -101,6 +101,8 @@ export interface ConversationDependencies {
     ): Promise<{ fileId: string; path: string; versionId: string }[]>;
   };
   inference: {
+    generateTitle?(input:{orgId:string;model:string;thinking:string;prompt:string}):Promise<{title:string;usage?:{input?:number;output?:number;totalTokens?:number}}>;
+
     resolvePiModel?(
       orgId: string,
       model: string,

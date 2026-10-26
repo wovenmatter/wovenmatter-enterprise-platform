@@ -1,3 +1,4 @@
+import {GoalBar,ConversationAutomation} from "./workspace-automation";
 import { DictationButton } from "./dictation";
 import { ComposerTools, defaultConversationTools, type ConversationTools } from "./composer-tools";
 import { ComposerAttachments, ComposerAttachmentChips, type ComposerAttachment } from "./composer-attachments";
@@ -301,9 +302,10 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
   const tools=toolChoices??configured.tools??defaults?.personalTools??defaultConversationTools;
   const catalog=models.filter(model=>acceptsModel(harness,model.provider));
   const preferred=configured.model||(catalog.some(item=>item.id===defaultModel)?defaultModel!:catalog[0]?.id);
-  const available=harness==="pi"&&configured.models!==undefined?catalog.filter(model=>configured.models!.includes(model.id)||model.id===preferred||configured.fallbackModels?.includes(model.id)):catalog;
+  const availableUnsorted=harness==="pi"&&configured.models!==undefined?catalog.filter(model=>configured.models!.includes(model.id)||model.id===preferred||configured.fallbackModels?.includes(model.id)):catalog;
   // Match ConversationService.create: workspace agent, current personal default,
   // then the first authorized catalog item. Never hide an unavailable explicit/default choice.
+  const available=harness==="pi"&&configured.models?[...availableUnsorted].sort((a,b)=>{const rank=(id:string)=>{const at=configured.models!.indexOf(id);return at<0?100000:at;};return rank(a.id)-rank(b.id);}):availableUnsorted;
   const inheritedModel=configured.model&&!available.some(item=>item.id===configured.model)?configured.fallbackModels?.find(id=>available.some(item=>item.id===id))??configured.model:configured.model;
   const model = modelChoice ?? (inheritedModel || (available.some(item => item.id === defaultModel) ? defaultModel! : available[0]?.id ?? ""));
   const selectedModel = available.find(item => item.id === model);
@@ -1383,6 +1385,7 @@ export function Thread({
           items={activity.items}
           activeRunIds={new Set(active.map((run) => run.id))}
         />
+        {!asset&&!editing?<GoalBar conversationId={id} onManage={()=>setEditing(true)}/>:null}
         <form ref={formRef} className={collapsed ? "composer-collapsed" : undefined}
           onSubmit={(e) => {
             e.preventDefault();
@@ -1528,6 +1531,7 @@ export function Thread({
       </div>
       {editing && detail.data ? (
         <Modal title="Conversation settings" onClose={() => setEditing(false)}>
+          {!asset?<ConversationAutomation conversationId={id}/>:null}
           <ConversationForm
             project={project}
             conversation={detail.data}

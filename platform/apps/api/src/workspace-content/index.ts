@@ -1,3 +1,6 @@
+import {registerExternalWorkspaceMCP} from "./external-mcp.js";
+import {registerWorkspaceExecutor} from "./executor.js";
+import { registerWorkspaceAutomation } from "./automation.js";
 import { personalPreferences } from "../preferences.js";
 import { registerConversationHTML, saveConversationHTML } from "./html.js";
 import { registerSearchAccounts, searchCredential, executeSearch } from "./search.js";
@@ -18,7 +21,10 @@ export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppCon
   await service.initialize();
   await registerSearchAccounts(app,ctx);
   await registerConversationHTML(app,ctx,conversations);
+  const automation=await registerWorkspaceAutomation(app,ctx,conversations,jobs);
+  const executor=await registerWorkspaceExecutor(app,ctx,automation);
   await registerConversationTools(app, ctx);
+  await registerExternalWorkspaceMCP(app,ctx,conversations,service);
   conversations.onMessageAccepted = (user, projectId, messageId) => captureLibraryMessage(ctx, user, projectId, messageId);
   conversations.onNativeLibraryBatch = (user, projectId, messageId, batch) => captureLibraryNativeBatch(ctx, user, projectId, messageId, batch);
   service.onTaskChanged = async (user, id) => {
@@ -49,7 +55,7 @@ export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppCon
   });
   app.post("/enterprise/api/projects/:projectId/workspace-library/:id/retry", async r => retryLibraryFile(ctx, await ctx.requireUser(r), params(r).projectId, params(r).id));
   app.get("/enterprise/api/projects/:projectId/usage", async r => workspaceUsage(ctx, await ctx.requireUser(r), params(r).projectId, r.query as Record<string,unknown>));
-  app.post("/enterprise/api/runtime/inference/:projectId/workspace/:operation", { bodyLimit: 2 * 1024 * 1024, config: { internalInference: true } }, async r => {
+  app.post("/enterprise/api/runtime/inference/:projectId/workspace/:operation", { bodyLimit: 4 * 1024 * 1024, config: { internalInference: true } }, async r => {
     const token = /^Bearer ([^\s]+)$/.exec(r.headers.authorization ?? "")?.[1];
     if (!token) throw new AppError(401, "unauthorized", "A current workspace run is required.");
     const { projectId, operation } = r.params as { projectId: string; operation: string };
@@ -90,6 +96,11 @@ export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppCon
         return service.restore(user, projectId, id, input);
       }
       if (operation === "create") { await access.require(contentToolGroup(input.kind)); await calendarWrite(input.kind); return service.create(user, projectId, input); }
+      if(operation==="sessions"){await access.require("sessions");return automation.sessions(user,initial.conversationId!,input);}
+      if(operation==="goals")return automation.goal(user,initial.conversationId!,input,scope.runId);
+      if(operation==="timers"){await access.require("timers");return automation.timers(user,initial.conversationId!,input);}
+      if(operation==="executor"){await access.require("executor");return executor.tool(user,initial.conversationId!,input);}
+      if(operation==="browser_authorize"){await access.require("browser");return {authorized:true,conversationId:initial.conversationId,projectId};}
       if (operation === "html") return saveConversationHTML(ctx,initial.conversationId!,scope.runId,input);
       if (operation === "search") {
         const settings=await conversations.agentSettings(user,projectId);
@@ -104,5 +115,5 @@ export async function registerWorkspaceContent(app: FastifyInstance, ctx: AppCon
   });
   if (jobs) scheduler.start();
   app.addHook("onClose", () => scheduler.close());
-  return { service, scheduler };
+  return { service, scheduler,automation,executor };
 }

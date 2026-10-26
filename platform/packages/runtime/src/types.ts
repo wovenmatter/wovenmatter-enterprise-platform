@@ -149,6 +149,8 @@ export type RuntimeSDKCatalogDTO = {
   }>;
 };
 export interface Runtime {
+  /** Attach to an existing isolated browser; never starts or replays an agent turn. */
+  browser?(projectId:string,conversationId:string,input:Record<string,unknown>):Promise<unknown>;
   /** Read approved Pi SDK generations for a placed project without starting its container. */
   sdkCatalog?(projectId: string): Promise<RuntimeSDKCatalogDTO>;
   /** Release only idle asset compute, conditional on the current workspace lease. Keep durable state. */

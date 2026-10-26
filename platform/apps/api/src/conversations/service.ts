@@ -1,7 +1,7 @@
 import { personalPreferences, migratePreferences } from "../preferences.js";
 import { organizationAgentSettings, validateAgentDefaults, harness as settingsHarness, type AgentSettings } from "./agent-settings.js";
 import { migrateConversationAttachments, attachmentReferences, storedAttachments, resolveAttachments, attachmentContext, runtimeAttachments } from "./attachments.js";
-import { migrateConversationTools, serializeConversationTools, toolPrompt } from "./conversation-tools.js";
+import { migrateConversationTools, serializeConversationTools, toolPrompt, normalizeConversationTools } from "./conversation-tools.js";
 import { initializeFiles } from "../files/storage.js";
 import {
   workspaceSchema,
@@ -178,6 +178,7 @@ export class ConversationService {
   private timer?: ReturnType<typeof setInterval>;
   private accessChecks = new Set<string>();
   private closing = false;
+  private titleTasks=new Set<Promise<void>>();
   private admissions = new Map<string, Promise<unknown>>();
   private serial<T>(id: string, work: () => Promise<T>): Promise<T> {
     const result = (this.admissions.get(id) ?? Promise.resolve())
@@ -243,6 +244,7 @@ CREATE TRIGGER conversation_fixed_mode BEFORE UPDATE OF mode ON conversations WH
     );
     await migrateNativeHarnesses(this.ctx);
     await migratePreferences(this.ctx);
+    await this.ctx.db.run("UPDATE conversation_title_jobs SET status='interrupted' WHERE status IN ('pending','dispatching')");
     await migrateConversationAttachments(this.ctx);
     await migrateConversationTools(this.ctx);
   }
@@ -297,6 +299,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
     this.closing = true;
     if (this.timer) clearInterval(this.timer);
     await this.scheduling;
+    await Promise.all([...this.titleTasks]);
     if (this.dependencies.runtime.attach) {
       for (const execution of this.running.values())
         execution.controller.abort(); // Detach only.
@@ -513,6 +516,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
   update(user: User, id: string, input: Record<string, unknown>) {
     return this.serial(id, async () => {
       const c = await this.requireConversation(user, id, true);
+      if(input.title!==undefined)await this.ctx.db.run("UPDATE conversation_title_jobs SET status='manual' WHERE conversation_id=?",[id]);
       const title =
           input.title === undefined
             ? c.title
@@ -626,6 +630,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       await this.requireThreadAuthority(user, c);
       if (c.asset_id)
         throw new AppError(400, "invalid_input", "Use the asset controls.");
+      if(input.title!==undefined)await this.ctx.db.run("UPDATE conversation_title_jobs SET status='manual' WHERE conversation_id=?",[id]);
       const title =
         input.title === undefined ? c.title : field(input.title, "Title", 200);
       if (input.pinned !== undefined && typeof input.pinned !== "boolean")
@@ -1007,7 +1012,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         );
       const kind = input.kind === "comment" ? "comment" : "message";
       const titlePreferences=await personalPreferences(this.ctx,user.id);
-      const automaticTitle=kind==="message" && c.title==="New chat" && titlePreferences.automaticTitles ? content.replace(/\\s+/g," ").trim().slice(0,70) : "";
+      const automaticTitle=kind==="message" && c.title==="New chat" && titlePreferences.automaticTitles ? content.replace(/\s+/g," ").trim().slice(0,70) : "";
 
       if (kind === "comment" && references.length) throw new AppError(400, "invalid_attachment", "Send attachments as a Message so the agent receives their native content.");
       const existing = await this.ctx.db.get<any>(
@@ -1184,15 +1189,42 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
             requestId,
           },
         ),
+        ...(automaticTitle && titlePreferences.modelTitles && titlePreferences.titleModel && c.project_id ? [{sql:"INSERT OR IGNORE INTO conversation_title_jobs(conversation_id,user_id,org_id,project_id,model,thinking,prompt,fallback,status,created_at) VALUES(?,?,?,?,?,?,?,?,'pending',?)",params:[id,user.id,c.org_id,c.project_id,titlePreferences.titleModel,titlePreferences.titleThinking,content.slice(0,4096),automaticTitle,new Date().toISOString()]}]:[]),
         ...(automaticTitle ? [{sql:"UPDATE conversations SET title=? WHERE id=? AND title='New chat' AND (SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=? AND role='user')=1",params:[automaticTitle,id,id]}] : []),
       ]);
       setImmediate(() => {
         this.kick(id);
+        if(automaticTitle&&titlePreferences.modelTitles)this.startTitle(id);
         if (current?.status === "running")
           void this.drainSteering(id, current.id).catch(() => {});
       });
       return this.inputReceipt(messageId, false);
     });
+  }
+  private startTitle(id:string){
+    if(this.closing)return;
+    const task=this.generateTitle(id).catch(()=>{});this.titleTasks.add(task);void task.finally(()=>this.titleTasks.delete(task));
+  }
+  private async generateTitle(id:string){
+    const job=await this.ctx.db.get<any>("SELECT * FROM conversation_title_jobs WHERE conversation_id=? AND status='pending'",[id]);
+    if(!job)return;
+    try{
+      const user=await this.user(job.user_id),chat=await this.requireConversation(user,id,true);await this.requireThreadAuthority(user,chat);
+      const preferences=await personalPreferences(this.ctx,user.id);
+      if(!preferences.automaticTitles||!preferences.modelTitles||preferences.titleModel!==job.model||chat.title!==job.fallback||!this.dependencies.inference.generateTitle)throw new Error("Naming unavailable");
+      const active=await this.ctx.db.get<{count:number}>("SELECT COUNT(*) count FROM conversation_runs WHERE org_id=? AND status IN ('queued','dispatching','running','cancelling')",[job.org_id]);
+      const naming=await this.ctx.db.get<{count:number}>("SELECT COUNT(*) count FROM conversation_title_jobs WHERE status='dispatching' AND org_id=?",[job.org_id]);
+      if(this.titleTasks.size>2||(active?.count??0)+(naming?.count??0)>=this.maxConcurrentRunsPerOrganization)throw new Error("Naming capacity unavailable");
+      const claimed=await this.ctx.db.run("UPDATE conversation_title_jobs SET status='dispatching' WHERE conversation_id=? AND status='pending'",[id]);if(!claimed.changes)return;
+      // Claim is durable before sending. No crash, timeout or uncertain result is replayed.
+      const result=await this.dependencies.inference.generateTitle({orgId:job.org_id,model:job.model,thinking:job.thinking,prompt:job.prompt});
+      await this.serial(id,async()=>{
+        const currentUser=await this.user(job.user_id),current=await this.requireConversation(currentUser,id,true);await this.requireThreadAuthority(currentUser,current);
+        const preference=await personalPreferences(this.ctx,currentUser.id);
+        if(!preference.automaticTitles||!preference.modelTitles)throw new Error("Naming was disabled");
+        await this.ctx.db.batch([{sql:"UPDATE conversations SET title=? WHERE id=? AND title=? AND EXISTS(SELECT 1 FROM conversation_title_jobs WHERE conversation_id=? AND status='dispatching')",params:[result.title,id,job.fallback,id]},{sql:"UPDATE conversation_title_jobs SET status=CASE WHEN status='dispatching' THEN 'completed' ELSE status END,usage=? WHERE conversation_id=?",params:[JSON.stringify(result.usage??{}),id]}]);
+      });
+    }catch{await this.ctx.db.run("UPDATE conversation_title_jobs SET status='unavailable' WHERE conversation_id=? AND status IN ('pending','dispatching')",[id]);}
   }
   private async inputReceipt(messageId: string, duplicate: boolean) {
     const m = (await this.ctx.db.get<
@@ -1328,7 +1360,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       this.ctx.db.get<{settings:string}>("SELECT settings FROM workspace_agent_settings WHERE project_id=?",[projectId]),
     ]);
     const overrides = JSON.parse(row?.settings ?? "{}") as Partial<AgentSettings>;
-    return {defaultHarness:overrides.defaultHarness ?? shared.defaultHarness,agents:{...shared.agents,...overrides.agents},
+    return {defaultHarness:overrides.defaultHarness ?? shared.defaultHarness,agents:Object.fromEntries(Object.entries({...shared.agents,...overrides.agents}).map(([id,value])=>[id,{...value,...(value.tools?{tools:normalizeConversationTools(value.tools)}:{})}])),
       overrides,shared,personalTools:(await personalPreferences(this.ctx,user.id)).tools,revision:row?.settings ?? null};
   }
   async updateAgentSettings(user: User, projectId: string, input: Record<string, unknown>) {
@@ -2497,6 +2529,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
         ))
       )
         return { ok: true };
+      await this.ctx.onConversationStopped?.(id);
       await this.retireThread(id, "cancelled");
       return { ok: true };
     }
@@ -2504,6 +2537,7 @@ CREATE TABLE conversation_runtime_stops(conversation_id TEXT PRIMARY KEY REFEREN
       `SELECT * FROM conversation_runs WHERE conversation_id=? AND status IN ('queued','dispatching','running','cancelling') ${runId ? "AND id=?" : ""}`,
       runId ? [id, runId] : [id],
     );
+    if(runs.length||!runId)await this.ctx.onConversationStopped?.(id);
     for (const run of runs) await this.cancelRun(run, "cancelled");
     return {
       ok: true,

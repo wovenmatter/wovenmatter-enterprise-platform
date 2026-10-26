@@ -1,3 +1,4 @@
+import {randomUUID} from "node:crypto";
 import { spawn } from "node:child_process";
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -87,6 +88,7 @@ export async function launchWorkspaceWorker(
     output = Buffer.alloc(0),
     writes = Promise.resolve(),
     pendingBytes = 0;
+  const browserReceipts=new Map<string,{resolve:(value:unknown)=>void;reject:(error:Error)=>void;timer:NodeJS.Timeout}>();
   const receipts = new Map<
     string,
     {
@@ -107,6 +109,7 @@ export async function launchWorkspaceWorker(
       receipt.reject(error);
     }
     receipts.clear();
+    for(const receipt of browserReceipts.values()){clearTimeout(receipt.timer);receipt.reject(error);}browserReceipts.clear();
   };
   child.stderr?.resume();
   child.once("error", () =>
@@ -150,6 +153,9 @@ export async function launchWorkspaceWorker(
       writes = writes
         .then(async () => {
           const value = JSON.parse(line.toString());
+          if(value.type==="browser_receipt"){
+            const receipt=browserReceipts.get(value.id);if(receipt){browserReceipts.delete(value.id);clearTimeout(receipt.timer);if(value.error)receipt.reject(new RuntimeError("browser_interrupted","Browser action outcome is uncertain. Inspect fresh state before repeating input."));else receipt.resolve(value.result);}return;
+          }
           if (!current || value.runId !== current.id) return;
           if (value.type === "turn_settled") {
             const turn = current;
@@ -193,6 +199,10 @@ export async function launchWorkspaceWorker(
   });
   return {
     processId: child.pid,
+    browser(input){
+      if(ended)return Promise.reject(new RuntimeError("browser_unavailable","The browser namespace stopped."));
+      const id=randomUUID();return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{browserReceipts.delete(id);reject(new RuntimeError("browser_interrupted","Browser action outcome is uncertain. Inspect fresh state before repeating input."));},35000);browserReceipts.set(id,{resolve,reject,timer});child.stdin!.write(JSON.stringify({type:"browser",id,input})+"\n");});
+    },
     closed,
     turn(next, emit) {
       if (ended || current)

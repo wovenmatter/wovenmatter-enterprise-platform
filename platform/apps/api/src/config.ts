@@ -57,7 +57,12 @@ export function loadConfig(env = process.env): AppConfig {
     assetIdleSeconds > 86400
   )
     throw new Error("WME_ASSET_IDLE_SECONDS must be 30–86400");
+  const executorOrigins=(env.WME_EXECUTOR_ORIGINS??"").split(",").filter(Boolean).map(value=>{
+    const url=new URL(value);if(url.protocol!=="https:"||!url.hostname.endsWith(".ts.net")||url.port!=="8443"||url.origin!==value||url.username||url.password)throw new Error("Executor origins require exact operator-approved Tailscale HTTPS origins on port 8443.");
+    return url.origin;
+  });
   return {
+    executorOrigins,
     assetIdleMs: assetIdleSeconds * 1000,
     egressEnabled: egressEnabled === "true",
     egressHost: env.WME_EGRESS_HOST ?? env.WME_HOST ?? "127.0.0.1",

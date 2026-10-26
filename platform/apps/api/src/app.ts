@@ -262,6 +262,7 @@ export async function buildApp(
       captureProjectManifest,
     },
     inference: {
+      generateTitle:input=>inference.generateTitle(input),
       issueGateway: (scope) =>
         inference.issueGateway({
           ...scope,

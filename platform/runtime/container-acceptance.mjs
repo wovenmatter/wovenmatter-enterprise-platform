@@ -501,6 +501,24 @@ try {
   const network = JSON.parse(
     await docker("network", "inspect", container.HostConfig.NetworkMode),
   )[0];
+  // Exercise the production namespace/IPC before network-positive-control
+  // checks, which additionally depend on the isolated runner's host firewall.
+  const browserThread="browser-acceptance";
+  await native(await request("pi","write",browserThread));
+  const browserBefore=await workspaceStatus();
+  const browserOpen=await runtime.browser(projectId,browserThread,{action:"open",url:"about:blank",requestID:randomUUID()});
+  const browserTab=browserOpen.structuredContent.id;
+  await runtime.browser(projectId,browserThread,{action:"evaluate",tabId:browserTab,code:"document.body.innerHTML='<h1>Actual retained workspace browser</h1><button>0</button>';document.querySelector('button').onclick=()=>{const b=document.querySelector('button');b.textContent=String(Number(b.textContent)+1)}",requestID:randomUUID()});
+  const browserClick={action:"click",tabId:browserTab,selector:"button",requestID:randomUUID()};
+  await runtime.browser(projectId,browserThread,browserClick);await runtime.browser(projectId,browserThread,browserClick);
+  const browserSnapshot=await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()});
+  assert.match(browserSnapshot.structuredContent.snapshot,/button "1"/);
+  const browserShot=await runtime.browser(projectId,browserThread,{action:"screenshot",tabId:browserTab,requestID:randomUUID()});
+  await writeFile(join(root,"retained-namespace-browser.jpg"),Buffer.from(browserShot.content[0].data,"base64"));
+  assert.deepEqual(await workspaceStatus(),browserBefore,"Browser attachment must not admit or replay a native turn");
+  await runtime.stopSession(projectId,browserThread,1);
+  await assert.rejects(runtime.browser(projectId,browserThread,{action:"tabs"}),{code:"browser_unavailable"});
+  console.log("Actual retained-namespace browser transport, real Chromium input, no native replay and Stop revocation passed.");
   const targets = boundaryTargets(network, gatewayDetail, networkInterfaces());
   const directTargets = [{ kind: "peer", host: targets.peer, port: 4100 }];
   for (const host of targets.hosts) {
@@ -665,6 +683,8 @@ const path='/project/files/pin-source';await mkdir(path);await writeFile(path+'/
   // is not a selector for another native history directory.
   const resume = { ...nativeRequests.get("pi"), runId: randomUUID() };
   await runtime.stopSession(projectId, "pi", 1);
+
+
   assert.equal(
     await native({ ...resume, generation: 1, resumeId: nativeIds.get("pi") }),
     nativeIds.get("pi"),

@@ -3,10 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { AppError, objectBody, type AppContext } from "./context.js";
 import { normalizeConversationTools } from "./conversations/conversation-tools.js";
 
-export type PersonalPreferences = { dictationLanguage: string; automaticTitles:boolean; calendarAccess:"readOnly"|"full"; tools: ReturnType<typeof normalizeConversationTools> };
+export type PersonalPreferences = { dictationLanguage: string; maximumManagedSessions:number;automaticTitles:boolean;modelTitles:boolean;titleModel:string;titleThinking:string; calendarAccess:"readOnly"|"full"; tools: ReturnType<typeof normalizeConversationTools> };
 export async function personalPreferences(ctx: AppContext, userId: string): Promise<PersonalPreferences> {
   const row = await ctx.db.get<{settings: string}>("SELECT settings FROM personal_preferences WHERE user_id=?", [userId]);
-  return { dictationLanguage: "", automaticTitles:true, calendarAccess:"full", tools: normalizeConversationTools(), ...JSON.parse(row?.settings ?? "{}") };
+  const stored=JSON.parse(row?.settings??"{}");
+  return { dictationLanguage: "", maximumManagedSessions:4,automaticTitles:true,modelTitles:false,titleModel:"",titleThinking:"", calendarAccess:"full", ...stored,tools:normalizeConversationTools(stored.tools) };
 }
 export async function migratePreferences(ctx: AppContext) {
   await ctx.db.migrate("desktop-workspace-preferences-v1", `
@@ -15,19 +16,22 @@ CREATE TABLE organization_agent_settings(org_id TEXT PRIMARY KEY REFERENCES orga
 CREATE TABLE dictation_history(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),text TEXT NOT NULL,language TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL);
 CREATE INDEX dictation_history_owner ON dictation_history(user_id,created_at DESC);
 `);
+  await ctx.db.migrate("conversation-model-titles-v1","CREATE TABLE conversation_title_jobs(conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),user_id TEXT NOT NULL REFERENCES users(id),org_id TEXT NOT NULL REFERENCES organizations(id),project_id TEXT NOT NULL REFERENCES projects(id),model TEXT NOT NULL,thinking TEXT NOT NULL,prompt TEXT NOT NULL,fallback TEXT NOT NULL,status TEXT NOT NULL,usage TEXT,created_at TEXT NOT NULL);");
 }
 export async function registerPreferences(app: FastifyInstance,ctx:AppContext) {
   await migratePreferences(ctx);
   app.get("/enterprise/api/me/preferences", async request => personalPreferences(ctx, (await ctx.requireUser(request)).id));
   app.patch("/enterprise/api/me/preferences", async request => {
     const user = await ctx.requireUser(request), input = objectBody(request.body);
-    if (Object.keys(input).some(key => !["dictationLanguage", "tools","automaticTitles","calendarAccess"].includes(key)))
+    if (Object.keys(input).some(key => !["dictationLanguage", "tools","automaticTitles","calendarAccess","maximumManagedSessions","modelTitles","titleModel","titleThinking"].includes(key)))
       throw new AppError(400, "invalid_preferences", "Choose supported preferences.");
     const previous = await personalPreferences(ctx, user.id);
+    if(input.modelTitles!==undefined&&typeof input.modelTitles!=="boolean"||input.titleModel!==undefined&&(typeof input.titleModel!=="string"||input.titleModel.length>240)||input.titleThinking!==undefined&&(typeof input.titleThinking!=="string"||!/^[a-zA-Z0-9_.-]{0,100}$/.test(input.titleThinking)))throw new AppError(400,"invalid_preferences","Choose supported title settings.");
+    if(input.maximumManagedSessions!==undefined&&(!Number.isInteger(input.maximumManagedSessions)||Number(input.maximumManagedSessions)<1||Number(input.maximumManagedSessions)>16))throw new AppError(400,"invalid_preferences","Choose 1–16 managed sessions.");
     if (input.automaticTitles!==undefined && typeof input.automaticTitles!=="boolean" || input.calendarAccess!==undefined && !["readOnly","full"].includes(String(input.calendarAccess))) throw new AppError(400,"invalid_preferences","Choose supported title and calendar settings.");
     if (input.dictationLanguage !== undefined && (typeof input.dictationLanguage !== "string" || !/^[a-zA-Z0-9-]{0,64}$/.test(input.dictationLanguage)))
       throw new AppError(400, "invalid_preferences", "Choose a language tag or Automatic.");
-    const next = { automaticTitles:input.automaticTitles===undefined?previous.automaticTitles:input.automaticTitles,calendarAccess:input.calendarAccess===undefined?previous.calendarAccess:input.calendarAccess,dictationLanguage: input.dictationLanguage === undefined ? previous.dictationLanguage : input.dictationLanguage,
+    const next = {modelTitles:input.modelTitles??previous.modelTitles,titleModel:input.titleModel??previous.titleModel,titleThinking:input.titleThinking??previous.titleThinking, maximumManagedSessions:input.maximumManagedSessions===undefined?previous.maximumManagedSessions:Number(input.maximumManagedSessions),automaticTitles:input.automaticTitles===undefined?previous.automaticTitles:input.automaticTitles,calendarAccess:input.calendarAccess===undefined?previous.calendarAccess:input.calendarAccess,dictationLanguage: input.dictationLanguage === undefined ? previous.dictationLanguage : input.dictationLanguage,
       tools: input.tools === undefined ? previous.tools : normalizeConversationTools(input.tools) };
     await ctx.db.run("INSERT INTO personal_preferences(user_id,settings) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET settings=excluded.settings", [user.id, JSON.stringify(next)]);
     return next;

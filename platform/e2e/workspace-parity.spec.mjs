@@ -80,3 +80,51 @@ test("interactive HTML persists outside work disclosure and replays safely after
   await shot(page,info,"interactive-html");await page.reload();await expect(frame.getByRole("heading",{name:"Persistent visual reply"})).toBeVisible();await expect(frame.getByRole("button",{name:"Try interaction"})).toBeVisible();
   await frame.getByRole("link",{name:"Example reference"}).click();await expect(page.getByRole("dialog",{name:"Open external link?"})).toBeVisible();await page.getByRole("button",{name:"Close dialog",exact:true}).click();expect(f.errors).toEqual([]);
 });
+
+test("goals, timers, Executor grants and the shared browser controls expose actual cloud state",async({page,baseURL},info)=>{
+ const f=await fixture(page,baseURL);
+ const created=await page.request.post("/enterprise/api/projects/"+f.project.id+"/conversations",{headers:f.headers,data:{title:"Automation UI fixture",harness:"pi"}});
+ expect(created.status()).toBe(201);const chat=await created.json();
+ await page.goto(f.path+"?conversation="+chat.id);
+ await page.getByRole("button",{name:"Conversation actions",exact:true}).click();await page.getByRole("menuitem",{name:"Conversation settings",exact:true}).click();
+ const dialog=page.getByRole("dialog",{name:"Conversation settings",exact:true});
+ await expect(dialog.getByRole("heading",{name:"Persistent goal",exact:true})).toBeVisible();
+ await dialog.getByText("Set goal",{exact:true}).click();await dialog.getByLabel("Objective",{exact:true}).fill("Explicit synthetic continuation goal");await dialog.getByLabel("Turn budget",{exact:true}).fill("2");
+ await dialog.getByRole("button",{name:"Start goal",exact:true}).click();await expect(dialog.getByText("Explicit synthetic continuation goal",{exact:true})).toBeVisible();
+ await dialog.getByRole("button",{name:"Pause goal",exact:true}).click();await expect.poll(async()=>(await(await page.request.get("/enterprise/api/conversations/"+chat.id+"/goal")).json()).goal.status).toBe("paused");
+ await dialog.getByText("Add timer",{exact:true}).click();await dialog.getByLabel("Timer instruction",{exact:true}).fill("Synthetic future follow-up");await dialog.getByLabel("Next fire time",{exact:true}).fill("2030-01-01T12:30");await dialog.getByRole("button",{name:"Create timer",exact:true}).click();
+ await expect(dialog.locator(".setting-row").filter({hasText:"Synthetic future follow-up"}).first()).toBeVisible();
+ await dialog.getByRole("button",{name:"Pause",exact:true}).click();await expect.poll(async()=>(await(await page.request.get("/enterprise/api/conversations/"+chat.id+"/timers")).json()).items[0].status).toBe("paused");
+ await expect(dialog.getByText("An organization administrator can configure Executor in General settings.",{exact:true})).toBeVisible();
+ await dialog.evaluate(node=>{node.scrollTop=0;});await expect(dialog.getByRole("button",{name:"Close dialog",exact:true})).toBeVisible();await shot(page,info,"automation-desktop");
+ await page.getByRole("button",{name:"Close dialog",exact:true}).click();await expect(page.getByRole("button",{name:"Manage goal",exact:true})).toBeVisible();
+ await page.goto(f.path+"/browser?conversation="+chat.id);await expect(page.getByRole("heading",{name:"Browser",exact:true})).toBeVisible();
+ await page.getByRole("button",{name:"New tab",exact:true}).click();await expect(page.getByRole("img",{name:"Current workspace browser page",exact:true})).toBeVisible();
+ await page.getByRole("button",{name:"Read page",exact:true}).click();await expect(page.getByText("Synthetic isolated page: no external browser traffic",{exact:true})).toBeVisible();
+ await shot(page,info,"browser-synthetic-desktop");
+ await page.setViewportSize({width:390,height:844});await shot(page,info,"browser-synthetic-mobile");expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+ await page.goto(f.path+"/settings/general");await expect(page.getByRole("heading",{name:"Connected apps · Executor",exact:true})).toBeVisible();await page.getByRole("button",{name:"Configure service",exact:true}).click();await expect(page.getByRole("combobox",{name:"Approved service origin",exact:true})).toBeVisible();await expect(page.getByText("A platform operator must approve a service origin before it can be configured.",{exact:true})).toBeVisible();await shot(page,info,"general-executor-mobile");
+ expect(f.errors).toEqual([]);
+});
+
+test("ordered model defaults, save conflicts and optional title controls retain confirmed state",async({page,baseURL},info)=>{
+ const f=await fixture(page,baseURL);
+ await page.goto(f.path+"/settings/pi");await page.getByRole("tab",{name:"Chat settings",exact:true}).click();await page.getByLabel("Use shared chat settings",{exact:true}).click();await expect(page.getByLabel("Use shared chat settings",{exact:true})).not.toBeChecked();
+ await page.getByRole("checkbox",{name:"Fallback Synthetic test model",exact:true}).check();await page.getByRole("checkbox",{name:"Fallback Mandatory reasoning fixture",exact:true}).check();
+ await page.getByRole("button",{name:"Move fallback mandatory-thinking-fixture up",exact:true}).click();await page.getByRole("button",{name:"Move model mandatory-thinking-fixture up",exact:true}).click();await page.getByRole("button",{name:"Save chat settings",exact:true}).click();
+ await expect(page.getByRole("status")).toContainText("Chat settings saved");const settings=(await(await page.request.get("/enterprise/api/projects/"+f.project.id+"/agent-settings")).json()).agents.pi;
+ expect(settings.fallbackModels).toEqual(["mandatory-thinking-fixture","gpt-test-fixture"]);expect(settings.models[0]).toBe("mandatory-thinking-fixture");
+ await shot(page,info,"pi-model-order-desktop");
+ await page.getByRole("combobox",{name:"Code mode",exact:true}).selectOption("only");
+ await page.route("**/enterprise/api/projects/"+f.project.id+"/agent-settings",async route=>{if(route.request().method()==="PATCH")return route.fulfill({status:409,json:{error:{code:"settings_changed",message:"Settings changed. Refresh before saving."}}});return route.continue();});
+ await page.getByRole("button",{name:"Save chat settings",exact:true}).click();await expect(page.getByRole("alert")).toContainText("Settings changed");await expect(page.getByRole("combobox",{name:"Code mode",exact:true})).toHaveValue("only");
+ await page.unroute("**/enterprise/api/projects/"+f.project.id+"/agent-settings");await page.reload();await page.getByRole("tab",{name:"Chat settings",exact:true}).click();await expect(page.getByRole("combobox",{name:"Code mode",exact:true})).toHaveValue("on");
+ await page.goto(f.path+"/settings/general");await expect(page.getByRole("heading",{name:"Read-only MCP access",exact:true})).toBeVisible();await page.getByRole("checkbox",{name:/Generate titles with an organization model/}).check();await page.getByRole("combobox",{name:"Title model",exact:true}).selectOption("gpt-test-fixture");await page.getByRole("combobox",{name:"Title thinking level",exact:true}).selectOption("low");await page.getByRole("button",{name:"Save title generation",exact:true}).click();
+ await expect.poll(async()=>(await(await page.request.get("/enterprise/api/me/preferences")).json()).modelTitles).toBe(true);
+ await page.reload();await expect(page.getByRole("combobox",{name:"Title model",exact:true})).toHaveValue("gpt-test-fixture");await expect(page.getByRole("combobox",{name:"Title thinking level",exact:true})).toHaveValue("low");
+ await page.getByRole("region",{name:"Conversation titles",exact:true}).screenshot({path:join(info.outputDir,"title-model-controls.png"),animations:"disabled"});await shot(page,info,"general-desktop");
+ await page.getByText("Create read-only grant",{exact:true}).click();await page.getByRole("textbox",{name:"Grant label",exact:true}).fill("Synthetic fixture grant");await page.getByRole("spinbutton",{name:"Expires after hours",exact:true}).fill("1");await page.getByRole("button",{name:"Issue read-only grant",exact:true}).click();await expect(page.getByRole("textbox",{name:"New read-only MCP token",exact:true})).toHaveValue(/^wme_mcp_/);
+ await page.getByRole("region",{name:"Read-only MCP access",exact:true}).screenshot({path:join(info.outputDir,"mcp-grant-controls.png"),animations:"disabled"});
+ await page.getByRole("button",{name:"Revoke Synthetic fixture grant",exact:true}).click();await expect(page.getByRole("textbox",{name:"New read-only MCP token",exact:true})).toHaveCount(0);await expect.poll(async()=>(await(await page.request.get("/enterprise/api/projects/"+f.project.id+"/mcp-access")).json()).items[0].revoked).toBe(1);
+ await page.setViewportSize({width:390,height:844});await shot(page,info,"general-mobile");expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);expect(f.errors.filter(error=>!/Failed to load resource:.*409/.test(error))).toEqual([]);
+});

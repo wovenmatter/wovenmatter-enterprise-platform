@@ -8,12 +8,16 @@ import "./composer-tools.css";
 const groups = [
   { id: "notes", label: "Notes", description: "Notes, artifacts and managed databases" },
   { id: "history", label: "Conversation history", description: "Read conversations in this workspace" },
+  { id: "sessions", label: "Sessions", description: "Coordinate chats with current workspace consent" },
+  { id: "timers", label: "Timers", description: "Scheduled instructions for this chat" },
+  { id: "browser", label: "Browser", description: "Isolated workspace browser" },
+  { id: "executor", label: "Connected apps", description: "Selected organization app profiles only" },
   { id: "usage", label: "Usage data", description: "Read only" },
   { id: "calendar", label: "Calendar", description: "Events and scheduled tasks" },
   { id: "library", label: "Library", description: "Workspace library items" },
 ] as const;
 export type ConversationTools = Record<typeof groups[number]["id"], boolean>;
-export const defaultConversationTools: ConversationTools = { notes: true, history: true, usage: true, calendar: true, library: true };
+export const defaultConversationTools: ConversationTools = { notes: true, history: true, sessions:true,timers:true,browser:true,executor:false,usage: true, calendar: true, library: true };
 
 /** DashboardComposer / WorkspaceToolControls, desktop f885d281. */
 export function ComposerTools({ conversationId, settings = defaultConversationTools, onChange, onSaved, onSaving, disabled = false }: {

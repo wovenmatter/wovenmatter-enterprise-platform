@@ -7,6 +7,10 @@ import { hasConversationAttachment } from "./attachments.js";
 export const conversationToolGroups = [
   { id: "notes", label: "Notes", description: "Workspace notes, artifacts and managed databases" },
   { id: "history", label: "Conversation history", description: "Read conversations in this workspace" },
+  { id: "sessions", label: "Sessions", description: "Coordinate chats in this workspace with explicit access grants" },
+  { id: "timers", label: "Timers", description: "Scheduled instructions for this chat" },
+  { id: "browser", label: "Browser", description: "The isolated browser in this workspace" },
+  { id: "executor", label: "Connected apps", description: "Only selected organization app profiles" },
   { id: "usage", label: "Usage data", description: "Read only" },
   { id: "calendar", label: "Calendar", description: "Workspace events and scheduled tasks" },
   { id: "library", label: "Library", description: "Workspace library items" },
@@ -19,7 +23,7 @@ export function normalizeConversationTools(value: unknown = {}): ConversationToo
   if (!value || typeof value !== "object" || Array.isArray(value)) throw invalid();
   const input = value as Record<string, unknown>;
   if (Object.entries(input).some(([key, enabled]) => !conversationToolGroups.some(group => group.id === key) || typeof enabled !== "boolean")) throw invalid();
-  return Object.fromEntries(conversationToolGroups.map(group => [group.id, input[group.id] ?? true])) as ConversationTools;
+  return Object.fromEntries(conversationToolGroups.map(group => [group.id, input[group.id] ?? (group.id!=="executor")])) as ConversationTools;
 }
 export const serializeConversationTools = (value?: unknown) => JSON.stringify(normalizeConversationTools(value));
 export function readConversationTools(value?: string): ConversationTools {
@@ -29,8 +33,8 @@ export function toolPrompt(value?: string) {
   const settings = readConversationTools(value);
   return "\n\nWorkspace tool settings for this conversation: " + conversationToolGroups.map(group => `${group.label}: ${settings[group.id] ? "enabled" : "disabled"}`).join("; ") + ". " +
     "Use typed Woven MCP tools for authorized workspace operations. wme-workspace remains a compatibility fallback. Notes also controls artifacts and managed databases; Calendar controls events and scheduled tasks. " +
-    'For conversation history, use wme-workspace list with {"kind":"conversation"}, or read with {"kind":"conversation","id":"CONVERSATION_ID","after":0,"limit":50}. ' +
-    'Each result includes bounded message content. When nextOffset is present, read that exact message with {"kind":"conversation","id":"CONVERSATION_ID","messageId":"MESSAGE_ID","offset":NEXT_OFFSET,"characters":16000}; continue until nextOffset is null. ' +
+    'For conversation history, use woven_history_list, or woven_history_read with {"id":"CONVERSATION_ID","after":0,"limit":50}. ' +
+    'Each result includes bounded message content. When nextOffset is present, read that exact message with woven_history_read using {"id":"CONVERSATION_ID","messageId":"MESSAGE_ID","offset":NEXT_OFFSET,"characters":16000}; continue until nextOffset is null. ' +
     "Explicitly attached notes and conversations grant only scoped reads while their groups are disabled. They do not grant edits or broader discovery. " +
     "The broker checks current membership and tool settings on every operation; a later user change may disable a group. These switches do not change workspace filesystem access.";
 }
@@ -81,6 +85,8 @@ export async function registerConversationTools(app: FastifyInstance, ctx: AppCo
         WHERE o.org_id=p.org_id AND o.user_id=u.id AND (o.role='admin' OR EXISTS(
         SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.user_id=u.id)))))`, [JSON.stringify(settings), id, user.id]);
       if (result.changes !== 1) throw new AppError(404, "not_found", "Workspace conversation not found.");
+      if(input.group==="timers" && input.enabled===false && await ctx.db.get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspace_session_timers'"))await ctx.db.run("UPDATE workspace_session_timers SET status='paused',revision=revision+1 WHERE conversation_id=? AND status='active'",[id]);
+      await ctx.onConversationToolsChanged?.(id,String(input.group),Boolean(input.enabled));
       return view(settings);
     });
   });

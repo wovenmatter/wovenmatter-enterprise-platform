@@ -52,6 +52,12 @@ export async function registerAuth(app: FastifyInstance, ctx: AppContext) {
       string,
       unknown
     >;
+    if(routeConfig.externalWorkspaceMCP===true){
+      // Native clients may omit Origin. A browser gets no CORS expansion and
+      // cannot use session cookies in place of the explicit scoped bearer.
+      if(request.headers.origin&&request.headers.origin!==ctx.config.publicOrigin||request.headers["sec-fetch-site"]==="cross-site")throw new AppError(403,"invalid_origin","Request origin is not allowed");
+      reply.header("cache-control","no-store");return;
+    }
     if (
       routeConfig.internalInference === true ||
       routeConfig.libraryContent === true ||

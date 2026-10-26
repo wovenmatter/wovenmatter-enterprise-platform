@@ -12,6 +12,7 @@ import { identity, MAX_LINE, MAX_OUTPUT, validateEvent, validateInputText } from
 import { validateAttachments } from "./attachments.js";
 
 export interface WorkspaceWorker {
+  browser?(input:Record<string,unknown>):Promise<unknown>;
   processId?: number;
   turn(
     request: RuntimeRequest,
@@ -626,6 +627,12 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
       if (session.active)
         await this.record(this.run(session.active), { type: "cancelled" });
     });
+  }
+  async browser(conversationId:string,input:Record<string,unknown>){
+    const candidates=[...this.sessions.values()].filter(session=>session.conversationId===conversationId&&!session.stopped).sort((a,b)=>b.generation-a.generation);
+    const session=candidates[0];
+    if(this.closing||!session?.worker.browser)throw new RuntimeError("browser_unavailable","Start a workspace chat before attaching to its browser.");
+    return session.worker.browser(input);
   }
   status() {
     return {

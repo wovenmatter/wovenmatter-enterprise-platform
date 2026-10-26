@@ -1,19 +1,66 @@
+import { realpathSync } from 'node:fs';
+import { latestSupportedPackage, releaseVersion } from '../package-versions.mjs';
 // Trusted, background-service-only IPC. No manager credentials or resume tokens
-// cross the session CLI. Executor is used unchanged through its public local API.
+// cross the session MCP boundary. Executor is used unchanged through its public local API.
 import { AjvJsonSchemaValidator } from '@modelcontextprotocol/sdk/validation/ajv';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { readFile, mkdir, chmod } from 'node:fs/promises';
+import { execFile, spawn } from 'node:child_process';
+import { constants as fsConstants } from 'node:fs';
+import { readFile, mkdir, chmod, access } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { writePrivateJSON } from '../config.mjs';
 
-export const executorVersion = '2.0.0-beta.7';
+// The broker implements Executor's V2 managed app API; V1 lacks it and a later
+// major is an unverified API. Newer V2 releases install without an app update;
+// Dependency maintenance reviews new upstream majors before changing this API line.
+export const EXECUTOR_API_MAJOR = 2;
+export const supportsExecutorVersion = version => releaseVersion(version) && Number(version.split('.')[0]) === EXECUTOR_API_MAJOR;
+export const latestExecutorVersion = fetchImplementation => latestSupportedPackage('executor', {
+  major: EXECUTOR_API_MAJOR, prerelease: true, executable: 'executor', fetchImplementation });
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const execFileAsync = promisify(execFile);
 const uuid = value => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value) && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value);
+const tailnetAddress = value => {
+  const lower = value.toLowerCase();
+  if (lower.startsWith('fd7a:115c:a1e0:') && /^[0-9a-f:]+$/.test(lower)) return true;
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+    && Number(parts[0]) === 100 && Number(parts[1]) >= 64 && Number(parts[1]) <= 127;
+};
+export function tailnetSSHOptions(destination, executable, status) {
+  const host = destination.split('@').at(-1).toLowerCase().replace(/\.$/, '');
+  const root = typeof status === 'string' ? JSON.parse(status) : status;
+  if (root?.BackendState !== 'Running' || !root.Peer) throw new Error('Connect Tailscale before deploying Executor.');
+  const matches = Object.values(root.Peer).filter(peer => {
+    const names = [peer.HostName, peer.DNSName].filter(Boolean).map(name => name.toLowerCase().replace(/\.$/, ''));
+    return names.includes(host) || (tailnetAddress(host) && (peer.TailscaleIPs ?? []).includes(host));
+  });
+  const peer = matches.length === 1 ? matches[0] : null;
+  const address = peer?.Online && !peer?.Expired && peer.TailscaleIPs?.find(tailnetAddress);
+  if (!address) throw new Error('Select one online Tailscale machine before deploying Executor.');
+  const quotedExecutable = executable.replaceAll("'", "'\\''");
+  return ['-o', `ProxyCommand=exec '${quotedExecutable}' nc ${address} %p`, '-o', 'ProxyJump=none', '-o', `Hostname=${address}`,
+    '-o', 'CanonicalizeHostname=no', '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'ControlPersist=no',
+    '-o', 'Compression=no', '-o', 'ForwardAgent=no', '-o', 'ForwardX11=no', '-o', 'PermitLocalCommand=no',
+    '-o', 'StrictHostKeyChecking=yes'];
+}
+async function resolveTailnetSSHOptions(destination) {
+  const candidates = ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', '/usr/local/bin/tailscale', '/opt/homebrew/bin/tailscale'];
+  let executable;
+  for (const candidate of candidates) {
+    try { await access(candidate, fsConstants.X_OK); executable = candidate; break; } catch { }
+  }
+  if (!executable) throw new Error('Install and connect Tailscale before deploying Executor.');
+  let stdout;
+  try { ({ stdout } = await execFileAsync(executable, ['status', '--json'], { timeout: 10000, maxBuffer: 4 * 1024 * 1024 })); }
+  catch { throw new Error('Tailscale status is unavailable. Connect Tailscale before deploying Executor.'); }
+  return tailnetSSHOptions(destination, executable, stdout);
+}
 export function validateConfiguration(config) {
   if (!uuid(config?.id) || !['local', 'remote'].includes(config.location)) throw new Error('Invalid Executor connection.');
   if (config.location === 'remote') {
@@ -24,10 +71,11 @@ export function validateConfiguration(config) {
   return config;
 }
 export class ExecutorBroker {
-  constructor(directory, { fetcher = fetch, connect } = {}) {
-    this.directory = directory; this.fetch = fetcher; this.connectOverride = connect;
+  constructor(directory, { fetcher = fetch, connect, spawnProcess = spawn, tailnetOptions = resolveTailnetSSHOptions, beforeDispatch } = {}) {
+    this.beforeDispatch = beforeDispatch;
+    this.directory = directory; this.fetch = fetcher; this.connectOverride = connect; this.spawnProcess = spawnProcess;
     this.jobs = new Map(); this.clients = new Map(); this.connectingClients = new Map(); this.clientGeneration = 0;
-    this.state = { servers: {}, scopes: {}, jobs: {} }; this.child = null; this.saveTail = Promise.resolve();
+    this.state = { servers: {}, scopes: {}, jobs: {} }; this.child = null; this.saveTail = Promise.resolve(); this.tailnetOptions = tailnetOptions;
   }
   async load() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -58,12 +106,23 @@ export class ExecutorBroker {
     return { body: await response.json(), headers: response.headers };
   }
   async configure(config, install = false) {
+    if (this.installing) throw new Error("Executor setup is already running.");
+    this.installing = install;
+    try {
+      return await this.configureRuntime(config, install);
+    } finally { this.installing = false; }
+  }
+  async configureRuntime(config, install = false) {
     validateConfiguration(config);
+    if (install && [...this.jobs.values()].some(job => job.busy || !["completed", "cancelled", "interrupted"].includes(job.status))) {
+      throw new Error("Stop active Executor work before installing an update.");
+    }
     if (this.config && this.config.id !== config.id) {
       for (const job of this.jobs.values()) if (!['completed', 'cancelled', 'interrupted'].includes(job.status)) await this.cancel(job);
       await this.shutdownClients();
       if (config.location !== 'local') { this.child?.kill('SIGTERM'); this.child = null; }
     }
+    if (this.config?.id !== config.id) this.runtimeVersion = null;
     this.config = config;
     let server = this.state.servers[config.id];
     if (server && server.location !== config.location) throw new Error('Create a new connection before changing runtime location.');
@@ -85,7 +144,7 @@ export class ExecutorBroker {
       }
     }
     await this.request('/v1/apps'); // Readiness and key ownership, never fall back to unscoped MCP.
-    return { ready: true, version: executorVersion, origin: this.origin };
+    return { ready: true, version: this.runtimeVersion ?? null, origin: this.origin };
   }
   async run(executable, args, input, environment = process.env) {
     await new Promise((resolve, reject) => {
@@ -97,36 +156,90 @@ export class ExecutorBroker {
     });
   }
   async startLocal(install) {
-    if (this.child?.exitCode === null && this.child.signalCode === null) return;
-    const root = join(this.directory, 'runtime');
+    if (this.child?.exitCode === null && this.child.signalCode === null && !install) return;
+    const previousGeneration = this.server?.runtimeGeneration;
+    let generation = previousGeneration;
+    let root = generation && uuid(generation) ? join(this.directory, 'runtime/generations', generation) : join(this.directory, 'runtime');
     if (install) {
+      const version = await latestExecutorVersion(this.fetch);
+      generation = randomUUID(); root = join(this.directory, 'runtime/generations', generation);
       await mkdir(root, { recursive: true, mode: 0o700 });
       const npm = resolve(dirname(fileURLToPath(import.meta.url)), '../../lib/npm/bin/npm-cli.js');
-      await this.run(process.execPath, [npm, 'install', '--prefix', root, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', `executor@${executorVersion}`], undefined,
+      await this.run(process.execPath, [npm, 'install', '--prefix', root, '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact', `executor@${version}`], undefined,
         { ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin` });
+      const staged = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8'));
+      if (staged.version !== version) throw new Error('Executor installation did not match the selected release. Existing runtime was retained.');
     }
-    const packageJSON = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => { throw new Error('Install Executor in Settings → Connections first.'); }));
-    if (packageJSON.version !== executorVersion) throw new Error('This Executor runtime version is unsupported. Reinstall it in Connections.');
-    this.child = spawn(process.execPath, [join(root, 'node_modules/executor/bin.mjs'), 'serve'], { stdio: 'ignore', env: {
-      ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, EXECUTOR_DATA_DIR: join(this.directory, 'data'),
-      EXECUTOR_PORT: String(this.server.port), EXECUTOR_API_KEY: this.server.apiKey, EXECUTOR_ENCRYPTION_KEY: this.server.encryptionKey, EXECUTOR_NO_UPDATE_CHECK: '1',
-    } });
-    this.child.on('error', () => {});
-    const until = Date.now() + 90000;
-    while (Date.now() < until) {
-      try { await this.request('/v1/apps'); return; } catch { }
-      if (this.child.exitCode !== null || this.child.signalCode !== null) break;
-      await pause(400);
+    const packageJSON = JSON.parse(await readFile(join(root, 'node_modules/executor/package.json'), 'utf8').catch(() => { throw new Error('Install Executor in Settings → General first.'); }));
+    if (!supportsExecutorVersion(packageJSON.version)) throw new Error('This Executor runtime version is unsupported. Reinstall it in Settings → General → Executor.');
+    const hadRunningRuntime = this.child?.exitCode === null && this.child.signalCode === null;
+    if (hadRunningRuntime) {
+      await this.shutdownClients();
+      await this.retireLocalChild();
     }
-    throw new Error('Executor did not become ready. A different service may already own port 4312.');
+    try {
+      this.runtimeVersion = packageJSON.version;
+      this.child = this.spawnProcess(process.execPath, [join(root, 'node_modules/executor/bin.mjs'), 'serve'], { stdio: 'ignore', env: {
+        ...process.env, PATH: `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`, EXECUTOR_DATA_DIR: join(this.directory, 'data'),
+        EXECUTOR_PORT: String(this.server.port), EXECUTOR_API_KEY: this.server.apiKey, EXECUTOR_ENCRYPTION_KEY: this.server.encryptionKey, EXECUTOR_NO_UPDATE_CHECK: '1',
+      } });
+      this.child.on('error', () => {});
+      const until = Date.now() + 90000;
+      while (true) {
+        try { await this.request('/v1/apps'); break; } catch { }
+        if (Date.now() >= until || this.child.exitCode !== null || this.child.signalCode !== null) throw new Error('Executor did not become ready. Check port 4312 and retry setup.');
+        await pause(400);
+      }
+      if (install) { this.server.runtimeGeneration = generation; await this.save(); }
+    } catch (error) {
+      await this.retireLocalChild();
+      this.server.runtimeGeneration = previousGeneration;
+      this.runtimeVersion = null;
+      if (install && hadRunningRuntime) {
+        try { await this.startLocal(false); }
+        catch { throw new Error('Executor update and rollback could not become ready. Existing data and runtime generations were retained.'); }
+      }
+      throw error;
+    }
+  }
+  async retireLocalChild() {
+    const child = this.child;
+    if (child?.exitCode === null && child.signalCode === null) {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Executor did not stop. Existing runtime was retained.')), 10000);
+        child.once('exit', () => { clearTimeout(timer); resolve(); });
+        child.kill('SIGTERM');
+      });
+    }
+    this.child = null;
   }
   async deployRemote() {
-    const script = await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/executor-deploy.sh'), 'utf8');
+    const remoteRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote');
+    const script = await readFile(resolve(remoteRoot, 'executor-deploy.sh'), 'utf8');
     // Payload goes over SSH stdin, not shell arguments, logs, or agent-visible metadata.
-    const dockerfile = await readFile(resolve(dirname(fileURLToPath(import.meta.url)), '../../../remote/Executor.Dockerfile'), 'utf8');
-    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, dockerfile });
+    const version = await latestExecutorVersion(this.fetch);
+    const dockerfile = (await readFile(resolve(remoteRoot, 'Executor.Dockerfile'), 'utf8'))
+      .replace('ARG EXECUTOR_VERSION', `ARG EXECUTOR_VERSION=${version}`);
+    const [npmRuntimePackage, npmRuntimeLock, executorRuntimePackage, executorRuntimeLock] = await Promise.all([
+      readFile(resolve(remoteRoot, 'npm-runtime/package.json'), 'utf8'),
+      readFile(resolve(remoteRoot, 'npm-runtime/package-lock.json'), 'utf8'),
+      readFile(resolve(remoteRoot, 'executor-runtime/package.json'), 'utf8'),
+      readFile(resolve(remoteRoot, 'executor-runtime/package-lock.json'), 'utf8'),
+    ]);
+    const securityManifest = JSON.parse(await readFile(resolve(remoteRoot, 'security/backports.json'), 'utf8'));
+    const executorSecuritySources = new Set(['ncurses', 'acl', 'util-linux', 'curl']);
+    const securityPaths = ['backports.json', 'build-backports.py', ...securityManifest
+      .filter(record => executorSecuritySources.has(record.source))
+      .flatMap(record => record.patches.map(patch => patch.file))];
+    const securityFiles = Object.fromEntries(await Promise.all(securityPaths.map(async path => [
+      path, (await readFile(resolve(remoteRoot, 'security', path))).toString('base64'),
+    ])));
+    const payload = JSON.stringify({ origin: this.origin, apiKey: this.server.apiKey, encryptionKey: this.server.encryptionKey, version, dockerfile,
+      npmRuntimePackage, npmRuntimeLock, executorRuntimePackage, executorRuntimeLock, securityFiles, generation: randomUUID() });
     const command = `set -eu\numask 077\nwm_payload=$(mktemp)\ntrap 'rm -f "$wm_payload"' EXIT\ncat > "$wm_payload" <<'WOVEN_EXECUTOR_SETUP_JSON'\n${payload}\nWOVEN_EXECUTOR_SETUP_JSON\n${script}\n`;
-    await this.run('/usr/bin/ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RequestTTY=no', this.config.user ? `${this.config.user}@${this.config.host}` : this.config.host, 'bash -s'], command);
+    const transport = await this.tailnetOptions(this.config.host);
+    await this.run('/usr/bin/ssh', ['-T', ...transport, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '-o', 'RequestTTY=no', this.config.user ? `${this.config.user}@${this.config.host}` : this.config.host, 'bash -s'], command);
+    this.runtimeVersion = version;
   }
   async pair(context = this) {
     return (await this.request('/auth/pair', { method: 'POST' }, context)).body.url;
@@ -146,16 +259,13 @@ export class ExecutorBroker {
       // The bundled management app holds the server's administrator key. Giving
       // it to a scoped agent would let the agent edit its own scope.
       if (app.owner === 'executor-local') continue;
-      let profiles = body.profiles.filter(profile => profile.app === app.id && profile.enabled !== false);
-      // Explicit account-free profiles work around beta.7's undefined optional
-      // fields in structured input results. Account-bearing apps need user setup.
-      if (!profiles.length && !Object.keys(app.requirements?.accounts ?? {}).length) {
-        try {
-          const created = await this.request(`/dashboard/api/apps/${encodeURIComponent(app.id)}/profiles`, { method: 'POST', value: { name: 'Woven Matter', accounts: {}, idempotencyKey: this.config.id } });
-          profiles = [created.body];
-        } catch { /* Show setup in the dashboard; never guess an account. */ }
+      const needsAccount = Object.values(app.requirements?.accounts ?? {}).some(requirement => requirement.scope === 'user');
+      if (!needsAccount) result.push({ id: `${app.id}:app`, app: app.id, name: app.name ?? app.slug, profileName: 'App' });
+      for (const link of body.links.filter(link => link.app === app.id)) {
+        const account = body.accounts.find(account => account.id === link.account);
+        if (account) result.push({ id: `${app.id}:account:${account.id}`, app: app.id, name: app.name ?? app.slug,
+          account: account.id, profileName: account.label });
       }
-      for (const profile of profiles) result.push({ id: `${app.id}:${profile.id}`, app: app.id, name: app.name ?? app.slug, profile: profile.id, profileName: profile.name ?? "Default" });
     }
     return result;
   }
@@ -183,15 +293,16 @@ export class ExecutorBroker {
     const token = await response.json();
     return { token: token.access_token, refresh: token.refresh_token, expires: Date.now() + (token.expires_in ?? 3600) * 1000 };
   }
-  async scope(session, profiles, enabled) {
-    if (!session || session.length > 256 || !Array.isArray(profiles) || profiles.length > 200) throw new Error('Invalid conversation scope.');
+  async scope(session, targets, enabled) {
+    if (!session || session.length > 256 || !Array.isArray(targets) || targets.length > 200) throw new Error('Invalid conversation scope.');
     const key = `${this.config.id}:${session}`;
     let scope = this.state.scopes[key];
     const grouped = new Map();
-    for (const profile of enabled ? profiles : []) {
-      const app = grouped.get(profile.app) ?? { app: profile.app, runsAs: [], tools: { kind: 'all' } };
-      if (!app.runsAs.some(value => value.id === profile.profile)) app.runsAs.push({ kind: 'profile', id: profile.profile });
-      grouped.set(profile.app, app);
+    for (const target of enabled ? targets : []) {
+      const app = grouped.get(target.app) ?? { app: target.app, runsAs: [], tools: { kind: 'all' } };
+      const runsAs = target.account ? { kind: 'account', id: target.account } : { kind: 'app' };
+      if (!app.runsAs.some(value => value.kind === runsAs.kind && value.id === runsAs.id)) app.runsAs.push(runsAs);
+      grouped.set(target.app, app);
     }
     const apps = [...grouped.values()];
     const encoded = JSON.stringify(apps);
@@ -238,7 +349,7 @@ export class ExecutorBroker {
       if (this.connectOverride) client = await this.connectOverride(scope);
       else {
         client = new Client({ name: 'wovenmatter', version: '1' }, { capabilities: {} });
-        try { await client.connect(new StreamableHTTPClientTransport(new URL(scope.grant.resource), { requestInit: { headers: { authorization: `Bearer ${scope.grant.token}` } } })); }
+        try { await client.connect(new StreamableHTTPClientTransport(new URL(scope.grant.resource), { fetch: this.fetch, requestInit: { redirect: 'error', headers: { authorization: `Bearer ${scope.grant.token}` } } })); }
         catch (error) { await client.close().catch(() => {}); throw error; }
       }
       if (generation !== this.clientGeneration) { await client.close().catch(() => {}); check(); }
@@ -265,6 +376,7 @@ export class ExecutorBroker {
     await this.save();
   }
   async start({ id, session, code, action = 'execute', scope }) {
+    if (this.installing) throw new Error('Executor setup is still running.');
     if (!uuid(id) || typeof code !== 'string' || Buffer.byteLength(code) > 65536) throw new Error('Execute requires a UUID and at most 64 KiB of JavaScript.');
     const digest = createHash('sha256').update(action + '\n' + code).digest('hex');
     const previous = this.jobs.get(id);
@@ -282,10 +394,16 @@ export class ExecutorBroker {
   validateResponse(job, response) {
     if (response.action !== 'accept' || job.pending?.status !== 'input-required') return { valid: true };
     try {
-      return { valid: new AjvJsonSchemaValidator().getValidator(job.pending.elicitation.requestedSchema)(response.content ?? {}).valid };
+      const schema = job.pending.elicitation.requestedSchema;
+      // Preserve the existing draft-07 form contract when Executor omits a
+      // dialect. MCP v2 otherwise assumes 2020-12 and rejects legacy tuples.
+      const declared = schema && typeof schema === 'object' && !Array.isArray(schema) && !Object.hasOwn(schema, '$schema')
+        ? { ...schema, $schema: 'http://json-schema.org/draft-07/schema#' } : schema;
+      return { valid: new AjvJsonSchemaValidator().getValidator(declared)(response.content ?? {}).valid };
     } catch { return { valid: false }; }
   }
   async advance(job, response) {
+    if (this.installing) throw new Error("Executor setup is still running.");
     if (!this.validateResponse(job, response).valid) throw new Error('Executor input does not match its requested form.');
     if (job.status === 'cancelled' || job.status === 'completed' || job.status === 'interrupted') return;
     if (job.busy) throw new Error('This program already has a pending operation.');
@@ -295,7 +413,9 @@ export class ExecutorBroker {
     // Dispatch exactly once. A failed/uncertain transport never replays Execute.
     (async () => {
       try {
+        await this.beforeDispatch?.(job);
         const client = await this.client(job.scope);
+        await this.beforeDispatch?.(job);
         if (job.status === 'cancelled' || job.controller.signal.aborted) return;
         const args = job.pending ? { requestId: job.pending.requestId, response } : job.action === 'skills' ? {} : { code: job.code };
         const name = job.pending ? 'resume' : job.action === 'skills' ? 'skills' : 'execute';
@@ -352,7 +472,7 @@ export class ExecutorBroker {
     }
   }
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const broker = await new ExecutorBroker(process.argv[2]).load();
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
   let chain = Promise.resolve();
