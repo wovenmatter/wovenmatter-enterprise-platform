@@ -110,7 +110,7 @@ export async function sessionBroker(
       { requestTimeout: 120000, maxHeaderSize: 32768 },
       (req, res) => {
         if (req.headers["proxy-authorization"] !== localAuthorization) {
-          res.writeHead(407);
+          res.writeHead(407,{"proxy-authenticate":'Basic realm="workspace"'});
           res.end();
           return;
         }
@@ -135,7 +135,7 @@ export async function sessionBroker(
     );
     proxy.on("connect", (req, socket, head) => {
       if (req.headers["proxy-authorization"] !== localAuthorization) {
-        socket.end("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n");
+        socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="workspace"\r\n\r\n');
         return;
       }
       void upstreamOptions(req)

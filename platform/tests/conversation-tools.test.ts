@@ -20,12 +20,12 @@ async function fixture(t: any, harness: Harness = "pi") {
 }
 
 test("tool settings validate supported groups and retain enabled defaults for existing chats", async t => {
-  assert.deepEqual(normalizeConversationTools(), { notes: true, history: true, usage: true, calendar: true, library: true });
-  for (const bad of [null, [], { notes: "false" }, { executor: true }, { sessions: true }, { databases: true }]) assert.throws(() => normalizeConversationTools(bad));
+  assert.deepEqual(normalizeConversationTools(), { notes: true, history: true,sessions:true,timers:true,browser:true,executor:false,usage: true, calendar: true, library: true });
+  for (const bad of [null, [], { notes: "false" }, { executor: "true" }, { devices: true }, { databases: true }]) assert.throws(() => normalizeConversationTools(bad));
   const f = await fixture(t);
   const initial = await f.request("full", "GET", f.endpoint);
   assert.equal(initial.statusCode, 200);
-  assert.deepEqual(initial.json().groups.map((group: any) => group.id), ["notes", "history", "usage", "calendar", "library"]);
+  assert.deepEqual(initial.json().groups.map((group: any) => group.id), ["notes","history","sessions","timers","browser","executor","usage","calendar","library"]);
   assert.equal(initial.json().groups.find((group: any) => group.id === "notes").description.includes("databases"), true);
   const created = await f.request("full", "POST", `/enterprise/api/projects/${f.projectA}/conversations`, { tools: { notes: false, history: false } });
   assert.equal(created.statusCode, 201, created.body);
@@ -33,7 +33,7 @@ test("tool settings validate supported groups and retain enabled defaults for ex
   assert.equal(created.json().tools.history, false);
   assert.equal(created.json().tools.library, true);
   for (const tools of [{ notes: 0 }, { computer: true }]) assert.equal((await f.request("full", "POST", `/enterprise/api/projects/${f.projectA}/conversations`, { tools })).statusCode, 400);
-  for (const payload of [{ group: "notes", enabled: "false" }, { group: "sessions", enabled: false }, { group: "notes", enabled: false, arbitrary: true }])
+  for (const payload of [{ group: "notes", enabled: "false" }, { group: "devices", enabled: false }, { group: "notes", enabled: false, arbitrary: true }])
     assert.equal((await f.request("full", "PATCH", f.endpoint, payload)).statusCode, 400);
 });
 

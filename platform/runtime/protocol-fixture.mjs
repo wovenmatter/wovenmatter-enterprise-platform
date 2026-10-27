@@ -2,6 +2,7 @@
 const http = require("node:http");
 const answer = "SYNTHETIC_RUNTIME_ACCEPTANCE";
 const proxyProofs = new Set();
+let publicHttpsObserved=false;
 const gatewayProofs = new Set();
 const toolRequests = new Set();
 const toolNames = new Map();
@@ -47,7 +48,14 @@ const proxy = http.createServer((request, response) => {
   });
   response.end(result.body);
 });
-proxy.on("connect", (request, socket) => {
+proxy.on("connect", (request, socket, head) => {
+  if(process.env.WME_ACCEPTANCE_PUBLIC_HTTPS==="1"&&request.url==="example.com:443"){
+    const value=Buffer.from((request.headers["proxy-authorization"]??"").replace(/^Basic /,""),"base64").toString();
+    if(!/^acceptance-[a-f0-9-]+:(?:synthetic-scoped-fixture-key|wme_schedule_s{43})$/.test(value)){socket.end("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=fixture\r\nContent-Length: 0\r\n\r\n");return;}
+    const upstream=require("node:net").connect({host:"example.com",port:443,family:4});
+    upstream.once("connect",()=>{publicHttpsObserved=true;socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");if(head?.length)upstream.write(head);socket.pipe(upstream);upstream.pipe(socket);});
+    upstream.once("error",()=>socket.destroy());socket.once("error",()=>upstream.destroy());socket.once("close",()=>upstream.destroy());return;
+  }
   if (
     request.url !== "native-proxy-fixture.invalid:80" ||
     (!/^acceptance-[a-f0-9-]+:(?:synthetic-scoped-fixture-key|wme_schedule_s{43})$/.test(
@@ -76,6 +84,7 @@ proxy.on("connect", (request, socket) => {
   });
 });
 if (require.main === module) proxy.listen(4101, "0.0.0.0");
+function shellQuote(value){return "'"+String(value).split("'").join("'"+String.fromCharCode(92)+"''")+"'";}
 function nativeTool(input, raw, gatewayPath, token) {
   const asset = /^synthetic-asset-(pi)$/.exec(
     input.model,
@@ -121,6 +130,7 @@ function nativeTool(input, raw, gatewayPath, token) {
           : "Asset tool failed; draft was not confirmed.",
       };
   }
+  const managed=/^synthetic-browser-(open|read)-(primary|sibling)$/.exec(input.model);
   const hold = /^synthetic-hold-(a|b)$/.exec(input.model)?.[1];
   const background = /^synthetic-background-(pi-a|pi-b)$/.exec(
     input.model,
@@ -128,11 +138,13 @@ function nativeTool(input, raw, gatewayPath, token) {
   const harness = /^synthetic-proxy-(pi)$/.exec(
     input.model,
   )?.[1];
-  if (!harness && !hold && !background && !asset) return {};
-  const keyId = background ? "background-" + background : harness;
+  if (!harness && !hold && !background && !asset && !managed) return {};
+  const managedKey=managed?"managed-"+managed[1]+"-"+managed[2]:null;
+  if(managedKey&&toolRequests.has(managedKey))return {answer:managed[1]==="open"?"MANAGED_BROWSER_OPENED":"MANAGED_BROWSER_SAME_STATE"};
+  const keyId = managedKey ?? (background ? "background-" + background : harness);
   if (background && toolRequests.has(keyId))
     return { answer: "BACKGROUND_WORK_STARTED" };
-  if (!hold && !asset && toolRequests.has(harness))
+  if (!hold && !asset && !managed && toolRequests.has(harness))
     return {
       answer:
         proxyProofs.has(harness) &&
@@ -169,15 +181,19 @@ function nativeTool(input, raw, gatewayPath, token) {
     throw new Error(
       "Synthetic shell tool command parameter unavailable: " + selected.name,
     );
-  const program = hold
+  const baseProgram = hold
     ? `const fs=require("node:fs"),{spawn}=require("node:child_process");const child=spawn(process.execPath,["-e",${JSON.stringify(`setInterval(()=>require("node:fs").writeFileSync("/workspace/descendant-${hold}",String(Date.now())),100)`)}],{detached:true,stdio:"ignore"});child.unref();setInterval(()=>fs.writeFileSync("/workspace/parent-${hold}",String(Date.now())),100)`
     : `const assert=require("node:assert/strict");for(const key of ["HTTP_PROXY","HTTPS_PROXY","NO_PROXY","NODE_USE_ENV_PROXY"])assert.ok(process.env[key],"Scoped proxy environment missing");Promise.all([fetch("http://native-proxy-fixture.invalid/${harness}").then(r=>r.text()),fetch(${JSON.stringify("http://127.0.0.1:4101/inference/native-gateway-proof/" + harness)},{headers:{authorization:"Bearer "+decodeURIComponent(new URL(process.env.HTTP_PROXY).password)}}).then(r=>r.text()),fetch("http://127.0.0.1:4101/another-project",{headers:{authorization:"Bearer "+decodeURIComponent(new URL(process.env.HTTP_PROXY).password)}}).then(r=>r.status)]).then(([proxy,gateway,denied])=>{assert.equal(proxy,"synthetic-proxy-ok");assert.equal(gateway,"synthetic-gateway-ok");assert.equal(denied,403);console.log("PROXY_TOOL_OK")}).catch(()=>{console.error("PROXY_TOOL_FAILED");process.exit(1)})`;
+  const managedFile="/workspace/managed-browser-"+(managed?.[2]??"primary")+".json";
+  const openProgram="(async()=>{const assert=require('node:assert/strict'),fs=require('node:fs'),{connectManagedBrowser}=await import('/opt/runtime/src/managed-browser.js');const context=await connectManagedBrowser();assert.equal((await context.pages()).length,0);const page=await context.newPage('http://native-proxy-fixture.invalid/pi');await page.locator('body').waitFor();assert.match(await page.locator('body').innerText(),/synthetic-proxy-ok/);await page.evaluate("+JSON.stringify("document.title='Agent-owned primary';document.body.innerHTML='<h1>Actual managed agent browser</h1><button>0</button><input id=human-input>';document.querySelector('button').onclick=()=>{const b=document.querySelector('button');b.textContent=String(Number(b.textContent)+1)}") +");for(const other of await context.pages()){if(other.id!==page.id&&await other.evaluate('location.href')==='about:blank')await other.close();}await page.evaluate(\"const role=document.createElement('button');role.id='role-fixture';role.textContent='Continue to details';document.body.append(role)\");assert.equal(await page.getByRole('button',{name:'continue'}).count(),1);assert.equal(await page.getByRole('button',{name:'Continue',exact:true}).count(),0);assert.equal(await page.getByRole('button',{name:'Continue to details',exact:true}).count(),1);await page.getByRole('button',{name:'continue'}).click();await page.evaluate(\"document.querySelector('#role-fixture').remove()\");const second=await context.newPage('http://native-proxy-fixture.invalid/pi');await second.evaluate("+JSON.stringify("document.title='Second agent-owned tab';document.body.innerHTML='<h1>Second actual managed tab</h1>'")+");fs.writeFileSync("+JSON.stringify(managedFile)+",JSON.stringify({primary:page.id,secondary:second.id}));console.log('MANAGED_BROWSER_OPENED');})().catch(error=>{console.error(error);process.exit(1)})";
+  const readProgram="(async()=>{const assert=require('node:assert/strict'),fs=require('node:fs'),{connectManagedBrowser}=await import('/opt/runtime/src/managed-browser.js');const expected=JSON.parse(fs.readFileSync("+JSON.stringify(managedFile)+",'utf8')),context=await connectManagedBrowser(),pages=await context.pages();assert.equal(pages.length,2);const page=pages.find(page=>page.id===expected.primary);assert.ok(page);assert.equal(await page.locator('#human-input').inputValue(),'Synthetic human text');assert.equal(await page.locator('button').innerText(),'1');await page.locator('button').click();assert.equal(await page.locator('button').innerText(),'2');fs.writeFileSync('/workspace/managed-browser-read.json',JSON.stringify({samePage:page.id,value:await page.locator('#human-input').inputValue(),button:await page.locator('button').innerText()}));console.log('MANAGED_BROWSER_SAME_STATE');})().catch(error=>{console.error(error);process.exit(1)})";
+  const program=managed?(managed[1]==="open"?openProgram:readProgram):baseProgram;
   const assetProgram = `const fs=require("node:fs"),{execFileSync}=require("node:child_process");const context=JSON.parse(execFileSync("wme-asset",["context"],{encoding:"utf8"}));const stem="asset-"+context.assetId;const countFile="/workspace/"+stem+"-turn.txt";const dataFile=stem+"-data.json";let sourceText="";for(const source of context.sources.filter(s=>s.path.startsWith("Source-"))){const rows=JSON.parse(fs.readFileSync("/workspace/"+source.path,"utf8"));require("node:assert/strict").equal(rows[0].label,"Authorized input");require("node:assert/strict").equal(rows[0].value,8);sourceText=rows[0].label+": "+rows[0].value;let denied=false;try{fs.appendFileSync("/workspace/"+source.path,"unexpected write")}catch(e){if(["EACCES","EROFS","EPERM"].includes(e.code))denied=true;else throw e}if(!denied)throw Error("Selected source was writable");}const n=Number(fs.existsSync(countFile)?fs.readFileSync(countFile,"utf8"):0)+1;const text=n===1?"First version for review":"Second draft kept private";fs.writeFileSync("/workspace/"+dataFile,JSON.stringify([{label:"Generated data",value:n}]));const document={version:1,blocks:[{type:"text",text},...(sourceText?[{type:"details",title:"Selected source",text:sourceText}]:[]),{type:"table",fileId:"workspace:"+dataFile,pointer:"",columns:[{label:"Item",key:"label"},{label:"Count",key:"value"}]}]};fs.writeFileSync("/session/asset-draft.json",JSON.stringify({expectedRevision:context.revision,document}));const result=JSON.parse(execFileSync("wme-asset",["save","/session/asset-draft.json"],{encoding:"utf8"}));if(!result.saved)throw Error("Save was not confirmed");fs.writeFileSync(countFile,String(n));console.log("ASSET_FIXTURE_SAVED:"+result.revision);`;
   const command = asset
-    ? "node -e '" + assetProgram + "'"
+    ? "node -e " + shellQuote(assetProgram)
     : background
       ? `wme-background start -- node -e 'setInterval(()=>require("node:fs").writeFileSync("/workspace/background-${background}",String(Date.now())),100)'`
-      : "node -e '" + program + "'";
+      : "node -e " + shellQuote(program);
   const args = {
     [key]: properties[key].type === "array" ? ["sh", "-c", command] : command,
   };
@@ -219,6 +235,7 @@ const handler = async (request, response) => {
     response.end("gateway-fixture");
     return;
   }
+  if(request.url==="/fixture-browser-proxy-status"){response.setHeader("content-type","application/json");response.end(JSON.stringify({publicHttpsObserved}));return;}
   const status = /^\/fixture-status\/(pi)$/.exec(request.url);
   if (status) {
     response.setHeader("content-type", "application/json");
@@ -265,6 +282,7 @@ const handler = async (request, response) => {
     response.setHeader("content-type", "application/json");
     response.end(JSON.stringify(value));
   };
+  if(request.url==="/workspace/browser_authorize"){if(request.headers.authorization!=="Bearer synthetic-scoped-fixture-key"){response.writeHead(403);json({error:{message:"Synthetic browser authority denied"}});}else json({authorized:true});return;}
   let sequence = 0;
   const event = (type, data) =>
     response.write(
@@ -604,5 +622,5 @@ const handler = async (request, response) => {
   response.writeHead(404);
   response.end("Synthetic fixture route unavailable");
 };
-module.exports = { handler, assetProtocolShapes };
+module.exports = { handler, assetProtocolShapes, shellQuote };
 if (require.main === module) http.createServer(handler).listen(4100, "0.0.0.0");

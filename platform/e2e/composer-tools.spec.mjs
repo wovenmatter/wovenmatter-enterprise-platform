@@ -4,7 +4,7 @@ import { parityFixture, workspace, base, project, folder } from './ui-parity.fix
 // Browser plugin not available. All data is synthetic; the fixture blocks
 // external traffic and every unregistered mutation, including provider calls.
 test.use({ storageState: { cookies: [], origins: [] } });
-const defaults = { notes: true, history: true, usage: true, calendar: true, library: true };
+const defaults = { notes: true, history: true,sessions:true,timers:true,browser:true,executor:false,usage: true, calendar: true, library: true };
 const trigger = page => page.getByRole('button', { name: 'Tools', exact: true });
 const popup = page => page.getByRole('dialog', { name: 'Conversation tools', exact: true });
 const toggle = (page, name) => popup(page).getByRole('switch', { name, exact: true });
@@ -58,8 +58,8 @@ test('draft tools preserve text and folder selection and become the created chat
   const state = await setup(page, baseURL, true);
   const input = page.getByLabel('Message your agent'); await input.fill('Retained tools fixture draft');
   await trigger(page).click();
-  await expect(popup(page).getByRole('switch')).toHaveCount(5);
-  for (const name of ['Notes', 'Conversation history', 'Usage data', 'Calendar', 'Library']) await expect(toggle(page, name)).toBeChecked();
+  await expect(popup(page).getByRole('switch')).toHaveCount(9);
+  for (const name of ['Notes', 'Conversation history', 'Sessions','Timers','Browser','Usage data', 'Calendar', 'Library']) await expect(toggle(page, name)).toBeChecked();
   await expect(popup(page)).toContainText('Shell access follows workspace permissions');
   await expect(popup(page)).toContainText('Attached notes and conversations remain available to read');
   await toggle(page, 'Notes').press('Space'); await expect(toggle(page, 'Notes')).not.toBeChecked();
@@ -83,7 +83,7 @@ test('persisted tools wait for save, retain the popup and recover the initiating
   await page.keyboard.press('ArrowDown'); await expect(toggle(page, 'Conversation history')).toBeFocused();
   await page.keyboard.press('Space');
   await expect(popup(page)).toBeVisible(); await expect(popup(page).getByRole('status')).toHaveText('Saving tool settings…');
-  for (const name of ['Notes', 'Conversation history', 'Usage data', 'Calendar', 'Library']) await expect(toggle(page, name)).toBeDisabled();
+  for (const name of ['Notes', 'Conversation history', 'Sessions','Timers','Browser','Usage data', 'Calendar', 'Library']) await expect(toggle(page, name)).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Send message', exact: true })).toBeDisabled();
   expect(state.patches).toEqual([{ group: 'history', enabled: false }]); release();
   await expect(toggle(page, 'Conversation history')).toBeEnabled(); await expect(toggle(page, 'Conversation history')).not.toBeChecked();
@@ -122,6 +122,9 @@ for (const width of [1280, 390]) test(`tools popup stays in the ${width}px viewp
   });
   expect(exposed, 'textarea has an exposed target outside the popup').toBeTruthy();
   await input.click({ position: exposed }); await expect(popup(page)).toHaveCount(0); await expect(input).toBeFocused();
-  await trigger(page).click(); await page.getByRole('button', { name: /^Message mode/ }).click(); await expect(popup(page)).toHaveCount(0); await expect(page.getByRole('listbox')).toBeVisible();
+  await trigger(page).click();
+  const popupBox=await popup(page).boundingBox(),modeBox=await page.getByRole('button',{name:/^Message mode/}).boundingBox();
+  expect(popupBox.y+popupBox.height<=modeBox.y||popupBox.y>=modeBox.y+modeBox.height||popupBox.x+popupBox.width<=modeBox.x||popupBox.x>=modeBox.x+modeBox.width).toBe(true);
+  await page.getByRole('button', { name: /^Message mode/ }).click(); await expect(popup(page)).toHaveCount(0); await expect(page.getByRole('listbox')).toBeVisible();
   await page.keyboard.press('Escape'); clean(state);
 });

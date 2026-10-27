@@ -201,6 +201,12 @@ export function supervisorHandler(deps: SupervisorDependencies) {
           ok: true,
         });
       }
+      match=path.match(new RegExp("^/v1/projects/("+ID+")/sessions/("+ID+")/browser$"));
+      if(match&&request.method==="POST"){
+        if(!deps.runtime.browser)return reply(response,409,{error:"browser_unavailable"});
+        const input=await body(request,4*1024*1024);
+        return reply(response,200,await deps.runtime.browser(match[1],match[2],input));
+      }
       match = path.match(
         new RegExp(`^/v1/projects/(${ID})/sessions/(${ID})/stop$`),
       );

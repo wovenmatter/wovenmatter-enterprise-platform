@@ -1,3 +1,4 @@
+import {startWorkspaceBrowser,humanBrowserRequest} from "./workspace-browser.js";
 import { writeFile, unlink } from "node:fs/promises";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
@@ -81,6 +82,7 @@ async function turn(request: ContainerRequest) {
         { ...runtimeEnvironment(), ...egressEnvironment(request) },
         request.workingDirectory,
       );
+      if(!request.assetId)await startWorkspaceBrowser(request);
       prepared = true;
     }
     await emit({ type: "started" });
@@ -116,6 +118,9 @@ lines.on("line", (line) => {
     if (data.type === "turn") {
       void turn(data.request).catch(() => process.exit(1));
       return;
+    }
+    if(data.type==="browser"&&typeof data.id==="string"){
+      void humanBrowserRequest(data.input).then(result=>output({type:"browser_receipt",id:data.id,result}),()=>output({type:"browser_receipt",id:data.id,error:"Browser operation outcome is uncertain. Inspect fresh state before repeating input."}));return;
     }
     const current = active;
     if (

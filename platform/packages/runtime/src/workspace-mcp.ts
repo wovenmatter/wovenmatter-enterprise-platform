@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {browserRequest} from "./workspace-browser.js";
 /** Stdio MCP facade. Connection material comes from the trusted per-run session broker. */
 import { readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
@@ -8,9 +9,10 @@ export async function callWorkspaceTool(name:string,args:unknown,signal?:AbortSi
   const {definition,input} = workspaceToolCall(name,args);
   const grant = JSON.parse(await readFile("/session/.wme-workspace.json","utf8"));
   if (grant.baseUrl!=="http://127.0.0.1:4101/inference" || typeof grant.token!=="string") throw new Error("Workspace tools are unavailable.");
-  const response = await fetch(grant.baseUrl+"/workspace/"+definition.operation,{method:"POST",headers:{authorization:"Bearer "+grant.token,"content-type":"application/json"},body:JSON.stringify(input),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000)});
+  const response = await fetch(grant.baseUrl+"/workspace/"+(definition.operation==="browser"?"browser_authorize":definition.operation),{method:"POST",headers:{authorization:"Bearer "+grant.token,"content-type":"application/json"},body:JSON.stringify(definition.operation==="browser"?{}:input),signal:signal?AbortSignal.any([signal,AbortSignal.timeout(30000)]):AbortSignal.timeout(30000)});
   const result = await response.json() as Record<string,unknown> & {error?:{message?:string}};
   if (!response.ok) throw new Error(result.error?.message ?? "Workspace operation failed. Read current state before retrying.");
+  if(definition.operation==="browser")return browserRequest(input);
   return {content:[{type:"text",text:JSON.stringify(result)}],structuredContent:result};
 }
 export async function mcpRequest(message: {method?:string;params?:Record<string,unknown>},call=callWorkspaceTool) {
@@ -27,7 +29,7 @@ if (process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
   const lines = createInterface({input:process.stdin,crlfDelay:Infinity});
   for await (const line of lines) {
     let message: {id?:unknown;method?:string;params?:Record<string,unknown>};
-    try { if (Buffer.byteLength(line)>2*1024*1024) throw new Error("Request too large."); message=JSON.parse(line); }
+    try { if (Buffer.byteLength(line)>4*1024*1024) throw new Error("Request too large."); message=JSON.parse(line); }
     catch { process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:null,error:{code:-32700,message:"Invalid request."}})+"\n"); continue; }
     if (message.id===undefined) continue;
     try { process.stdout.write(JSON.stringify({jsonrpc:"2.0",id:message.id,result:await mcpRequest(message)})+"\n"); }

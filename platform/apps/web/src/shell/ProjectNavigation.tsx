@@ -386,7 +386,7 @@ function WorkspaceRail({
       </div>
       <nav aria-label="Workspace navigation" className="workspace-tools">
         <Menu label="Create note or artifact" triggerText="New note" icon={FileText} iconSize={13} iconWeight="normal" className="rail-menu" align="start">
-          <MenuItem onSelect={async () => { try { const record = await send<{id:string}>(`/enterprise/api/projects/${projectId}/workspace-content`, {kind:"note",title:"Untitled note",body:"",folderId:selected === "all" ? null : selected,data:{format:"markdown"}}); const next = new URLSearchParams(query); next.set("note", record.id); next.delete("new"); next.delete("trash"); navigate(`${base}?${next}`); sidebar.setDrawer(null); workspaceChanged(); } catch(e) { setError(errorMessage(e)); } }}>New note</MenuItem>
+          <MenuItem onSelect={async () => { try { const record = await send<{id:string}>(`/enterprise/api/projects/${projectId}/workspace-content`, {kind:"note",title:"Untitled note",body:"",folderId:selected === "all" ? null : selected,data:{format:"markdown"}}); const next = new URLSearchParams(query); next.set("note", record.id); next.delete("browser"); next.delete("new"); next.delete("trash"); navigate(`${base}?${next}`); sidebar.setDrawer(null); workspaceChanged(); } catch(e) { setError(errorMessage(e)); } }}>New note</MenuItem>
           <MenuItem onSelect={() => navigate(`${base}/artifacts`)}>New artifact…</MenuItem>
           <MenuSeparator />
           <MenuItem onSelect={() => navigate(`${base}/notes`)}>Browse notes</MenuItem>

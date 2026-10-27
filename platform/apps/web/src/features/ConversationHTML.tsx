@@ -1,3 +1,4 @@
+import "./workspace-interactions.css";
 import { useEffect,useRef,useState } from "react";
 import { Modal } from "../components/ui";
 import type { Activity } from "../activity-state";

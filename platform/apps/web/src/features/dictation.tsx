@@ -1,3 +1,4 @@
+import "./workspace-interactions.css";
 import { useEffect, useRef, useState } from "react";
 import { Mic, Square } from "lucide-react";
 import { api, send } from "../api";

@@ -65,9 +65,16 @@ let activePopup: { close(): void } | null = null;
 const margin = 8;
 function place(anchor: DOMRect, node: HTMLElement, align: "start" | "end") {
   const width = node.offsetWidth,
-    height = node.offsetHeight,
     viewWidth = document.documentElement.clientWidth,
     viewHeight = window.innerHeight;
+  if(node.classList.contains("composer-tools-popup")){
+    // Leave every wrapped composer control available for popup arbitration.
+    const controls=node.ownerDocument.querySelector<HTMLElement>(".composer-controls:has(.composer-tools-trigger[aria-expanded=true])");
+    const region=controls?.getBoundingClientRect();if(region)anchor=new DOMRect(anchor.x,region.y,anchor.width,region.height);
+    node.style.maxHeight=Math.max(96,Math.min(520,Math.max(anchor.top-margin-4,viewHeight-anchor.bottom-margin-4)))+"px";
+    node.style.overflowY="auto";
+  }
+  const height=node.offsetHeight;
   let top = anchor.bottom + 4;
   if (top + height > viewHeight - margin) {
     const above = anchor.top - 4 - height;

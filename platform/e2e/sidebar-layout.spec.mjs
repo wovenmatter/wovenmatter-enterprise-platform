@@ -327,7 +327,7 @@ for (const side of ['left', 'right']) {
       expect(bounds.width).toBeGreaterThanOrEqual(300);
       expect(await page.locator('#main').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`adaptive-${side}-${width}-note.png`) });
-      await panel.getByRole('button', { name: 'Close note', exact: true }).click();
+      await page.getByRole('button', { name: 'Close note', exact: true }).click();
       await expect(panel).toHaveCount(0);
       await expect(page.getByLabel('Message your agent')).toBeVisible();
       expect((await page.getByLabel('Message your agent').boundingBox()).width).toBeGreaterThan(250);

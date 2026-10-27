@@ -423,3 +423,18 @@ test("replacement waits for confirmed namespace death even when Stop is delayed"
   assert.equal(workers.length, 2);
   await service.close();
 });
+
+test("human browser attachment uses only the retained worker and never admits or replays a native turn",async t=>{
+ const {service,workers}=await fixture(t);let calls=0;
+ assert.deepEqual((await service.browser("thread-a",{action:"tabs"}) as any).structuredContent,{running:false,tabs:[]});
+ await assert.rejects(service.browser("thread-a",{action:"screenshot",attachOnly:true,tabId:"stale"}),{code:"browser_unavailable"});assert.equal(workers.length,0);
+ await service.admit(request("browser-run"));const record=workers[0]!;
+ record.worker.browser=async input=>{calls++;return {action:input.action};};
+ await record.emit!({type:"completed"});record.completion!.resolve();await new Promise(resolve=>setTimeout(resolve,0));
+ assert.deepEqual(await service.browser("thread-a",{action:"tabs"}),{action:"tabs"});assert.equal(record.turns.length,1);
+ assert.equal(calls,1);assert.equal(workers.length,1);
+ await service.stopSession("thread-a",1);
+ assert.deepEqual((await service.browser("thread-a",{action:"tabs"}) as any).structuredContent,{running:false,tabs:[]});
+ await assert.rejects(service.browser("thread-a",{action:"screenshot",attachOnly:true,tabId:"stale"}),{code:"browser_unavailable"});assert.equal(calls,1);
+ await service.close();
+});

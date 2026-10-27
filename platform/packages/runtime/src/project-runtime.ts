@@ -982,6 +982,11 @@ export class ProjectDockerRuntime implements Runtime {
       if (this.attachments.get(runId) === token) this.attachments.delete(runId);
     }
   }
+  async browser(projectId:string,conversationId:string,input:Record<string,unknown>){
+    identity(projectId);identity(conversationId);
+    if(!input||typeof input!=="object"||Array.isArray(input)||JSON.stringify(input).length>4*1024*1024)throw new RuntimeError("invalid_browser_request","Invalid browser request.");
+    return this.send(projectId,{operation:"browser",conversationId,input});
+  }
   async steer(runId: string, input: SteeringInput) {
     const receipt = await this.receipt(runId),
       attachment = this.attachments.get(runId);

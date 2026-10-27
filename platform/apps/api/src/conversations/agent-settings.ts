@@ -39,5 +39,6 @@ export function validateAgentDefaults(id: Harness, value: unknown): AgentDefault
 export async function organizationAgentSettings(ctx: AppContext, user: User, orgId: string) {
   await ctx.requireOrgMember(user,orgId);
   const row = await ctx.db.get<{settings:string;revision:number}>("SELECT settings,revision FROM organization_agent_settings WHERE org_id=?",[orgId]);
-  return {defaultHarness:"pi" as Harness,agents:{},...JSON.parse(row?.settings ?? "{}"),revision:row?.revision ?? 0} as AgentSettings & {revision:number};
+  const stored=JSON.parse(row?.settings??"{}");
+  return {defaultHarness:"pi" as Harness,...stored,agents:Object.fromEntries(Object.entries(stored.agents??{}).map(([id,value]:[string,any])=>[id,{...value,...(value.tools?{tools:normalizeConversationTools(value.tools)}:{})}])),revision:row?.revision ?? 0} as AgentSettings & {revision:number};
 }

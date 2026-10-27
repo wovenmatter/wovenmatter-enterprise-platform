@@ -231,6 +231,7 @@ const server = netServer({ allowHalfOpen: true }, (socket) => {
           identity(envelope.conversationId),
           envelope.generation,
         );
+      else if(envelope.operation==="browser")result=await workspace.browser(identity(envelope.conversationId),envelope.input);
       else if (envelope.operation === "policy") await refreshPolicy();
       else if (envelope.operation === "status")
         result = { ready: true, ...workspace.status() };

@@ -244,6 +244,9 @@ export function createSupervisorClient(options: SupervisorClientOptions) {
         spec,
       );
     },
+    async browser(projectId,conversationId,input){
+      return json("/v1/projects/"+encodeURIComponent(projectId)+"/sessions/"+encodeURIComponent(conversationId)+"/browser","POST",input,40000);
+    },
     async steer(id, input) {
       await json(
         `/v1/runs/${encodeURIComponent(id)}/steer`,

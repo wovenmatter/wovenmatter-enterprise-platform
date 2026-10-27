@@ -1,8 +1,9 @@
+import {GoalBar,ConversationAutomation} from "./workspace-automation";
 import { DictationButton } from "./dictation";
 import { ComposerTools, defaultConversationTools, type ConversationTools } from "./composer-tools";
 import { ComposerAttachments, ComposerAttachmentChips, type ComposerAttachment } from "./composer-attachments";
 import { useNativeControls } from "./native-controls";
-import { WorkspaceNotePanel } from "../shell/WorkspaceDetails";
+import { WorkspaceAssetLayout, WorkspaceAssetTrigger } from "./workspace-assets";
 import { agents, agentName, acceptsModel } from "../agents";
 import {
   ConversationRunWork,
@@ -194,8 +195,9 @@ export function ConversationsPage({ project }: { project: Project }) {
     (f) => f.id === query.get("folder"),
   );
   return (
-    <div className={`conversation-layout ${query.has("note") ? "has-note" : ""}`}>
+    <WorkspaceAssetLayout key={user.id+":"+project.id} project={project} conversationId={conversationId}>
       <div className="conversation-main">
+        <WorkspaceAssetTrigger conversationId={conversationId}/>
         {conversationId ? (
           <Thread
             key={conversationId}
@@ -242,7 +244,6 @@ export function ConversationsPage({ project }: { project: Project }) {
         )}
         {!conversationId ? <ErrorNotice message={list.error} /> : null}
       </div>
-      {query.get("note") ? <WorkspaceNotePanel projectId={project.id} noteId={query.get("note")!} onClose={() => { const next = new URLSearchParams(query); next.delete("note"); setQuery(next); }} /> : null}
       {creating ? (
         <Modal title="New conversation" compact onClose={closeCreate}>
           {!folders.data || (!agentDefaults.data && agentDefaults.loading) ? (
@@ -275,7 +276,7 @@ export function ConversationsPage({ project }: { project: Project }) {
           )}
         </Modal>
       ) : null}
-    </div>
+    </WorkspaceAssetLayout>
   );
 }
 function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel, catalogReady, catalogError, project, folders, folderError, folderId, onFolderChange, onStart }: {
@@ -301,9 +302,10 @@ function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel,
   const tools=toolChoices??configured.tools??defaults?.personalTools??defaultConversationTools;
   const catalog=models.filter(model=>acceptsModel(harness,model.provider));
   const preferred=configured.model||(catalog.some(item=>item.id===defaultModel)?defaultModel!:catalog[0]?.id);
-  const available=harness==="pi"&&configured.models!==undefined?catalog.filter(model=>configured.models!.includes(model.id)||model.id===preferred||configured.fallbackModels?.includes(model.id)):catalog;
+  const availableUnsorted=harness==="pi"&&configured.models!==undefined?catalog.filter(model=>configured.models!.includes(model.id)||model.id===preferred||configured.fallbackModels?.includes(model.id)):catalog;
   // Match ConversationService.create: workspace agent, current personal default,
   // then the first authorized catalog item. Never hide an unavailable explicit/default choice.
+  const available=harness==="pi"&&configured.models?[...availableUnsorted].sort((a,b)=>{const rank=(id:string)=>{const at=configured.models!.indexOf(id);return at<0?100000:at;};return rank(a.id)-rank(b.id);}):availableUnsorted;
   const inheritedModel=configured.model&&!available.some(item=>item.id===configured.model)?configured.fallbackModels?.find(id=>available.some(item=>item.id===id))??configured.model:configured.model;
   const model = modelChoice ?? (inheritedModel || (available.some(item => item.id === defaultModel) ? defaultModel! : available[0]?.id ?? ""));
   const selectedModel = available.find(item => item.id === model);
@@ -1383,6 +1385,7 @@ export function Thread({
           items={activity.items}
           activeRunIds={new Set(active.map((run) => run.id))}
         />
+        {!asset&&!editing?<GoalBar conversationId={id} onManage={()=>setEditing(true)}/>:null}
         <form ref={formRef} className={collapsed ? "composer-collapsed" : undefined}
           onSubmit={(e) => {
             e.preventDefault();
@@ -1528,6 +1531,7 @@ export function Thread({
       </div>
       {editing && detail.data ? (
         <Modal title="Conversation settings" onClose={() => setEditing(false)}>
+          {!asset?<ConversationAutomation conversationId={id}/>:null}
           <ConversationForm
             project={project}
             conversation={detail.data}

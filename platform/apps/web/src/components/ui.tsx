@@ -237,6 +237,7 @@ export function AsyncForm({
   className = "",
   danger = false,
   disabled = false,
+  onDirtyChange,
 }: {
   onSubmit: (data: FormData) => Promise<void>;
   children: ReactNode;
@@ -245,6 +246,7 @@ export function AsyncForm({
   className?: string;
   danger?: boolean;
   disabled?: boolean;
+  onDirtyChange?:(dirty:boolean)=>void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -263,7 +265,7 @@ export function AsyncForm({
     }
   }
   return (
-    <form className={`form ${className}`} onSubmit={submit}>
+    <form className={`form ${className}`} onChange={()=>onDirtyChange?.(true)} onSubmit={submit}>
       <fieldset disabled={busy||disabled}>{children}</fieldset>
       <ErrorNotice message={error} />
       <div className="form-actions">

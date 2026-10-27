@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Link,
+  Navigate,
   Route,
   Routes,
   useNavigate,
@@ -308,6 +309,7 @@ export function ProjectPage() {
           <Route path="library" element={<WorkspaceLibraryPage project={p} />} />
           <Route path="databases" element={<DatabasesPage project={p} />} />
           <Route path="usage" element={<UsagePage project={p} />} />
+          <Route path="browser" element={<Navigate replace to={projectBrowserRedirect(location.search)}/>} />
           <Route path="connections" element={isAdmin ? <ConnectionsPage projectId={p.id} /> : <ErrorNotice message="Organization administrator access required." />} />
           <Route
             path="settings/*"
@@ -828,3 +830,5 @@ export function SettingsPage() {
     </section>
   );
 }
+
+function projectBrowserRedirect(search:string){const next=new URLSearchParams(search);next.set("browser","1");return "../?"+next;}
