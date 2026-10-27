@@ -86,6 +86,7 @@ export async function registerConversationTools(app: FastifyInstance, ctx: AppCo
         SELECT 1 FROM project_members m WHERE m.project_id=p.id AND m.user_id=u.id)))))`, [JSON.stringify(settings), id, user.id]);
       if (result.changes !== 1) throw new AppError(404, "not_found", "Workspace conversation not found.");
       if(input.group==="timers" && input.enabled===false && await ctx.db.get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='workspace_session_timers'"))await ctx.db.run("UPDATE workspace_session_timers SET status='paused',revision=revision+1 WHERE conversation_id=? AND status='active'",[id]);
+      if(input.group==="browser"&&input.enabled===false)await ctx.runtime?.browser?.(row.project_id!,id,{action:"stop"});
       await ctx.onConversationToolsChanged?.(id,String(input.group),Boolean(input.enabled));
       return view(settings);
     });

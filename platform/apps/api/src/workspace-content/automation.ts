@@ -231,7 +231,12 @@ export async function registerWorkspaceAutomation(app:FastifyInstance,ctx:AppCon
     if(!ctx.runtime?.browser)throw fail("Browser runtime is unavailable.","browser_unavailable",409);
     const input=objectBody(request.body);if(!input||typeof input!=="object"||Array.isArray(input))throw fail("Provide a browser action.");
     await ctx.requireProject(user,chat.project_id,"write");
-    return ctx.runtime.browser(chat.project_id,id,input);
+    const actions=new Set(["tabs","screenshot","snapshot","navigate","back","forward","reload","mouse-down","mouse-up","paste","copy","focus","click","press","scroll","hover"]);
+    if(!actions.has(String(input.action)))throw fail("The viewer can only attach to existing agent browser tabs.","invalid_browser_action",400);
+    const result=await ctx.runtime.browser(chat.project_id,id,{...input,attachOnly:true});
+    await ctx.requireProject(user,chat.project_id,"write");
+    if(!readConversationTools((await service.chat(user,id)).tool_settings).browser)throw fail("Browser tools are disabled.","tool_disabled",403);
+    return result;
   });
   app.get("/enterprise/api/conversations/:conversationId/goal",async request=>service.goal(await ctx.requireUser(request),(request.params as {conversationId:string}).conversationId));
   app.post("/enterprise/api/conversations/:conversationId/goal",async request=>{const user=await ctx.requireUser(request),id=(request.params as {conversationId:string}).conversationId;await service.chat(user,id);return withConversationTools(ctx,id,()=>service.goal(user,id,objectBody(request.body)));});

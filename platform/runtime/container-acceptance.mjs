@@ -466,6 +466,8 @@ try {
     "com.wovenmatter.enterprise.acceptance=" + allocation,
     "--network",
     bootstrap,
+    "--env",
+    "WME_ACCEPTANCE_PUBLIC_HTTPS="+(process.env.WME_ACCEPTANCE_PUBLIC_HTTPS==="1"?"1":"0"),
     "--read-only",
     "--user",
     "10001:10001",
@@ -481,6 +483,7 @@ try {
     "/fixture.cjs",
   );
   await save();
+  if(process.env.WME_ACCEPTANCE_PUBLIC_HTTPS==="1")await docker("network","connect","bridge",gateway);
   await runtime.ensureProject(spec);
   const container = JSON.parse(
     await docker("inspect", "wme-project-" + projectId),
@@ -503,31 +506,52 @@ try {
   )[0];
   // Exercise the production namespace/IPC before network-positive-control
   // checks, which additionally depend on the isolated runner's host firewall.
-  const browserThread="browser-acceptance";
+  const browserThread="browser-acceptance",siblingBrowser="browser-sibling";
+  const emptyBefore=await workspaceStatus();
+  assert.deepEqual((await runtime.browser(projectId,browserThread,{action:"tabs",attachOnly:true})).structuredContent,{running:false,tabs:[]});
+  assert.deepEqual(await workspaceStatus(),emptyBefore,"Idle viewer inventory cannot create a native environment");
   await native(await request("pi","write",browserThread));
-  const browserBefore=await workspaceStatus();
-  const browserOpen=await runtime.browser(projectId,browserThread,{action:"open",url:"about:blank",requestID:randomUUID()});
-  const browserTab=browserOpen.structuredContent.id;
-  await runtime.browser(projectId,browserThread,{action:"navigate",tabId:browserTab,url:"http://native-proxy-fixture.invalid/pi",requestID:randomUUID()});
-  const browserProxy=await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()});
-  assert.match(browserProxy.structuredContent.snapshot,/synthetic-proxy-ok/,"Browser traffic must traverse production loopback egress relay");
-  for(const action of ["back","forward","reload"])await runtime.browser(projectId,browserThread,{action,tabId:browserTab,requestID:randomUUID()});
-  assert.match((await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()})).structuredContent.snapshot,/synthetic-proxy-ok/,"Human navigation remains in the same retained browser");
-  await runtime.browser(projectId,browserThread,{action:"evaluate",tabId:browserTab,code:"document.body.innerHTML='<h1>Actual retained workspace browser</h1><button>0</button>';document.querySelector('button').onclick=()=>{const b=document.querySelector('button');b.textContent=String(Number(b.textContent)+1)}",requestID:randomUUID()});
-  await runtime.browser(projectId,browserThread,{action:"evaluate",tabId:browserTab,code:"const field=document.createElement('input');field.id='human-input';document.body.append(field);field.focus()",requestID:randomUUID()});
-  await runtime.browser(projectId,browserThread,{action:"paste",tabId:browserTab,text:"Synthetic human text",requestID:randomUUID()});
-  await runtime.browser(projectId,browserThread,{action:"press",tabId:browserTab,key:"Control+a",requestID:randomUUID()});
-  assert.equal((await runtime.browser(projectId,browserThread,{action:"copy",tabId:browserTab,requestID:randomUUID()})).structuredContent.text,"Synthetic human text");
+  assert.deepEqual((await runtime.browser(projectId,browserThread,{action:"tabs",attachOnly:true})).structuredContent,{running:false,tabs:[]});
+  await assert.rejects(runtime.browser(projectId,browserThread,{action:"navigate",tabId:"none",url:"http://native-proxy-fixture.invalid/pi",attachOnly:true}));
+  await native(await request("pi","write",browserThread,"synthetic-browser-open-primary"),"MANAGED_BROWSER_OPENED");
+  const owned=JSON.parse(await readFile(join(workspace,"managed-browser-primary.json"),"utf8")),browserTab=owned.primary;
+  const currentTabs=await runtime.browser(projectId,browserThread,{action:"tabs",attachOnly:true});
+  assert.equal(currentTabs.structuredContent.tabs.length,2,"Actual agent Playwright pages must register in viewer inventory");
+  assert.ok(currentTabs.structuredContent.tabs.some(tab=>tab.id===browserTab&&tab.title==="Agent-owned primary"));
+  const browserBefore=await workspaceStatus(),human=input=>runtime.browser(projectId,browserThread,{...input,attachOnly:true,requestID:input.requestID??randomUUID()});
+  await assert.rejects(runtime.browser(projectId,siblingBrowser,{action:"screenshot",tabId:browserTab,attachOnly:true}));
+  await human({action:"click",tabId:browserTab,selector:"#human-input"});
+  await human({action:"paste",tabId:browserTab,text:"Synthetic human text"});
+  await human({action:"press",tabId:browserTab,key:"Control+a"});
+  assert.equal((await human({action:"copy",tabId:browserTab})).structuredContent.text,"Synthetic human text");
   const browserClick={action:"click",tabId:browserTab,selector:"button",requestID:randomUUID()};
-  await runtime.browser(projectId,browserThread,browserClick);await runtime.browser(projectId,browserThread,browserClick);
-  const browserSnapshot=await runtime.browser(projectId,browserThread,{action:"snapshot",tabId:browserTab,requestID:randomUUID()});
-  assert.match(browserSnapshot.structuredContent.snapshot,/button "1"/);
-  const browserShot=await runtime.browser(projectId,browserThread,{action:"screenshot",tabId:browserTab,requestID:randomUUID()});
+  await human(browserClick);await human(browserClick);
+  assert.match((await human({action:"snapshot",tabId:browserTab})).structuredContent.snapshot,/button "1"/);
+  const browserShot=await human({action:"screenshot",tabId:browserTab});
   await writeFile(join(root,"retained-namespace-browser.jpg"),Buffer.from(browserShot.content[0].data,"base64"));
-  assert.deepEqual(await workspaceStatus(),browserBefore,"Browser attachment must not admit or replay a native turn");
+  assert.deepEqual(await workspaceStatus(),browserBefore,"Human attachment/input must not admit or replay a native turn");
+  // A new explicit agent turn reads the exact same page/input and uses real Playwright locators.
+  await native(await request("pi","write",browserThread,"synthetic-browser-read-primary"),"MANAGED_BROWSER_SAME_STATE");
+  assert.deepEqual(JSON.parse(await readFile(join(workspace,"managed-browser-read.json"),"utf8")),{samePage:browserTab,value:"Synthetic human text",button:"2"});
+  await native(await request("pi","write",siblingBrowser,"synthetic-browser-open-sibling"),"MANAGED_BROWSER_OPENED");
+  await assert.rejects(runtime.browser(projectId,siblingBrowser,{action:"screenshot",tabId:browserTab,attachOnly:true}));
+  if(process.env.WME_ACCEPTANCE_PUBLIC_HTTPS==="1"){
+    await human({action:"navigate",tabId:browserTab,url:"https://example.com/"});
+    const publicPage=await human({action:"snapshot",tabId:browserTab});assert.equal(new URL(publicPage.structuredContent.url).origin,"https://example.com");assert.ok(publicPage.structuredContent.snapshot.trim().length>20);
+    // Private fixture diagnostic only; this page-scoped read is not a human API action.
+    const timing=(await runtime.browser(projectId,browserThread,{action:"evaluate",tabId:browserTab,code:"({status:performance.getEntriesByType('navigation')[0].responseStatus,tlsStart:performance.getEntriesByType('navigation')[0].secureConnectionStart,protocol:performance.getEntriesByType('navigation')[0].nextHopProtocol})",requestID:randomUUID()})).structuredContent.value;
+    assert.equal(timing.status,200);assert.ok(timing.tlsStart>0);
+    const proxyProof=JSON.parse(await docker("exec",gateway,"node","-e","fetch('http://127.0.0.1:4100/fixture-browser-proxy-status').then(r=>r.text()).then(console.log)"));assert.equal(proxyProof.publicHttpsObserved,true);
+    const publicShot=await human({action:"screenshot",tabId:browserTab});await writeFile(join(root,"retained-namespace-public-https.jpg"),Buffer.from(publicShot.content[0].data,"base64"));
+    await writeFile(join(root,"public-https-receipt.json"),JSON.stringify({url:"https://example.com/",defaultCertificateVerification:true,authenticated4102Relay:true,allowlistedFixtureUpstream:true,publicHttpsObserved:true,status:timing.status,tlsStart:timing.tlsStart,protocol:timing.protocol}));
+    console.log("Actual public HTTPS Chromium navigation passed through authenticated4102 relay with default TLS certificate verification.");
+  }
   await runtime.stopSession(projectId,browserThread,1);
-  await assert.rejects(runtime.browser(projectId,browserThread,{action:"tabs"}),{code:"browser_unavailable"});
-  console.log("Actual retained-namespace browser transport, real Chromium input, no native replay and Stop revocation passed.");
+  assert.deepEqual((await runtime.browser(projectId,browserThread,{action:"tabs",attachOnly:true})).structuredContent,{running:false,tabs:[]});
+  await assert.rejects(human({action:"screenshot",tabId:browserTab}),{code:"browser_unavailable"});
+  assert.equal((await runtime.browser(projectId,siblingBrowser,{action:"tabs",attachOnly:true})).structuredContent.tabs.length,2,"Stop leaves sibling browser alive");
+  await runtime.stopSession(projectId,siblingBrowser,1);
+  console.log("Actual managed agent Playwright pages, passive attachment, same-state human input, multi-tab registration, no native replay and isolated Stop passed.");
   const targets = boundaryTargets(network, gatewayDetail, networkInterfaces());
   const directTargets = [{ kind: "peer", host: targets.peer, port: 4100 }];
   for (const host of targets.hosts) {

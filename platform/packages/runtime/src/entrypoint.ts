@@ -1,4 +1,4 @@
-import {startWorkspaceBrowser,browserRequest} from "./workspace-browser.js";
+import {startWorkspaceBrowser,humanBrowserRequest} from "./workspace-browser.js";
 import { writeFile, unlink } from "node:fs/promises";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
@@ -120,7 +120,7 @@ lines.on("line", (line) => {
       return;
     }
     if(data.type==="browser"&&typeof data.id==="string"){
-      void browserRequest(data.input).then(result=>output({type:"browser_receipt",id:data.id,result}),()=>output({type:"browser_receipt",id:data.id,error:"Browser operation outcome is uncertain. Inspect fresh state before repeating input."}));return;
+      void humanBrowserRequest(data.input).then(result=>output({type:"browser_receipt",id:data.id,result}),()=>output({type:"browser_receipt",id:data.id,error:"Browser operation outcome is uncertain. Inspect fresh state before repeating input."}));return;
     }
     const current = active;
     if (

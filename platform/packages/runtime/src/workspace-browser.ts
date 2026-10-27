@@ -3,7 +3,7 @@
  * CDP is never exposed; all network traffic goes through the existing scoped egress relay.
  */
 import {createServer,connect} from "node:net";
-import {mkdir} from "node:fs/promises";
+import {mkdir,readFile} from "node:fs/promises";
 import {randomUUID} from "node:crypto";
 import type {BrowserContext,Page} from "playwright-core";
 import type {ContainerRequest} from "./types.js";
@@ -12,18 +12,19 @@ type Input=Record<string,any>;
 const text=(value:unknown)=>({content:[{type:"text",text:JSON.stringify(value)}],structuredContent:value});
 const point=(input:Input)=>{if(!Number.isFinite(input.x)||!Number.isFinite(input.y)||input.x<0||input.y<0)throw new Error("Provide current viewport coordinates.");return [input.x,input.y] as const;};
 export class WorkspaceBrowser {
-  private dialogPolicies=new Map<string,{accept:boolean;text?:string}>();private context?:BrowserContext;private starting?:Promise<BrowserContext>;private pages=new Map<string,Page>();private frames=new Map<string,{page:Page;at:number}>();private downloads=new Map<string,{id:string;name:string;bytes:Buffer;tabId:string}>();private requests=new Map<string,{controller:AbortController;status:string;result?:unknown;hash:string}>();
-  constructor(private config:{profile:string;proxy?:{server:string;username?:string;password?:string};executablePath?:string}){}
+  private epoch=0;private dialogPolicies=new Map<string,{accept:boolean;text?:string}>();private context?:BrowserContext;private starting?:Promise<BrowserContext>;private pages=new Map<string,Page>();private frames=new Map<string,{page:Page;at:number}>();private downloads=new Map<string,{id:string;name:string;bytes:Buffer;tabId:string}>();private requests=new Map<string,{controller:AbortController;status:string;result?:unknown;hash:string}>();
+  constructor(private config:{profile:string;proxy?:{server:string;username?:string;password?:string};executablePath?:string;authorize?:()=>Promise<void>}){}
   private async start(){
     if(this.context)return this.context;
     if(!this.starting)this.starting=(async()=>{
-      const {chromium}=await import("playwright-core");await mkdir(this.config.profile,{recursive:true,mode:0o700});
+      const epoch=this.epoch;const {chromium}=await import("playwright-core");await mkdir(this.config.profile,{recursive:true,mode:0o700});
       const context=await chromium.launchPersistentContext(this.config.profile,{headless:true,viewport:{width:1280,height:800},timeout:20000,executablePath:this.config.executablePath,
         proxy:this.config.proxy??{server:"http://127.0.0.1:9"},acceptDownloads:true,
         // The existing nested AppArmor/UID/network boundary stays authoritative.
         // Single-process avoids zygote seqpacket IPC requiring new host policy grants.
         args:["--no-sandbox","--no-zygote","--single-process","--disable-gpu","--disable-dev-shm-usage","--disable-background-networking","--disable-component-update","--force-webrtc-ip-handling-policy=disable_non_proxied_udp","--proxy-bypass-list=<-loopback>"],
       });
+      if(epoch!==this.epoch){await context.close();throw new Error("Browser launch was stopped.");}
       await context.route("**/*",route=>{try{const url=new URL(route.request().url());return ["http:","https:","about:","data:","blob:"].includes(url.protocol)?route.continue():route.abort("blockedbyclient");}catch{return route.abort("blockedbyclient");}});
       context.on("page",page=>this.identify(page));for(const page of context.pages())this.identify(page);
       context.on("close",()=>{this.context=undefined;this.pages.clear();this.frames.clear();this.downloads.clear();});
@@ -32,26 +33,30 @@ export class WorkspaceBrowser {
     return this.starting;
   }
   private identify(page:Page){for(const[id,current]of this.pages)if(current===page)return id;const id=randomUUID();this.pages.set(id,page);page.setDefaultTimeout(15000);page.setDefaultNavigationTimeout(20000);page.on("close",()=>{this.pages.delete(id);this.dialogPolicies.delete(id);for(const[key,frame]of this.frames)if(frame.page===page)this.frames.delete(key);});page.on("framenavigated",()=>{for(const[key,frame]of this.frames)if(frame.page===page)this.frames.delete(key);});page.on("dialog",dialog=>{const policy=this.dialogPolicies.get(id);this.dialogPolicies.delete(id);void (policy?.accept?dialog.accept(policy.text):dialog.dismiss()).catch(()=>{});});return id;}
-  async close(){await this.context?.close();this.context=undefined;}
-  async action(input:Input){
+  async close(){this.epoch++;await this.context?.close();this.context=undefined;await this.starting?.then(context=>context.close()).catch(()=>{});this.pages.clear();this.frames.clear();}
+  async action(input:Input,attachOnly=false){
     if(!input||typeof input!=="object"||Array.isArray(input)||Buffer.byteLength(JSON.stringify(input))>maxBytes)throw new Error("Invalid browser request.");
     const action=String(input.action);
+    if(!attachOnly)await this.config.authorize?.();
+    if(action==="stop"){await this.close();return text({stopped:true});}
     if(action==="cancel"){for(const[id,item]of this.requests)if((input.id==="all"||input.id===id)&&item.status==="running"){item.controller.abort();item.status="interrupted";}return text({cancelled:true});}
     if(action==="tabs")return text({running:Boolean(this.context),tabs:await Promise.all([...this.pages].filter(([,page])=>!page.isClosed()).map(async([id,page])=>({id,url:page.url().slice(0,4096),title:(await page.title().catch(()=>"")).slice(0,512)})))});
     const requestId=typeof input.requestID==="string"?input.requestID:randomUUID(),hash=JSON.stringify(input),old=this.requests.get(requestId);
     if(old){if(old.hash!==hash)throw new Error("Browser operation identity was already used.");if(old.status==="complete")return old.result;throw new Error("Browser operation is running or interrupted. Inspect fresh state before repeating input.");}
     const request={controller:new AbortController(),status:"running",hash,result:undefined as unknown};this.requests.set(requestId,request);while(this.requests.size>1024)this.requests.delete(this.requests.keys().next().value!);
-    try{const result=await this.perform(action,input,request.controller.signal);request.status="complete";request.result=result;return result;}catch(error){request.status="interrupted";throw new Error(error instanceof Error&&!["TypeError","TimeoutError","AbortError"].includes(error.name)?error.message.slice(0,2000):"Browser operation interrupted. Inspect fresh state before repeating input.");}
+    let checking=false;
+    const lease=!attachOnly&&this.config.authorize?setInterval(()=>{if(checking)return;checking=true;void this.config.authorize!().catch(()=>request.controller.abort()).finally(()=>{checking=false;});},1000):undefined;
+    try{const result=await this.perform(action,input,request.controller.signal,attachOnly);if(!attachOnly)await this.config.authorize?.();request.status="complete";request.result=result;return result;}catch(error){request.status="interrupted";throw new Error(error instanceof Error&&!["TypeError","TimeoutError","AbortError"].includes(error.name)?error.message.slice(0,2000):"Browser operation interrupted. Inspect fresh state before repeating input.");}finally{clearInterval(lease);}
   }
-  private async perform(action:string,input:Input,signal:AbortSignal){
-    signal.throwIfAborted();const context=await this.start();signal.throwIfAborted();
+  private async perform(action:string,input:Input,signal:AbortSignal,attachOnly:boolean){
+    signal.throwIfAborted();if(!this.context&&(attachOnly||action!=="open"))throw new Error("The agent has not opened a browser in this chat.");const context=attachOnly?this.context!:await this.start();signal.throwIfAborted();
     if(action==="open"){if(this.pages.size>=64)throw new Error("Close an existing tab before opening another.");const page=await context.newPage(),id=this.identify(page);if(input.url)await this.navigate(page,input.url);return text({id,url:page.url(),title:await page.title()});}
     const page=this.pages.get(String(input.tabId));if(!page||page.isClosed())throw new Error("Choose a current browser tab.");
     const id=this.identify(page),abort=()=>{void page.context().newCDPSession(page).then(cdp=>cdp.send("Page.stopLoading").finally(()=>cdp.detach())).catch(()=>{});};signal.addEventListener("abort",abort,{once:true});
     try{
       const scope=input.frame?page.frameLocator(String(input.frame)):page;
-      const locator=()=>{if(typeof input.selector!=="string"||!input.selector||input.selector.length>4096)throw new Error("Provide a selector from the latest snapshot.");return scope.locator(input.selector);};
-      if(["click","hover","mouse-down","mouse-up"].includes(action)&&!input.selector){const frame=this.frames.get(String(input.frameId));if(!frame||frame.page!==page||Date.now()-frame.at>30000)throw new Error("Capture a fresh screenshot before coordinate input.");}
+      const locator=()=>{if(typeof input.role==="string"&&/^[a-z]{1,32}$/.test(input.role))return scope.getByRole(input.role as Parameters<Page["getByRole"]>[0],{...(typeof input.name==="string"?{name:input.name}:{}),exact:input.exact===true});if(typeof input.selector!=="string"||!input.selector||input.selector.length>4096)throw new Error("Provide a selector from the latest snapshot.");return scope.locator(input.selector);};
+      if(["click","hover","mouse-down","mouse-up"].includes(action)&&!input.selector&&!input.role){const frame=this.frames.get(String(input.frameId));if(!frame||frame.page!==page||Date.now()-frame.at>30000)throw new Error("Capture a fresh screenshot before coordinate input.");}
       switch(action){
         case "navigate":await this.navigate(page,input.url);break;
         case "back":await page.goBack({waitUntil:"domcontentloaded"});break;
@@ -66,12 +71,14 @@ export class WorkspaceBrowser {
         case "close":await page.close();return text({closed:true});
         case "snapshot":return text({id,url:page.url(),title:await page.title(),snapshot:(await scope.locator("body").ariaSnapshot()).slice(0,100000)});
         case "screenshot":{let bytes=await page.screenshot({type:"jpeg",quality:55,scale:"css",fullPage:false});if(bytes.length>650000)bytes=await page.screenshot({type:"jpeg",quality:20,scale:"css",fullPage:false});if(bytes.length>650000)throw new Error("Reduce the viewport before capturing again.");const frameId=randomUUID();this.frames.set(frameId,{page,at:Date.now()});while(this.frames.size>128)this.frames.delete(this.frames.keys().next().value!);return {content:[{type:"image",mimeType:"image/jpeg",data:bytes.toString("base64")}],structuredContent:{id,frameId,width:1280,height:800,url:page.url()}};}
-        case "click":if(input.selector)await locator().click({button:input.button??"left",clickCount:input.clickCount??1});else await page.mouse.click(...point(input),{button:input.button??"left",clickCount:input.clickCount??1});break;
+        case "click":if(input.selector||input.role)await locator().click({button:input.button??"left",clickCount:input.clickCount??1});else await page.mouse.click(...point(input),{button:input.button??"left",clickCount:input.clickCount??1});break;
+        case "read":{const target=locator();switch(input.property){case "textContent":return text({value:await target.textContent()});case "innerText":return text({value:await target.innerText()});case "inputValue":return text({value:await target.inputValue()});case "count":return text({value:await target.count()});case "isVisible":return text({value:await target.isVisible()});default:throw new Error("Unsupported locator read.");}}
+        case "wait":await locator().waitFor({state:["attached","detached","visible","hidden"].includes(input.state)?input.state:"visible",timeout:Math.min(15000,Math.max(1,Number(input.timeout)||15000))});break;
         case "fill":await locator().fill(String(input.text??""));break;
-        case "type":if(input.selector)await locator().pressSequentially(String(input.text??""));else await page.keyboard.type(String(input.text??""));break;
-        case "press":if(input.selector)await locator().press(String(input.key));else await page.keyboard.press(String(input.key));break;
+        case "type":if(input.selector||input.role)await locator().pressSequentially(String(input.text??""));else await page.keyboard.type(String(input.text??""));break;
+        case "press":if(input.selector||input.role)await locator().press(String(input.key));else await page.keyboard.press(String(input.key));break;
         case "scroll":await page.mouse.wheel(Number.isFinite(input.x)?Number(input.x):0,Number.isFinite(input.y)?Number(input.y):500);break;
-        case "hover":if(input.selector)await locator().hover();else await page.mouse.move(...point(input));break;
+        case "hover":if(input.selector||input.role)await locator().hover();else await page.mouse.move(...point(input));break;
         case "select":await locator().selectOption(String(input.value));break;
         case "check":await locator().setChecked(input.checked!==false);break;
         case "drag":await locator().dragTo(scope.locator(String(input.destination)));break;
@@ -93,12 +100,28 @@ export class WorkspaceBrowser {
   }
   private async navigate(page:Page,value:unknown){const url=new URL(String(value));if(!["http:","https:"].includes(url.protocol)&&url.href!=="about:blank"||url.username||url.password)throw new Error("Use a public HTTP(S) URL or about:blank without credentials.");await page.goto(url.href,{waitUntil:"domcontentloaded"});}
 }
+async function authorizeAgentBrowser(){
+ const grant=JSON.parse(await readFile("/session/.wme-workspace.json","utf8"));
+ if(grant.baseUrl!=="http://127.0.0.1:4101/inference"||typeof grant.token!=="string")throw new Error("Current browser tool authority is unavailable.");
+ const response=await fetch(grant.baseUrl+"/workspace/browser_authorize",{method:"POST",headers:{authorization:"Bearer "+grant.token,"content-type":"application/json"},body:"{}",signal:AbortSignal.timeout(5000)});
+ if(!response.ok)throw new Error("Browser tools require a current authorized agent run.");
+}
 let browser:WorkspaceBrowser|undefined;
 export async function startWorkspaceBrowser(request:ContainerRequest){
   if(browser)return;
-  browser=new WorkspaceBrowser({profile:"/session/browser-profile",...(request.egressProxyUrl?{proxy:{server:request.egressProxyUrl,username:request.projectId,password:request.gateway.token}}:{})});
-  const server=createServer(socket=>{let buffer="";socket.on("data",chunk=>{buffer+=chunk;if(Buffer.byteLength(buffer)>maxBytes){socket.destroy();return;}const end=buffer.indexOf("\n");if(end<0)return;const line=buffer.slice(0,end);buffer="";void Promise.resolve().then(()=>browser!.action(JSON.parse(line))).then(result=>socket.end(JSON.stringify({result})+"\n"),()=>socket.end(JSON.stringify({error:"Browser operation failed or was interrupted. Inspect fresh state before repeating input."})+"\n"));});});
+  browser=new WorkspaceBrowser({profile:"/session/browser-profile",authorize:authorizeAgentBrowser,...(request.egressProxyUrl?{proxy:{server:request.egressProxyUrl,username:request.projectId,password:request.gateway.token}}:{})});
+  const server=createWorkspaceBrowserServer(browser);
   await new Promise<void>((resolve,reject)=>{server.once("error",reject);server.listen(socketPath,resolve);});
+}
+/** Only the trusted entrypoint calls this in the owner process. A native import
+ * has no owner instance. Native socket JSON cannot select this transport. */
+export async function humanBrowserRequest(input:Input){
+ if(!browser&&input.action==="tabs")return text({running:false,tabs:[]});
+ if(!browser)throw new Error("The agent has not opened a browser in this chat.");
+ return browser.action(input,true);
+}
+export function createWorkspaceBrowserServer(owner:WorkspaceBrowser){
+ return createServer(socket=>{let buffer="";socket.on("data",chunk=>{buffer+=chunk;if(Buffer.byteLength(buffer)>maxBytes){socket.destroy();return;}const end=buffer.indexOf("\n");if(end<0)return;const line=buffer.slice(0,end);buffer="";void Promise.resolve().then(()=>owner.action(JSON.parse(line))).then(result=>socket.end(JSON.stringify({result})+"\n"),()=>socket.end(JSON.stringify({error:"Browser operation failed or was interrupted. Inspect fresh state before repeating input."})+"\n"));});});
 }
 export async function browserRequest(input:Input){
   return new Promise<any>((resolve,reject)=>{const socket=connect(socketPath);let output="";const timer=setTimeout(()=>{socket.destroy();reject(new Error("Browser operation outcome is uncertain. Inspect fresh state before repeating input."));},30000);socket.on("connect",()=>socket.write(JSON.stringify(input)+"\n"));socket.on("data",chunk=>{output+=chunk;if(Buffer.byteLength(output)>maxBytes){socket.destroy();reject(new Error("Browser response exceeds its limit."));}});socket.on("error",()=>{clearTimeout(timer);reject(new Error("Browser session is unavailable. Start a chat before opening its browser."));});socket.on("end",()=>{clearTimeout(timer);try{const result=JSON.parse(output);if(result.error)reject(new Error(result.error));else resolve(result.result);}catch{reject(new Error("Browser result was interrupted."));}});});

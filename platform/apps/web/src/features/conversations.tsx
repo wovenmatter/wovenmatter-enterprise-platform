@@ -3,7 +3,7 @@ import { DictationButton } from "./dictation";
 import { ComposerTools, defaultConversationTools, type ConversationTools } from "./composer-tools";
 import { ComposerAttachments, ComposerAttachmentChips, type ComposerAttachment } from "./composer-attachments";
 import { useNativeControls } from "./native-controls";
-import { WorkspaceNotePanel } from "../shell/WorkspaceDetails";
+import { WorkspaceAssetLayout, WorkspaceAssetTrigger } from "./workspace-assets";
 import { agents, agentName, acceptsModel } from "../agents";
 import {
   ConversationRunWork,
@@ -195,8 +195,9 @@ export function ConversationsPage({ project }: { project: Project }) {
     (f) => f.id === query.get("folder"),
   );
   return (
-    <div className={`conversation-layout ${query.has("note") ? "has-note" : ""}`}>
+    <WorkspaceAssetLayout key={user.id+":"+project.id} project={project} conversationId={conversationId}>
       <div className="conversation-main">
+        <WorkspaceAssetTrigger conversationId={conversationId}/>
         {conversationId ? (
           <Thread
             key={conversationId}
@@ -243,7 +244,6 @@ export function ConversationsPage({ project }: { project: Project }) {
         )}
         {!conversationId ? <ErrorNotice message={list.error} /> : null}
       </div>
-      {query.get("note") ? <WorkspaceNotePanel projectId={project.id} noteId={query.get("note")!} onClose={() => { const next = new URLSearchParams(query); next.delete("note"); setQuery(next); }} /> : null}
       {creating ? (
         <Modal title="New conversation" compact onClose={closeCreate}>
           {!folders.data || (!agentDefaults.data && agentDefaults.loading) ? (
@@ -276,7 +276,7 @@ export function ConversationsPage({ project }: { project: Project }) {
           )}
         </Modal>
       ) : null}
-    </div>
+    </WorkspaceAssetLayout>
   );
 }
 function WorkspaceWelcome({ title, initialAgent, models, defaults, defaultModel, catalogReady, catalogError, project, folders, folderError, folderId, onFolderChange, onStart }: {

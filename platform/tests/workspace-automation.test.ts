@@ -120,7 +120,7 @@ test("every harness gets MCP-first instructions while assets keep dedicated scop
 
 test("human browser enablement uses current chat controls without starting a native turn and disable denies immediately",async t=>{
  let calls=0,turns=0;
- const f=await platformFixture(t,{startConversations:false,runtime:{async ensureProject(){},async execute(){turns++;},async recover(){return [];},async cancel(){},async browser(_project,_chat,input){calls++;return {input};}}});
+ const f=await platformFixture(t,{startConversations:false,runtime:{async ensureProject(){},async execute(){turns++;},async recover(){return [];},async cancel(){},async browser(_project,_chat,input){if(input.action!=="stop")calls++;return {input};}}});
  const chat=await f.conversations.create(f.users.full!,f.projectA,{title:"Retained browser fixture"}),base="/enterprise/api/conversations/"+chat.id;
  await f.request("read","PATCH",base+"/tools",{group:"browser",enabled:false});
  assert.equal((await f.request("full","POST",base+"/browser",{action:"tabs"})).statusCode,403);assert.equal(calls,0);
@@ -172,4 +172,25 @@ test("editing a claimed timer fences the old queued instruction before native ad
  await f.automation.timers(f.users.full!,f.source.id,{action:"update",id:timer.id,revision:timer.revision,text:"New future instruction",at:new Date(Date.now()+60000).toISOString()});release();await tick;
  assert.equal((await f.db.get<any>("SELECT COUNT(*) count FROM conversation_inputs WHERE conversation_id=?",[f.source.id])).count,0);
  assert.equal((await f.automation.timers(f.users.full!,f.source.id,{action:"list"})).items[0].status,"active");
+});
+
+test("human browser transport is attach-only and rejects launch, code and cross-tenant requests",async t=>{
+ const inputs:Record<string,unknown>[]=[],f=await platformFixture(t,{startConversations:false,runtime:{async ensureProject(){},async execute(){},async recover(){return [];},async cancel(){},async browser(_project,_chat,input){inputs.push(input);return {structuredContent:{running:false,tabs:[]}};}}});
+ const chat=await f.conversations.create(f.users.full!,f.projectA,{}),url="/enterprise/api/conversations/"+chat.id+"/browser";
+ for(const action of ["open","connect","evaluate","close","stop","fill","upload","read-download"])assert.equal((await f.request("full","POST",url,{action,url:"about:blank",attachOnly:false})).statusCode,400);
+ assert.equal(inputs.length,0);
+ assert.equal((await f.request("full","POST",url,{action:"tabs",attachOnly:false})).statusCode,200);
+ assert.deepEqual(inputs,[{action:"tabs",attachOnly:true}]);
+ assert.equal((await f.request("other","POST",url,{action:"tabs"})).statusCode,404);
+ assert.equal(inputs.length,1);
+ await f.request("read","PATCH","/enterprise/api/conversations/"+chat.id+"/tools",{group:"browser",enabled:false});
+ assert.equal(inputs.at(-1)?.action,"stop");
+ assert.equal((await f.request("full","POST",url,{action:"tabs"})).statusCode,403);
+});
+test("human browser results recheck membership after the runtime responds",async t=>{
+ let revoke=async()=>{};
+ const f=await platformFixture(t,{startConversations:false,runtime:{async ensureProject(){},async execute(){},async recover(){return [];},async cancel(){},async browser(){await revoke();return {structuredContent:{tabs:[]}};}}});
+ const chat=await f.conversations.create(f.users.full!,f.projectA,{});
+ revoke=async()=>{await f.db.run("DELETE FROM project_members WHERE project_id=? AND user_id=?",[f.projectA,f.users.full!.id]);};
+ assert.equal((await f.request("full","POST","/enterprise/api/conversations/"+chat.id+"/browser",{action:"tabs"})).statusCode,404);
 });

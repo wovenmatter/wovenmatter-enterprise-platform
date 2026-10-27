@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Link,
+  Navigate,
   Route,
   Routes,
   useNavigate,
@@ -52,7 +53,6 @@ const CalendarPage = lazy(() => import("./workspace-content").then(m => ({ defau
 const UsagePage = lazy(() => import("./workspace-content").then(m => ({ default: m.UsagePage })));
 const WorkspaceLibraryPage = lazy(() => import("./workspace-library").then(m => ({ default: m.WorkspaceLibraryPage })));
 const DatabasesPage = lazy(() => import("./workspace-databases").then(m => ({ default: m.DatabasesPage })));
-const WorkspaceBrowserPage=lazy(()=>import("./workspace-browser").then(module=>({default:module.WorkspaceBrowserPage})));
 const WorkspaceSettings = lazy(() => import("./workspace-settings").then(m => ({ default: m.WorkspaceSettings })));
 const ConnectionsPage = lazy(() => import("./connections").then(m => ({ default: m.ConnectionsPage })));
 export function ProjectsPage({ canSwitchOrganization = false }: { canSwitchOrganization?: boolean }) {
@@ -309,7 +309,7 @@ export function ProjectPage() {
           <Route path="library" element={<WorkspaceLibraryPage project={p} />} />
           <Route path="databases" element={<DatabasesPage project={p} />} />
           <Route path="usage" element={<UsagePage project={p} />} />
-          <Route path="browser" element={<WorkspaceBrowserPage project={p}/>} />
+          <Route path="browser" element={<Navigate replace to={projectBrowserRedirect(location.search)}/>} />
           <Route path="connections" element={isAdmin ? <ConnectionsPage projectId={p.id} /> : <ErrorNotice message="Organization administrator access required." />} />
           <Route
             path="settings/*"
@@ -830,3 +830,5 @@ export function SettingsPage() {
     </section>
   );
 }
+
+function projectBrowserRedirect(search:string){const next=new URLSearchParams(search);next.set("browser","1");return "../?"+next;}

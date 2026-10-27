@@ -59,7 +59,9 @@ const runtime = native?.runtime ?? {
   browserTabs:new Map(),
   async browser(projectId,conversationId,input){
     let tabs=this.browserTabs.get(conversationId)??[];
-    if(input.action==="tabs")return {structuredContent:{tabs}};
+    if(input.action==="tabs")return {structuredContent:{running:tabs.length>0,tabs}};
+    if(input.action==="stop"){this.browserTabs.delete(conversationId);return {structuredContent:{stopped:true}};}
+    if(input.attachOnly&&!tabs.length)throw new Error("No managed browser exists.");
     if(input.action==="open"){const id=randomUUID();tabs=[...tabs,{id,title:"Synthetic browser surface",url:input.url}];this.browserTabs.set(conversationId,tabs);return {structuredContent:{id}};}
     if(input.action==="close"){this.browserTabs.set(conversationId,tabs.filter(tab=>tab.id!==input.tabId));return {structuredContent:{closed:true}};}
     if(input.action==="navigate"){const tab=tabs.find(tab=>tab.id===input.tabId);if(tab)tab.url=input.url;}
@@ -71,7 +73,7 @@ const runtime = native?.runtime ?? {
   },
   async ensureProject() {},
   async releaseAsset() {},
-  async stopSession() {},
+  async stopSession(_project,conversationId) {this.browserTabs.delete(conversationId);},
   async stopProject() {},
   async restoreProject() {},
   async purgeProject() {},
@@ -79,6 +81,12 @@ const runtime = native?.runtime ?? {
   async execute(request, emit, signal) {
     await emit({ type: "started" });
     await emit({ type: "input_accepted" });
+    if(request.prompt.includes("[agent-browser]")||request.prompt.includes("[agent-browser-many]")){
+      const many=request.prompt.includes("[agent-browser-many]");
+      for(let index=0;index<(many?9:2);index++)await this.browser(request.projectId,request.conversationId,{action:"open",url:"https://agent-fixture.invalid/"+(index===0?"":index===1?"second":String(index+1))});
+      const tabs=this.browserTabs.get(request.conversationId);if(many)tabs.forEach((tab,index)=>tab.title="Agent page "+(index+1));else{tabs[0].title="Synthetic agent page";tabs[1].title="Second agent page";}
+      await emit({type:"assistant_snapshot",text:"Synthetic agent opened the shared browser."});await emit({type:"completed"});return;
+    }
     if (
       request.prompt.includes("[history-page-after]") ||
       request.prompt.includes("[retained-reply]")

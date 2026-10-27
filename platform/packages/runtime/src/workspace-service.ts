@@ -631,6 +631,8 @@ CREATE TABLE IF NOT EXISTS working_directories(conversation TEXT PRIMARY KEY,pat
   async browser(conversationId:string,input:Record<string,unknown>){
     const candidates=[...this.sessions.values()].filter(session=>session.conversationId===conversationId&&!session.stopped).sort((a,b)=>b.generation-a.generation);
     const session=candidates[0];
+    if(!session?.worker.browser&&input.action==="stop")return {structuredContent:{stopped:true}};
+    if(!this.closing&&!session?.worker.browser&&input.action==="tabs")return {content:[{type:"text",text:"{\"running\":false,\"tabs\":[]}"}],structuredContent:{running:false,tabs:[]}};
     if(this.closing||!session?.worker.browser)throw new RuntimeError("browser_unavailable","Start a workspace chat before attaching to its browser.");
     return session.worker.browser(input);
   }

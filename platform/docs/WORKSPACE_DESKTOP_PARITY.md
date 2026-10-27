@@ -59,7 +59,7 @@ Reviewed desktop main **75f6903a7aed988dd61d6084d23f51642e678435** on 2026-10-26
 | Chat · attachments/private history/streaming | Existing immutable attachment and canonical replay | Existing large-file/native history/current-run broker tests |
 | Chat · draft preservation | Welcome drafts keyed by user/project/harness | Settings navigation preserves dictated draft |
 | Chat · interactive HTML | Durable explicit visual tool + chat replay | Opaque sandbox, no parent/same-origin/cookie/filesystem authority, source-checked resize, zoom/link confirmation |
-| Performance · browser viewer | Lazy frontend page; lazy server Chromium | Viewer attaches to existing native environment and never creates/replays an agent turn |
+| Performance · browser viewer | Lazy adjacent asset pane; lazy server Chromium | Viewer is passive even in an empty retained environment; only explicit agent open launches Chromium. It never creates/replays an agent turn. |
 | Performance · Executor | Lazy server SDK/service connection | No heavy app client loaded into browser; no service request before configuration/use |
 
 | MCP family / desktop owning source | Cloud mapping and authority | Acceptance |
@@ -92,3 +92,22 @@ HTML uses a stricter cloud resource policy than desktop's nonpersistent WebKit s
 The browser runs Chromium with no zygote/single-process inside the existing nested agent boundary, avoiding new AppArmor host policy grants for Chromium's seqpacket zygote IPC. It receives no host browser/profile or network authority. The human and agent share only that chat's isolated browser.
 
 Validation uses synthetic pre-established sessions, deterministic provider responses and disposable containers. No real account authentication/recovery or paid provider calls are performed. Actual shared-preview signed-in browser testing requires an already-authenticated user session; none was available.
+
+## Browser asset-pane correction
+
+Reviewed desktop main 4f9cfd9a612bfa20af5df7dd74142f642832c93a. The shared shell comes from app/Sources/WovenMatterCore/WorkspaceAssetTabs.swift (4 note / 8 browser / 8 document capacity), app/App/Models/WorkspaceAssetSession.swift (lifetime above layout branches), app/App/Views/DashboardAssetPane.swift and WorkspaceView.swift (tab strip, close, independent left/right placement, focus/hide, keyboard/split resizing and compact back-to-chat).
+
+Desktop's ordinary CEF DashboardBrowserPane is a general local browser. Enterprise intentionally does not offer it: ordinary links open in the user's own browser. The shared shell instead hosts only the remote agent contract from app/App/Views/RemoteBrowserView.swift / RemoteBrowserViewerModel.swift and remote/src/workspace-browser.mjs / workspace-browser-mcp.mjs: passive inventory; tabs registered by the managed owner; real shared frames/input; no browser launch from opening the viewer. This combines the existing desktop shell and remote contract for the cloud website rather than embedding generic browsing.
+
+| Control / contract | Enterprise behavior |
+|---|---|
+| Chat top-right browser trigger | Opens/focuses this selected chat's agent browser asset tab. No workspace-sidebar Browser entry; legacy route redirects to chat. |
+| Shared asset tabs | Existing note editors and actual remote tabs share one strip. Notes retain draft, undo/history/editor state while switching. Browser view closes do not close the agent tab. Up to 4 note tabs / 8 visible remote tabs follow source caps; all agent pages remain in the64-page runtime inventory. |
+| Placement / size / focus / hide | Own workspace-pane state, separate from global sidebar side; default assets right; bounded draggable and keyboard split, focus/restore, hide/show. Chat remains mounted; compact Back to chat has reserved rail-control space. Scoped session storage retains only presentation IDs/layout, never frames or authority. |
+| Passive human API | Authenticated current member/group; strict input action allowlist, forced attachOnly. No human launch, connect endpoint, evaluate, upload or browser-close command. Empty inventory returns running:false and tabs:[]; no Chromium/native admission. |
+| Agent-owned Playwright | Bundled playwright-core1.63 and pinned Chromium under /opt/playwright. woven_browser open explicitly starts the managed context inside the retained isolated conversation namespace. Its page events register the exact pages the viewer observes. |
+| Managed script contract | connectManagedBrowser from /opt/runtime/src/managed-browser.js is an explicit supported Playwright subset: pages/newPage, goto/navigation, locators and actual owner-side getByRole, reads/input/screenshot/page-scoped evaluate. It uses authorized private IPC and rechecks the current run on each operation; no raw CDP endpoint or trusted-worker Node eval. Arbitrary unmanaged chromium.launch instances are separate and undiscoverable. |
+| Denial / isolation | Disable closes this managed context; current-run expiry denies cached client operations; Stop/revocation fences the namespace. Viewer only exposes current selected chat's tabs; no cross-chat or cross-tenant discovery. No host browser, public debug listener, network grants or egress bypass. |
+| Proof | Deterministic agent shell imports managed client, opens two real Playwright pages, validates role matching, human inputs same page, subsequent agent reads/changes same DOM; idle/no-replay/foreign/Stop assertions and real authenticated 4102 proxy retained. Synthetic frontend frames remain labelled separately. |
+
+Validation detail: an optional private acceptance mode checks actual public HTTPS through the unchanged authenticated 4102 relay, using an allowlisted disposable upstream fixture, default certificate verification and actual navigation status/TLS timing. It is excluded from recurring CI Internet dependencies. Complete hosted boundary remains required; the production server local host-listener positive-control firewall refusal is reported separately.

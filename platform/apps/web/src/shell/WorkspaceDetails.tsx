@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { FileText, MessageSquare, SquarePen, X } from "lucide-react";
 import { send, useResource, type Conversation, type List, type Project } from "../api";
@@ -26,7 +26,7 @@ export function WorkspaceDetails({ project, chats, folderName, query, base, erro
   const visibleNotes = scopedNotes.filter(item => item.title.toLowerCase().includes(search.toLowerCase()));
   function selectionQuery(key: string, value: string) {
     const next = new URLSearchParams(query);
-    next.delete("trash"); next.delete("new"); next.set(key, value);
+    next.delete("trash"); next.delete("new"); if(key==="note")next.delete("browser"); next.set(key, value);
     return `${base}?${next}`;
   }
   async function createNote() {
@@ -83,11 +83,12 @@ export function WorkspaceDetails({ project, chats, folderName, query, base, erro
   </aside>;
 }
 
-export function WorkspaceNotePanel({ projectId, noteId, onClose }: { projectId: string; noteId: string; onClose: () => void }) {
+export function WorkspaceNotePanel({ projectId, noteId, onClose, tabbed=false, onTitle }: { projectId: string; noteId: string; onClose: () => void; tabbed?:boolean;onTitle?:(title:string)=>void }) {
   const note = useResource<ContentRecord>(`/enterprise/api/projects/${projectId}/workspace-content/${noteId}`);
   useWorkspaceChanges(note.reload);
+  useEffect(()=>{if(note.data?.title)onTitle?.(note.data.title);},[note.data?.title]);
   return <section className="workspace-note-panel" aria-label="Open note">
-    <header className="thread-header"><h2>Note</h2><button className="icon-button" aria-label="Close note" onClick={onClose}><Icon icon={X} size={14} weight="control" /></button></header>
+    {!tabbed?<header className="thread-header"><h2>Note</h2><button className="icon-button" aria-label="Close note" onClick={onClose}><Icon icon={X} size={14} weight="control" /></button></header>:null}
     <ErrorNotice message={note.error} />
     {note.data ? <Suspense fallback={<Loading />}><DocumentEditor key={noteId} record={note.data} onSaved={() => { note.reload(); workspaceChanged(); }} /></Suspense> : note.loading ? <Loading /> : null}
   </section>;
