@@ -37,6 +37,13 @@ async function identity(page,path) {
   await expect(page).toHaveURL(new RegExp(path.replace(/[.*+?^$()|[\]\\]/g,"\\$&")));
   await expect(page).toHaveTitle(/WovenMatter/);await expect(page.locator("main")).not.toHaveText("");await expect(page.locator("vite-error-overlay")).toHaveCount(0);
 }
+async function assertChatAssetClearance(page){
+ const controls=page.locator(".workspace-chat-tools button:visible"),texts=page.locator(".transcript>.message").first().locator(".message-meta strong,.message-meta time");
+ for(const control of await controls.all()){
+  const button=await control.boundingBox();expect(await control.evaluate(node=>{const box=node.getBoundingClientRect();return node.contains(document.elementFromPoint(box.x+box.width/2,box.y+box.height/2));})).toBe(true);
+  for(const text of await texts.all()){const box=await text.boundingBox();expect(box.x>=button.x+button.width||box.x+box.width<=button.x||box.y>=button.y+button.height||box.y+box.height<=button.y).toBe(true);}
+ }
+}
 async function shot(page,info,name){await page.screenshot({path:join(info.outputDir,name+".png"),fullPage:true,animations:"disabled"});}
 
 test("settings destinations, persisted inheritance, General and cloud execution work on desktop and mobile",async({page,baseURL},info)=>{
@@ -172,13 +179,13 @@ test("agent browser tabs share the adjacent asset pane and preserve chat, note d
  await page.getByRole("tab",{name:"Retained note",exact:true}).click();await expect(editor).toHaveValue("Unsaved note survives tabs");expect(await page.getByRole("tablist",{name:"Open assets",exact:true}).getByRole("tab").allTextContents()).toEqual(tabOrder);await shot(page,info,"note-asset-tab-desktop");
  await page.getByRole("tab",{name:"Synthetic agent page",exact:true}).click();await page.getByRole("button",{name:"Move assets right",exact:true}).click();
  a=await assets.boundingBox();c=await chatArea.boundingBox();expect(a.x).toBeGreaterThan(c.x);
- await shot(page,info,"agent-browser-assets-desktop");
+ await assertChatAssetClearance(page);await shot(page,info,"agent-browser-assets-desktop");
  await page.getByRole("button",{name:"Close Synthetic agent page",exact:true}).click();expect(inputs.some(input=>input.action==="close"||input.action==="open")).toBe(false);
  await page.getByRole("button",{name:"Hide assets",exact:true}).click();await page.getByRole("button",{name:"Open agent browser",exact:true}).click();await expect(page.getByRole("tab",{name:"Synthetic agent page",exact:true})).toBeVisible();
  await page.setViewportSize({width:390,height:844});await expect(page.getByRole("button",{name:"Back to chat",exact:true})).toBeVisible();const back=await page.getByRole("button",{name:"Back to chat",exact:true}).boundingBox();for(const toggle of await page.locator("[data-sidebar-reveal]").all()){if(await toggle.isVisible()){const box=await toggle.boundingBox();expect(back.x>=box.x+box.width||box.x>=back.x+back.width||back.y>=box.y+box.height||box.y>=back.y+back.height).toBe(true);}}await shot(page,info,"agent-browser-assets-mobile");
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
  await page.getByRole("tab",{name:"Retained note",exact:true}).click();await expect(editor).toHaveValue("Unsaved note survives tabs");
- await page.getByRole("button",{name:"Back to chat",exact:true}).click();await expect(page.getByLabel("Message your agent",{exact:true})).toHaveValue("Unsent retained chat draft");
+ await page.getByRole("button",{name:"Back to chat",exact:true}).click();await expect(page.getByLabel("Message your agent",{exact:true})).toHaveValue("Unsent retained chat draft");await assertChatAssetClearance(page);await shot(page,info,"agent-browser-chat-mobile");
  expect((await(await page.request.get("/enterprise/api/conversations/"+chat.id+"/runs")).json()).items.length).toBe(runs);
  await page.request.patch("/enterprise/api/conversations/"+chat.id+"/tools",{headers:f.headers,data:{group:"browser",enabled:false}});
  await page.getByRole("button",{name:"Open agent browser",exact:true}).click();await expect(page.getByRole("alert")).toContainText("disabled");
