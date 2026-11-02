@@ -49,3 +49,24 @@ CI, package engine declarations and development instructions match that version;
 explicit npm selections advance to 12.2.1. Application dependency resolutions
 are unchanged. Existing deployments require rebuilt images and a controlled
 cutover; updating these source pins does not replace running containers.
+
+## November 2, 2026 moderate advisory refresh
+
+The five npm audit entries have three underlying vulnerable dependencies:
+
+- Pi 1.1.0's exact minimatch dependency is overridden to 11.0.4 for
+  GHSA-g3hv-75wg-m249. Existing Pi bundle preparation also applies this patched
+  dependency to CLI/RPC entrypoints; the provider SDK generation is unchanged.
+- Fastify static 10.1.5's glob dependency is overridden to 14.0.3 for
+  GHSA-3g3m-2fjr-6pw4. Its minimatch dependency resolves to 11.0.4 as well.
+  The override is qualified by the parent version. Retain Fastify's current
+  integration rather than accepting npm audit's incompatible downgrade to v6.
+- MCP SDK 1.32.1's Hono Node adapter is overridden to 2.1.6 within its declared
+  compatible range, addressing GHSA-rmxm-3fg6-px4f. An explicit parent-qualified
+  selection prevents retaining the vulnerable adapter during lock refreshes.
+
+Remove the parent-qualified overrides when validated upstream parent releases
+select patched dependencies. Regression coverage exercises Pi's resolved matcher,
+Fastify's glob discovery and AbortSignal cancellation, alongside existing native
+CLI/RPC and application tests. These changes do not modify provider behavior,
+authorization policy or deployment state.

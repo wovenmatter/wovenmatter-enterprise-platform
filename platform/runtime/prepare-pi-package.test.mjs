@@ -6,6 +6,7 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { test } from "node:test";
+import { createRequire } from "node:module";
 import { promisify } from "node:util";
 
 const execute = promisify(execFile);
@@ -75,4 +76,26 @@ test("unbundled Pi RPC loads a local TypeScript extension without a provider", {
   const reply = await response;
   assert.equal(reply.success, true);
   assert.ok(reply.data.commands.some((command) => command.name === "packaging-probe"));
+});
+
+
+test("patched Pi matching and Fastify file discovery retain glob semantics and cancellation", async (t) => {
+  const piRequire = createRequire(resolve("node_modules/@earendil-works/pi-coding-agent/package.json"));
+  const { minimatch } = piRequire("minimatch");
+  assert.equal(minimatch("src/nested/file.ts", "src/**/*.{ts,js}"), true);
+  assert.equal(minimatch("src/nested/file.json", "src/**/*.{ts,js}"), false);
+  assert.equal(minimatch(".private/file.ts", "**/*.ts"), false);
+  assert.equal(minimatch(".private/file.ts", "**/*.ts", { dot: true }), true);
+
+  const staticRequire = createRequire(resolve("node_modules/@fastify/static/package.json"));
+  const { glob } = staticRequire("glob");
+  const state = await mkdtemp(join(tmpdir(), "wme-patched-glob-"));
+  t.after(() => rm(state, { recursive: true, force: true }));
+  await writeFile(join(state, "index.html"), "fixture");
+  await writeFile(join(state, ".private.html"), "private fixture");
+  assert.deepEqual(await glob("**/*.html", { cwd: state }), ["index.html"]);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(glob("**/*", { cwd: state, signal: controller.signal }),
+    { name: "AbortError" });
 });
