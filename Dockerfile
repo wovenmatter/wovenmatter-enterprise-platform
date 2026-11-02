@@ -1,19 +1,19 @@
 # Build from repository root: docker build --target application -t wme-platform:COMMIT .
-FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS build
+FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY platform/apps/api/package.json platform/apps/api/package.json
 COPY platform/apps/web/package.json platform/apps/web/package.json
 COPY platform/packages/runtime/package.json platform/packages/runtime/package.json
-RUN npm install --global npm@12.2.0 && npm ci --ignore-scripts
+RUN npm install --global npm@12.2.1 && npm ci --ignore-scripts
 COPY platform ./platform
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
-FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS application-base
+FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS application-base
 ENV NODE_ENV=production WME_HOST=0.0.0.0 WME_PORT=4100
 WORKDIR /app
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends python3 && rm -rf /var/lib/apt/lists/*
-RUN npm install --global npm@12.2.0 && npm cache clean --force
+RUN npm install --global npm@12.2.1 && npm cache clean --force
 RUN groupadd --gid 10001 wovenmatter-enterprise && useradd --uid 10001 --gid 10001 --no-create-home wovenmatter-enterprise
 COPY --from=build --chown=10001:10001 /app/package.json /app/package-lock.json ./
 COPY --from=build --chown=10001:10001 /app/node_modules ./node_modules

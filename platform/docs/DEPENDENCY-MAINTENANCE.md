@@ -39,3 +39,13 @@ The native packaging test exercises CLI/RPC startup, SDK exports and dependency
 resolution. Native container acceptance exercises the configured agent protocols
 with synthetic transports. Audit findings identify package versions; they do not
 prove exploitability in this application, and these checks make no such claim.
+
+## November 2, 2026 runtime refresh
+
+API, supervisor and project-runner build/runtime stages now use Node 26.13.0
+from the official bookworm-slim multi-platform image, pinned to digest
+`sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9`.
+CI, package engine declarations and development instructions match that version;
+explicit npm selections advance to 12.2.1. Application dependency resolutions
+are unchanged. Existing deployments require rebuilt images and a controlled
+cutover; updating these source pins does not replace running containers.

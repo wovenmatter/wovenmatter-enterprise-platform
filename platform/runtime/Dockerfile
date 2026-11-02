@@ -1,27 +1,27 @@
 # Build context is the repository root. No credentials or project files belong in this image.
-FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS boundary
+FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS boundary
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 COPY platform/runtime/restrict.c /tmp/restrict.c
 RUN gcc -O2 -Wall -Werror -o /wme-restrict /tmp/restrict.c
 
-FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS build
+FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS build
 WORKDIR /build
 COPY package.json package-lock.json ./
 COPY platform ./platform
-RUN npm install --global npm@12.2.0 && npm ci --no-audit --no-fund --ignore-scripts && npm run build:server
+RUN npm install --global npm@12.2.1 && npm ci --no-audit --no-fund --ignore-scripts && npm run build:server
 
-FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe AS dependencies
+FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9 AS dependencies
 WORKDIR /opt/runtime
 COPY package.json package-lock.json ./
 COPY platform/apps/web/package.json ./platform/apps/web/package.json
 COPY platform/packages/runtime/package.json ./platform/packages/runtime/package.json
-RUN npm install --global npm@12.2.0 && npm ci --no-audit --no-fund --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
+RUN npm install --global npm@12.2.1 && npm ci --no-audit --no-fund --ignore-scripts --omit=dev --workspace @wovenmatter-enterprise/runtime --include-workspace-root=false
 COPY platform/runtime/install-native.mjs /opt/install-native.mjs
 COPY platform/tools/prepare-pi-package.mjs /opt/prepare-pi-package.mjs
 RUN node /opt/prepare-pi-package.mjs /opt/runtime/node_modules \
  && node /opt/install-native.mjs /opt/runtime/node_modules
 
-FROM node:26.12.1-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe
+FROM node:26.13.0-bookworm-slim@sha256:bc0a2afd3b74ce12222fc8bab99271e66257f021078f5f4a5d687a77d280c1d9
 RUN test "$(dpkg --print-architecture)" = amd64 \
  && apt-get update \
  && apt-get upgrade -y \
@@ -32,7 +32,7 @@ RUN test "$(dpkg --print-architecture)" = amd64 \
  && mkdir -p /workspace /session /home/agent \
  && chown 10001:10001 /workspace /session /home/agent
 WORKDIR /opt/runtime
-RUN npm install --global npm@12.2.0 && npm cache clean --force
+RUN npm install --global npm@12.2.1 && npm cache clean --force
 COPY platform/runtime/document-requirements.txt /opt/document-requirements.txt
 RUN python3 -m venv /opt/document-tools \
  && /opt/document-tools/bin/pip install --no-cache-dir --no-deps -r /opt/document-requirements.txt \
