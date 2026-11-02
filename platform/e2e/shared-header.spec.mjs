@@ -27,7 +27,17 @@ async function header(page, { owner = false, anonymous = false } = {}) {
   const top = page.locator('.platform-header');
   await expect(top).toHaveCount(1); await expect(top).toBeVisible();
   await expect(top.getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true })).toBeVisible();
-  await expect(top.getByRole('link', { name: 'WovenMatter Enterprise Platform', exact: true })).toHaveAttribute('href', await top.getByRole('link', { name: 'Organization', exact: true }).getAttribute('href'));
+  // Organization data can arrive between Playwright calls. Read both links in
+  // one DOM snapshot and retry the comparison, rather than freezing the loading URL.
+  await expect(async () => {
+    const destinations = await top.evaluate(element => ({
+      brand: element.querySelector('a.brand')?.getAttribute('href'),
+      organization: [...element.querySelectorAll('nav > a')]
+        .find(link => link.textContent === 'Organization')?.getAttribute('href'),
+    }));
+    expect(destinations.organization).toBeTruthy();
+    expect(destinations.brand).toBe(destinations.organization);
+  }).toPass({ timeout: 5000 });
   await expect(page.locator('a a')).toHaveCount(0);
   await expect(top.locator('nav > a, nav > button')).toHaveText([
     ...(owner ? ['Admin'] : []), 'Organization', 'Settings', anonymous ? 'Sign in' : 'Sign out',
